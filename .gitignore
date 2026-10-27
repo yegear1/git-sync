@@ -1,0 +1,42 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# High-frequency junk (safe before you pick a stack)
+node_modules/
+.venv/
+venv/
+__pycache__/
+dist/
+build/
+*.log
+
+# OS / IDE / agent scratch
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.agent/scratch/
+.agent/.cache/
+.gemini/
+.claude/
+.maestri/
+*.tsbuildinfo
+
+# --- Python ---
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+*.egg-info/
+*.whl
+*.tar.gz
+# --- Node ---
+# .next/
+# .nuxt/
+# .turbo/
+# .parcel-cache/
+# npm-debug.log*

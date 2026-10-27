@@ -1,0 +1,93 @@
+name: CI / Release Packaging & Test Harness
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test & Hygiene (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Python environment info
+        run: |
+          python --version
+          which python
+
+      - name: Syntax and bytecode compilation check
+        run: |
+          python -m py_compile src/git_sync/*.py tests/*.py scripts/build.py
+
+      - name: Git diff and whitespace hygiene check
+        run: |
+          git diff --check
+
+      - name: Run unit test suite
+        run: |
+          python -m unittest discover -s tests -v
+
+      - name: Smoke test CLI via module
+        run: |
+          PYTHONPATH=src python -m git_sync.cli --version
+          PYTHONPATH=src python -m git_sync.cli --help
+          PYTHONPATH=src python -m git_sync.cli status --no-fetch --root .
+
+      - name: Test global installer script
+        run: |
+          bash scripts/install.sh /tmp/test-bin
+          /tmp/test-bin/git-sync --version
+          /tmp/test-bin/git-sync --help
+
+  packaging:
+    name: Packaging, Wheel Validation & Twine Audit
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build and packaging auditors
+        run: |
+          python -m pip install --upgrade pip build twine
+
+      - name: Build distribution packages and execute hygiene audit
+        run: |
+          python scripts/build.py
+
+      - name: Strict Twine metadata validation
+        run: |
+          python -m twine check --strict dist/*
+
+      - name: Test wheel installation and console entry-point execution
+        run: |
+          python -m pip install dist/*.whl
+          git-sync --version
+          git-sync --help
+          git-sync status --no-fetch --root .
+
+      - name: Archive distribution artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-sync-dist
+          path: dist/
+          retention-days: 14

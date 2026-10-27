@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "git-sync"
+version = "0.1.0"
+description = "Fast, concurrent multi-repository synchronization tool for GitHub workspaces."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    {name = "yegear1", email = "pogdopogdopogchamp@gmail.com"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development :: Version Control :: Git"
+]
+
+[project.urls]
+Homepage = "https://github.com/ye-sandbox/git-sync"
+Repository = "https://github.com/ye-sandbox/git-sync"
+
+[project.scripts]
+git-sync = "git_sync.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
