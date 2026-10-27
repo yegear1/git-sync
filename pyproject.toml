@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Fast, concurrent multi-repository synchronization tool for GitHub workspaces."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
     {name = "yegear1", email = "pogdopogdopogchamp@gmail.com"}
 ]
