@@ -7,18 +7,18 @@
 
 ## Active Task
 
-### 📌 Task [00.1]: Fine-Grained Partial Worktree Branch Synchronization and Conflict Isolation
+### 📌 Task [00.2]: Interactive Webhook and Daemon Listener for Instant Workspace Sync
 
-- **Description:** Isolate active branches checked out across secondary worktrees from colliding bulk pull operations and provide granular progress reporting per individual worktree target.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
+- **Description:** Support background socket or webhook event processing for event-driven pull triggers.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/git.py`, `tests/`
 - **Action Type:**
   - [x] Read-only / Documentation
   - [x] Source code changes
 - **Status:** PLANNING
 
 ### Acceptance Criteria
-- [ ] Active branch checkouts across secondary worktrees are isolated during auxiliary branch fast-forwards.
-- [ ] Secondary worktree update progress reported per-target worktree path.
+- [ ] Daemon/listener socket interface initiates workspace pull triggers upon event reception.
+- [ ] Health and status reporting exposed for listener daemon processes.
 - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -28,13 +28,14 @@
 | Task | Title | Commit(s) | Date |
 |---|---|---|---|
 | [00.0] | Initial clean public baseline of git-sync workspace orchestrator | [baseline] | 2026-10-27 |
+| [00.1] | Fine-Grained Partial Worktree Branch Synchronization and Conflict Isolation | [81009aa] | 2026-10-28 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-- [00.2]: Interactive Webhook and Daemon Listener for Instant Workspace Sync
-  - Support background socket or webhook event processing for event-driven pull triggers.
+- [00.3]: Visual TUI and Compact Interactive Dashboard
+  - Support high-density terminal dashboard mode for live multi-repository status and interactive pulls.
 
 ---
 
