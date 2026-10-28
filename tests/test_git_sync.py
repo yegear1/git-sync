@@ -341,11 +341,99 @@ class TestGitSyncCore(unittest.TestCase):
         # Fetch in main
         run_git(str(main), ["fetch", "origin"])
 
+        # Dry run in main should isolate feat
+        res_dry = pull_repo(str(main), ff_only=True, sync_branches=True, dry_run=True)
+        self.assertTrue(res_dry["success"])
+        self.assertIn("feat", res_dry.get("worktree_isolated", {}))
+        self.assertNotIn("feat", res_dry["aux_branches"])
+
         # Pull in main should not crash trying to fetch into feat checked out in wt
         res = pull_repo(str(main), ff_only=True, sync_branches=True)
         self.assertTrue(res["success"])
-        # feat should be safely skipped from aux_branches to avoid error 128
+        # feat should be safely skipped from aux_branches and recorded in worktree_isolated
         self.assertNotIn("feat", res["aux_branches"])
+        self.assertIn("feat", res.get("worktree_isolated", {}))
+        self.assertEqual(res["worktree_isolated"]["feat"], str(wt.resolve()))
+        self.assertFalse(res.get("is_worktree"))
+
+        # Pull directly in the secondary worktree should succeed and update feat
+        res_wt = pull_repo(str(wt), ff_only=True)
+        self.assertTrue(res_wt["success"])
+        self.assertTrue(res_wt["is_worktree"])
+        self.assertEqual(res_wt["branch"], "feat")
+        self.assertEqual(res_wt["worktree_main_path"], str(main.resolve()))
+
+    def test_worktree_auxiliary_branch_conflict_isolation_and_granular_progress(self):
+        """Verify bulk pull isolates auxiliary branches active in secondary worktrees and reports granular progress."""
+        bare = self._init_bare_remote(self.root / "granular_wt_remote.git")
+        main_repo = self._init_repo(self.root / "main_repo")
+        (main_repo / "base.txt").write_text("base\n")
+        run_git(str(main_repo), ["add", "base.txt"])
+        run_git(str(main_repo), ["commit", "-m", "base commit"])
+        run_git(str(main_repo), ["remote", "add", "origin", str(bare)])
+        run_git(str(main_repo), ["push", "-u", "origin", "main"])
+
+        # Create topic-a branch
+        run_git(str(main_repo), ["checkout", "-b", "topic-a"])
+        (main_repo / "topic_a.txt").write_text("topic-a v1\n")
+        run_git(str(main_repo), ["add", "topic_a.txt"])
+        run_git(str(main_repo), ["commit", "-m", "topic-a v1"])
+        run_git(str(main_repo), ["push", "-u", "origin", "topic-a"])
+        run_git(str(main_repo), ["checkout", "main"])
+
+        # Create secondary worktree for topic-a
+        wt = self.root / "wt_topic_a"
+        run_git(str(main_repo), ["worktree", "add", str(wt), "topic-a"])
+
+        # Remote commits on topic-a via separate clone
+        clone = self.root / "tmp_clone"
+        run_git(str(self.root), ["clone", "-b", "topic-a", str(bare), str(clone)])
+        run_git(str(clone), ["config", "user.email", "test@example.com"])
+        run_git(str(clone), ["config", "user.name", "Test User"])
+        (clone / "topic_a_update.txt").write_text("topic-a v2\n")
+        run_git(str(clone), ["add", "topic_a_update.txt"])
+        run_git(str(clone), ["commit", "-m", "topic-a v2"])
+        run_git(str(clone), ["push", "origin", "topic-a"])
+
+        # Also push a commit on main
+        run_git(str(clone), ["checkout", "main"])
+        (clone / "main_update.txt").write_text("main update\n")
+        run_git(str(clone), ["add", "main_update.txt"])
+        run_git(str(clone), ["commit", "-m", "main update"])
+        run_git(str(clone), ["push", "origin", "main"])
+
+        # Fetch in main_repo so remotes/origin/* are updated
+        run_git(str(main_repo), ["fetch", "origin"])
+
+        # 1. Test JSON output for worktree isolation metadata in dry-run mode
+        buf_json = io.StringIO()
+        with patch("sys.stdout", buf_json):
+            ret_json = main(["--root", str(self.root), "pull", "--all", "--sync-branches", "--dry-run", "--json"])
+        self.assertEqual(ret_json, 0)
+        data = json.loads(buf_json.getvalue())
+        self.assertTrue(isinstance(data, list))
+        # Find entry for main_repo
+        main_entry = next((e for e in data if e.get("repo_rel") == "main_repo"), None)
+        self.assertIsNotNone(main_entry)
+        self.assertIn("topic-a", main_entry.get("worktree_isolated", {}))
+        self.assertFalse(main_entry.get("is_worktree", True))
+
+        # Find entry for wt_topic_a
+        wt_entry = next((e for e in data if e.get("repo_rel") == "wt_topic_a"), None)
+        self.assertIsNotNone(wt_entry)
+        self.assertTrue(wt_entry.get("is_worktree", False))
+        self.assertEqual(wt_entry.get("worktree_main_path"), str(main_repo.resolve()))
+
+        # 2. Test CLI cmd_pull actual execution text output
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            ret = main(["--root", str(self.root), "pull", "--all", "--sync-branches"])
+        self.assertEqual(ret, 0)
+        output = buf.getvalue()
+        # Output must report worktree tag and branch isolation
+        self.assertIn("isolada", output)
+        self.assertIn("topic-a", output)
+        self.assertIn("[wt_topic_a] [worktree]", output)
 
     def test_discover_repos_pruning_tool_dirs(self):
         # 1. Normal repos

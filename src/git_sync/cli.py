@@ -390,8 +390,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         with ProgressIndicator("Inspecionando repositórios...", total=len(all_repos), enabled=show_progress) as progress:
             for future in concurrent.futures.as_completed(futures):
                 repo_path = futures[future]
-                results.append(future.result())
-                progress.advance(os.path.relpath(repo_path, root))
+                res_item = future.result()
+                results.append(res_item)
+                prog_label = os.path.relpath(repo_path, root)
+                if res_item.get("is_worktree"):
+                    prog_label = f"{prog_label} [worktree]"
+                progress.advance(prog_label)
     t_insp = time.perf_counter() - t1
     benchmark.record_stage("inspection", t_insp)
     benchmark.total_repos = len(all_repos)
@@ -683,8 +687,12 @@ def cmd_pull(args: argparse.Namespace) -> int:
             }
             with ProgressIndicator("Auditando repositórios...", total=len(all_repos), enabled=show_progress) as progress:
                 for future in concurrent.futures.as_completed(futures):
-                    inspections.append(future.result())
-                    progress.advance(os.path.relpath(futures[future], root))
+                    res_item = future.result()
+                    inspections.append(res_item)
+                    prog_label = os.path.relpath(futures[future], root)
+                    if res_item.get("is_worktree"):
+                        prog_label = f"{prog_label} [worktree]"
+                    progress.advance(prog_label)
         t_insp = time.perf_counter() - t1
         benchmark.record_stage("inspection", t_insp)
         targets = [r["path"] for r in inspections if "PULL" in r["status"] or r["aux_branches_behind"]]
@@ -751,7 +759,8 @@ def cmd_pull(args: argparse.Namespace) -> int:
                         res["success"] = True
 
             pull_results.append(res)
-            progress.advance(rel)
+            prog_label = f"{rel} [worktree]" if res.get("is_worktree") else rel
+            progress.advance(prog_label)
 
             if not args.json:
                 mode_str = "[DRY-RUN] " if dry_run else ""
@@ -772,11 +781,20 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 if not res["success"] and res.get("diagnostic"):
                     detail_msg += f" (💡 {res['diagnostic']['suggestion']})"
                 remote_tag = f" [{res['remote']}]" if res.get("remote") else ""
-                print(f"{icon} {mode_str}[{rel}]{remote_tag} ({res['branch']}): {detail_msg}")
-                for aux_b, aux_ok in res["aux_branches"].items():
+                wt_tag = " [worktree]" if res.get("is_worktree") else ""
+                print(f"{icon} {mode_str}[{rel}]{wt_tag}{remote_tag} ({res['branch']}): {detail_msg}")
+                for aux_b, aux_ok in res.get("aux_branches", {}).items():
                     aux_icon = "  ↳ ℹ️ [DRY-RUN]" if dry_run else ("  ↳ ✅" if aux_ok else "  ↳ ❌")
                     aux_status = "fast-forward previsto" if dry_run else "fast-forward concluído"
                     print(f"{aux_icon} Branch auxiliar '{aux_b}': {aux_status}")
+                for iso_b, target_wt in res.get("worktree_isolated", {}).items():
+                    try:
+                        iso_rel = os.path.relpath(target_wt, root)
+                    except ValueError:
+                        iso_rel = target_wt
+                    iso_icon = "  ↳ ℹ️ [DRY-RUN]" if dry_run else "  ↳ ⚠️"
+                    iso_status = "isolada de fast-forward" if dry_run else "isolada (ativa em worktree alvo)"
+                    print(f"{iso_icon} Branch auxiliar '{iso_b}': {iso_status} [{iso_rel}]")
 
     t_pull = time.perf_counter() - t2
     benchmark.record_stage("pull", t_pull)
@@ -1031,7 +1049,8 @@ def cmd_push(args: argparse.Namespace) -> int:
             )
             res["repo_rel"] = rel
             push_results.append(res)
-            progress.advance(rel)
+            prog_label = f"{rel} [worktree]" if res.get("is_worktree") else rel
+            progress.advance(prog_label)
 
             if not args.json:
                 mode_str = "[DRY-RUN] " if res["dry_run"] else ""
@@ -1041,7 +1060,8 @@ def cmd_push(args: argparse.Namespace) -> int:
                     status_detail += f" (💡 {res['diagnostic']['suggestion']})"
                 ahead_info = f" ({res['ahead']} commit(s) à frente)" if res.get("ahead", 0) > 0 else ""
                 remote_tag = f" -> {res['remote']}" if res.get("remote") else ""
-                print(f"{icon} {mode_str}[{rel}] ({res['branch']}{ahead_info}{remote_tag}): {status_detail}")
+                wt_tag = " [worktree]" if res.get("is_worktree") else ""
+                print(f"{icon} {mode_str}[{rel}]{wt_tag} ({res['branch']}{ahead_info}{remote_tag}): {status_detail}")
 
     t_push = time.perf_counter() - t2
     benchmark.record_stage("push", t_push)

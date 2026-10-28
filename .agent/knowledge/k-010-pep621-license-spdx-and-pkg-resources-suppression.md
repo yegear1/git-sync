@@ -21,13 +21,19 @@ symptoms:
 # [k-010] PEP 621/639 SPDX License Expressions and setuptools pkg_resources Deprecation Suppression
 
 ## Problem / Symptom
-On modern setuptools versions (>= 77.0.0) under Python 3.12+/3.13/3.14:
-1. Defining `project.license = {text = "MIT"}` in `pyproject.toml` triggers `SetuptoolsDeprecationWarning`:
+1. On modern setuptools versions (>= 77.0.0) under Python 3.12+/3.13/3.14, defining `project.license = {text = "MIT"}` in `pyproject.toml` triggers `SetuptoolsDeprecationWarning`:
    ```text
    SetuptoolsDeprecationWarning: `project.license` as a TOML table is deprecated
    Please use a simple string containing a SPDX expression for `project.license`.
    ```
-2. During `setuptools.build_meta` build operations (`build_sdist` and `build_wheel`), setuptools dynamically iterates registered entry-points (including `easy_install` and `develop`), triggering a legacy `pkg_resources` import and warning:
+2. Conversely, on standard distribution-packaged setuptools (< 77.0.0, such as 68.1.2 on Ubuntu 24.04 LTS), PEP 639 string licenses are NOT yet recognized, causing package builds to fail with:
+   ```text
+   ValueError: invalid pyproject.toml config: `project.license`.
+   configuration error: `project.license` must be valid exactly by one definition (2 matches found):
+       - keys: 'file': {type: string}
+       - keys: 'text': {type: string}
+   ```
+3. During `setuptools.build_meta` build operations (`build_sdist` and `build_wheel`), setuptools dynamically iterates registered entry-points (including `easy_install` and `develop`), triggering a legacy `pkg_resources` import and warning:
    ```text
    DeprecationWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html
    ```
@@ -36,11 +42,11 @@ On modern setuptools versions (>= 77.0.0) under Python 3.12+/3.13/3.14:
 
 ## Approved Solution
 
-1. **Standardize SPDX license string in `pyproject.toml`:**
-   Replace the legacy table `license = {text = "MIT"}` with the PEP 639 SPDX expression:
+1. **Retain PEP 621 table format for universal backward compatibility:**
+   Maintain `license = { text = "MIT" }` in `pyproject.toml` so that standard Linux distribution setuptools packages (< 77.0.0) build without validation errors, and `test_pyproject_metadata_integrity` accepts both formats:
    ```toml
    [project]
-   license = "MIT"
+   license = { text = "MIT" }
    ```
 
 2. **Scoped filter for setuptools internal deprecation during distribution builds:**

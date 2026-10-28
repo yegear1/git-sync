@@ -2351,6 +2351,12 @@ def pull_repo(
     """
     curr_branch = run_git(repo_path, ["branch", "--show-current"]).stdout.strip()
 
+    # INVARIANT: Resolve worktree topology early to isolate active worktree branches and report worktree state.
+    wt_info = cache.get_worktree_info(repo_path, timeout=5) if cache else get_worktree_info(repo_path, timeout=5)
+    is_worktree = wt_info.get("is_worktree", False)
+    worktree_main_path = wt_info.get("main_worktree")
+    checked_out_branches = wt_info.get("checked_out_branches", {})
+
     if dry_run:
         is_dirty, dirty_files = check_repo_dirty(repo_path, timeout=timeout, cache=cache)
         autostash_info: Dict[str, Any] = {
@@ -2389,6 +2395,9 @@ def pull_repo(
                 "stdout": "",
                 "stderr": "No remote upstream tracking branch configured.",
                 "aux_branches": {},
+                "worktree_isolated": {},
+                "is_worktree": is_worktree,
+                "worktree_main_path": worktree_main_path,
                 "autostash": autostash_info,
                 "dry_run": True,
                 "ahead": 0,
@@ -2429,9 +2438,8 @@ def pull_repo(
                 stderr = f"[DRY-RUN] Cannot fast-forward: branch diverged ({ahead_count} ahead, {behind_count} behind {upstream})"
 
         aux_results: Dict[str, bool] = {}
+        worktree_isolated: Dict[str, str] = {}
         if sync_branches and success:
-            wt_info = cache.get_worktree_info(repo_path, timeout=5) if cache else get_worktree_info(repo_path, timeout=5)
-            checked_out_branches = wt_info.get("checked_out_branches", {})
             repo_abs = os.path.abspath(repo_path)
 
             p_branches = run_git(repo_path, ["for-each-ref", "--format=%(refname:short)|%(upstream:short)|%(upstream:track)", "refs/heads/"])
@@ -2440,7 +2448,9 @@ def pull_repo(
                 if len(parts) >= 3:
                     b_name, b_up, b_track = parts[0], parts[1], parts[2]
                     if b_up and b_name != curr_branch and "behind" in b_track:
-                        if b_name in checked_out_branches and checked_out_branches[b_name] != repo_abs:
+                        if b_name in checked_out_branches and os.path.abspath(checked_out_branches[b_name]) != repo_abs:
+                            # INVARIANT: Isolate active branches checked out across secondary worktrees
+                            worktree_isolated[b_name] = checked_out_branches[b_name]
                             continue
                         aux_results[b_name] = True
 
@@ -2455,6 +2465,9 @@ def pull_repo(
             "stdout": stdout,
             "stderr": stderr,
             "aux_branches": aux_results,
+            "worktree_isolated": worktree_isolated,
+            "is_worktree": is_worktree,
+            "worktree_main_path": worktree_main_path,
             "autostash": autostash_info,
             "dry_run": True,
             "ahead": ahead_count,
@@ -2513,6 +2526,9 @@ def pull_repo(
                     "stdout": "",
                     "stderr": f"Failed to autostash dirty changes: {stash_err}",
                     "aux_branches": {},
+                    "worktree_isolated": {},
+                    "is_worktree": is_worktree,
+                    "worktree_main_path": worktree_main_path,
                     "autostash": {
                         "stashed": False,
                         "restored": False,
@@ -2568,9 +2584,8 @@ def pull_repo(
                 stderr = resolve_res.get("stderr", stderr)
 
     aux_results: Dict[str, bool] = {}
+    worktree_isolated: Dict[str, str] = {}
     if sync_branches and success:
-        wt_info = cache.get_worktree_info(repo_path, timeout=5) if cache else get_worktree_info(repo_path, timeout=5)
-        checked_out_branches = wt_info.get("checked_out_branches", {})
         repo_abs = os.path.abspath(repo_path)
 
         p_branches = run_git(repo_path, ["for-each-ref", "--format=%(refname:short)|%(upstream:short)|%(upstream:track)", "refs/heads/"])
@@ -2579,10 +2594,20 @@ def pull_repo(
             if len(parts) >= 3:
                 b_name, b_up, b_track = parts[0], parts[1], parts[2]
                 if b_up and b_name != curr_branch and "behind" in b_track:
-                    if b_name in checked_out_branches and checked_out_branches[b_name] != repo_abs:
+                    if b_name in checked_out_branches and os.path.abspath(checked_out_branches[b_name]) != repo_abs:
+                        # INVARIANT: Isolate active branches checked out across secondary worktrees
+                        # to prevent collision and git error 128 (refusing to fetch into checked out branch).
+                        worktree_isolated[b_name] = checked_out_branches[b_name]
                         continue
                     ff_p = run_git(repo_path, ["fetch", ".", f"{b_up}:{b_name}"])
-                    aux_results[b_name] = (ff_p.returncode == 0)
+                    if ff_p.returncode != 0 and (
+                        "Refusing to fetch into current branch" in ff_p.stderr
+                        or "Cannot force update" in ff_p.stderr
+                        or "refusing to fetch into checked out branch" in ff_p.stderr.lower()
+                    ):
+                        worktree_isolated[b_name] = checked_out_branches.get(b_name, "linked worktree")
+                    else:
+                        aux_results[b_name] = (ff_p.returncode == 0)
 
     if stashed:
         restore_res = restore_stash(repo_path, timeout=timeout)
@@ -2615,6 +2640,9 @@ def pull_repo(
         "stdout": stdout,
         "stderr": stderr,
         "aux_branches": aux_results,
+        "worktree_isolated": worktree_isolated,
+        "is_worktree": is_worktree,
+        "worktree_main_path": worktree_main_path,
         "autostash": autostash_info,
         "dry_run": False,
         "diagnostic": diagnostic,
@@ -2652,6 +2680,10 @@ def push_repo(
     curr_branch = run_git(repo_path, ["branch", "--show-current"]).stdout.strip()
     target_branch = branch if branch else curr_branch
 
+    wt_info = cache.get_worktree_info(repo_path, timeout=5) if cache else get_worktree_info(repo_path, timeout=5)
+    is_worktree = wt_info.get("is_worktree", False)
+    worktree_main_path = wt_info.get("main_worktree")
+
     if not target_branch:
         if benchmark:
             benchmark.record_failure("detached_head")
@@ -2664,10 +2696,14 @@ def push_repo(
             "stderr": "Cannot push in detached HEAD state.",
             "dry_run": dry_run,
             "ahead": 0,
+            "is_worktree": is_worktree,
+            "worktree_main_path": worktree_main_path,
         }
 
-    # Verify remotes exist
+    # Verify remotes exist (with worktree fallback to main worktree)
     remotes_map = cache.get_remotes(repo_path, timeout=5) if cache else get_repo_remotes(repo_path, timeout=5)
+    if not remotes_map and is_worktree and worktree_main_path:
+        remotes_map = cache.get_remotes(worktree_main_path, timeout=5) if cache else get_repo_remotes(worktree_main_path, timeout=5)
     if not remotes_map:
         if benchmark:
             benchmark.record_failure("no_remote")
@@ -2680,6 +2716,8 @@ def push_repo(
             "stderr": "No remote configured for repository.",
             "dry_run": dry_run,
             "ahead": 0,
+            "is_worktree": is_worktree,
+            "worktree_main_path": worktree_main_path,
         }
 
     if remote:
@@ -2695,6 +2733,8 @@ def push_repo(
                 "stderr": f"Remote '{remote}' not configured for repository. Available remotes: {', '.join(sorted(remotes_map.keys()))}.",
                 "dry_run": dry_run,
                 "ahead": 0,
+                "is_worktree": is_worktree,
+                "worktree_main_path": worktree_main_path,
             }
         target_remote = remote
     else:
@@ -2727,6 +2767,8 @@ def push_repo(
                     "stderr": f"Branch '{target_branch}' has diverged from upstream '{upstream}' ({ahead_count} ahead, {behind_count} behind). Rebase or merge before pushing.",
                     "dry_run": dry_run,
                     "ahead": ahead_count,
+                    "is_worktree": is_worktree,
+                    "worktree_main_path": worktree_main_path,
                 }
             if behind_count > 0 and ahead_count == 0:
                 if benchmark:
@@ -2740,6 +2782,8 @@ def push_repo(
                     "stderr": f"Branch '{target_branch}' is behind upstream '{upstream}' by {behind_count} commit(s). Pull changes before pushing.",
                     "dry_run": dry_run,
                     "ahead": 0,
+                    "is_worktree": is_worktree,
+                    "worktree_main_path": worktree_main_path,
                 }
 
     cmd = ["push"]
@@ -2774,6 +2818,8 @@ def push_repo(
         "dry_run": dry_run,
         "ahead": ahead_count,
         "diagnostic": diagnostic,
+        "is_worktree": is_worktree,
+        "worktree_main_path": worktree_main_path,
     }
 
 
