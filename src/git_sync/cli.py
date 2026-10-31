@@ -488,6 +488,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             "has_submodules": [r["rel_path"] for r in results if r.get("submodules")],
             "submodule_drift": [r["rel_path"] for r in results if any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", []))],
             "shallow_submodules": [r["rel_path"] for r in results if any(s.get("is_shallow") for s in r.get("submodules", []))],
+            "sparse_checkout": [r["rel_path"] for r in results if r.get("sparse_checkout", {}).get("enabled")],
+            "sparse_cone_warnings": [r["rel_path"] for r in results if r.get("sparse_checkout", {}).get("warning")],
             "no_remote": [r["rel_path"] for r in results if r["status"] == "NO_REMOTE"],
             "no_upstream": [r["rel_path"] for r in results if r["status"] == "NO_UPSTREAM"],
             "offline": [r["rel_path"] for r in results if r.get("network_state") == "offline"],
@@ -537,6 +539,16 @@ def cmd_status(args: argparse.Namespace) -> int:
                         "remediation": f"git-sync worktree prune '{dr['rel_path']}'",
                     })
                     existing_remed_pairs.add((dr["rel_path"], "prune_worktrees"))
+            if dr.get("sparse_checkout", {}).get("warning"):
+                if (dr["rel_path"], "reapply_sparse_checkout") not in existing_remed_pairs:
+                    summary["remediations"].append({
+                        "repo": dr["rel_path"],
+                        "status": "SPARSE_CHECKOUT_WARNING",
+                        "network_state": dr.get("network_state", "healthy"),
+                        "action_required": "reapply_sparse_checkout",
+                        "remediation": f"git -C '{dr['path']}' sparse-checkout reapply --cone",
+                    })
+                    existing_remed_pairs.add((dr["rel_path"], "reapply_sparse_checkout"))
         if changelog_enabled:
             summary["changelogs"] = {
                 r["rel_path"]: {
@@ -633,6 +645,11 @@ def cmd_status(args: argparse.Namespace) -> int:
             if shallow_subs:
                 sub_parts.append(f"{len(shallow_subs)} shallow")
             details.append(f"submodules({', '.join(sub_parts)})")
+        if r.get("sparse_checkout", {}).get("enabled"):
+            sc = r["sparse_checkout"]
+            cone_tag = "cone" if sc.get("cone_mode") else "full"
+            warn_flag = "⚠️" if sc.get("warning") else ""
+            details.append(f"{warn_flag}sparse({cone_tag}:{sc.get('pattern_count', 0)})")
         if r.get("multi_remote") or len(r.get("remotes", {})) > 1:
             remote_names = ", ".join(sorted(r.get("remotes", {}).keys()))
             details.append(f"remotes[{remote_names}]")
@@ -701,6 +718,12 @@ def cmd_status(args: argparse.Namespace) -> int:
                 detached_str = " [detached HEAD]" if sub.get("detached") else ""
                 shallow_str = " [shallow]" if sub.get("is_shallow") else ""
                 print(f"      • {st_icon} {sub.get('path')}: {sub.get('status')} [{sub_cmt}{desc_str}]{detached_str}{shallow_str}")
+        if r.get("sparse_checkout", {}).get("enabled"):
+            sc = r["sparse_checkout"]
+            cone_tag = "cone" if sc.get("cone_mode") else "full pattern"
+            pat_str = ", ".join(sc.get("patterns", [])) if sc.get("patterns") else "(root only)"
+            warn_str = f" ⚠️ {sc['warning']}" if sc.get("warning") else ""
+            print(f"    📐 sparse-checkout: {cone_tag} mode ({sc.get('pattern_count', 0)} pattern(s): {pat_str}){warn_str}")
 
     print("=" * 95)
     offline_count = sum(1 for r in results if r.get("network_state") == "offline")
@@ -885,6 +908,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
             or r["aux_branches_behind"]
             or (getattr(args, "submodules", False) and any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", [])))
             or (getattr(args, "unshallow", False) and (r.get("is_shallow") or any(s.get("is_shallow") for s in r.get("submodules", []))))
+            or (getattr(args, "reapply_sparse", False) and r.get("sparse_checkout", {}).get("enabled"))
         ]
         if not targets:
             benchmark.stop()
@@ -938,6 +962,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 recover_stale_lock=getattr(args, "recover_locks", False),
                 submodules=getattr(args, "submodules", False),
                 unshallow=getattr(args, "unshallow", False),
+                reapply_sparse=getattr(args, "reapply_sparse", False),
             )
             res["repo_rel"] = rel
 
@@ -1004,6 +1029,11 @@ def cmd_pull(args: argparse.Namespace) -> int:
                         sub_icon = "  ↳ ℹ️ [DRY-RUN]" if dry_run else ("  ↳ ✅" if sub_info.get("success") else "  ↳ ❌")
                         sub_action = "atualização recursiva prevista" if dry_run else ("submódulo atualizado" if sub_st == "UP_TO_DATE" else f"submódulo {sub_st}")
                         print(f"{sub_icon} Submódulo '{sub_path}': {sub_action} [{sub_commit}{sub_desc}]{sub_shallow}")
+                if res.get("sparse_reapply"):
+                    sp_res = res["sparse_reapply"]
+                    sp_icon = "  ↳ ✅" if sp_res.get("success") else "  ↳ ❌"
+                    sp_action = "filtros cone de sparse-checkout reaplicados" if sp_res.get("success") else f"falha ao reaplicar sparse-checkout: {sp_res.get('stderr')}"
+                    print(f"{sp_icon} Sparse-checkout: {sp_action}")
 
     t_pull = time.perf_counter() - t2
     benchmark.record_stage("pull", t_pull)
@@ -1874,6 +1904,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     common.add_argument("--submodules", action="store_true", default=argparse.SUPPRESS, help="Inspect drift and recursively update git submodules")
     common.add_argument("--no-submodules", dest="submodules", action="store_false", default=argparse.SUPPRESS, help="Do not update or inspect submodules")
     common.add_argument("--unshallow", action="store_true", default=argparse.SUPPRESS, help="Fetch full history for shallow submodules and repositories")
+    common.add_argument("--reapply-sparse", action="store_true", default=argparse.SUPPRESS, help="Reapply sparse-checkout cone patterns to prevent unbounded checkout conflicts")
 
     parser = argparse.ArgumentParser(
         prog="git-sync",

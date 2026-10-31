@@ -271,6 +271,7 @@ class BulkCache:
         self._worktrees: Dict[str, Dict[str, Any]] = {}
         self._remotes: Dict[str, Dict[str, str]] = {}
         self._submodules: Dict[str, List[Dict[str, Any]]] = {}
+        self._sparse_checkout: Dict[str, Dict[str, Any]] = {}
         self._hits = 0
         self._misses = 0
 
@@ -349,11 +350,42 @@ class BulkCache:
             self._submodules[cache_key] = subs
         return subs
 
+    def get_sparse_checkout_info(
+        self,
+        repo_path: str,
+        dirty_files: Optional[List[str]] = None,
+        timeout: int = 5,
+    ) -> Dict[str, Any]:
+        norm = os.path.abspath(repo_path)
+        get_sc_fn = _get_git_fn("get_sparse_checkout_info")
+        if not self.enabled:
+            return get_sc_fn(repo_path, dirty_files=dirty_files, timeout=timeout)
+
+        with self._lock:
+            if norm in self._sparse_checkout:
+                base_info = dict(self._sparse_checkout[norm])
+                self._hits += 1
+                if base_info.get("enabled") and base_info.get("cone_mode") and dirty_files is not None:
+                    is_in_cone_fn = _get_git_fn("is_path_in_cone")
+                    patterns = base_info.get("patterns", [])
+                    out_of_cone = [f for f in dirty_files if not is_in_cone_fn(f, patterns)]
+                    base_info["out_of_cone_files"] = out_of_cone
+                    if out_of_cone:
+                        base_info["warning"] = f"{len(out_of_cone)} uncommitted file(s) exist outside sparse cone patterns"
+                return base_info
+            self._misses += 1
+
+        info = get_sc_fn(repo_path, dirty_files=dirty_files, timeout=timeout)
+        with self._lock:
+            self._sparse_checkout[norm] = dict(info)
+        return info
+
     def invalidate(self, repo_path: str) -> None:
         """Invalidate all cached data for a repository and its linked worktrees."""
         norm = os.path.abspath(repo_path)
         with self._lock:
             self._remotes.pop(norm, None)
+            self._sparse_checkout.pop(norm, None)
             matching_sub_keys = [k for k in self._submodules if k == norm or k.startswith(f"{norm}:")]
             for k in matching_sub_keys:
                 self._submodules.pop(k, None)
@@ -370,6 +402,7 @@ class BulkCache:
             self._worktrees.clear()
             self._remotes.clear()
             self._submodules.clear()
+            self._sparse_checkout.clear()
             self._hits = 0
             self._misses = 0
 
@@ -382,6 +415,7 @@ class BulkCache:
                 "cached_worktrees": len(self._worktrees),
                 "cached_remotes": len(self._remotes),
                 "cached_submodules": len(self._submodules),
+                "cached_sparse_checkout": len(self._sparse_checkout),
             }
 
 

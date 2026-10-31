@@ -261,6 +261,22 @@ def diagnose_git_error(error_text: str, remote_url: Optional[str] = None) -> Opt
             "action_required": "unlock_index",
         }
 
+    # 6. Sparse checkout errors & checkout conflicts
+    if "sparse-checkout" in txt or "sparse checkout" in txt:
+        return {
+            "category": "SPARSE_CHECKOUT_CONFLICT",
+            "message": "Sparse-checkout pattern conflict or error in working tree.",
+            "suggestion": "Check configured sparse-checkout patterns with 'git sparse-checkout list' or reapply with 'git sparse-checkout reapply --cone'.",
+            "action_required": "reapply_sparse_checkout",
+        }
+    if "would be overwritten by merge" in txt or "would be overwritten by checkout" in txt or "updating the following directories would lose untracked files" in txt:
+        return {
+            "category": "CHECKOUT_CONFLICT",
+            "message": "Untracked or uncommitted local files would be overwritten by pull/checkout.",
+            "suggestion": "Move, commit, or stash conflicting untracked files, or run 'git-sync pull --autostash' / 'git sparse-checkout reapply'.",
+            "action_required": "resolve_checkout_conflict",
+        }
+
     return None
 
 
@@ -409,6 +425,132 @@ def is_shallow_repository(repo_path: str) -> bool:
         except Exception:
             pass
     return False
+
+
+def is_path_in_cone(path: str, cone_patterns: List[str]) -> bool:
+    """
+    Check if a relative file path matches Git cone mode sparse-checkout rules:
+    - Root-level files (no '/' in normalized path) are always included in cone.
+    - A file is included if it resides within a configured cone directory,
+      or within an intermediate directory leading to a configured sub-cone.
+    # INVARIANT: Accurately reflects Git cone mode sparse pattern directory matching.
+    """
+    norm = path.replace("\\", "/").strip("/")
+    if not norm or "/" not in norm:
+        return True
+
+    norm_parts = norm.split("/")
+    file_dir = "/".join(norm_parts[:-1])
+
+    for pat in cone_patterns:
+        clean_pat = pat.replace("\\", "/").strip("/")
+        if not clean_pat:
+            continue
+        if norm == clean_pat or norm.startswith(clean_pat + "/"):
+            return True
+        pat_parts = clean_pat.split("/")
+        for i in range(1, len(pat_parts)):
+            parent_dir = "/".join(pat_parts[:i])
+            if file_dir == parent_dir:
+                return True
+    return False
+
+
+def get_sparse_checkout_info(
+    repo_path: str,
+    dirty_files: Optional[List[str]] = None,
+    timeout: int = 5,
+) -> Dict[str, Any]:
+    """
+    Query git sparse-checkout configuration and active cone patterns for repo_path.
+    Returns:
+        enabled: bool (True if core.sparseCheckout is enabled)
+        cone_mode: bool (True if core.sparseCheckoutCone is enabled)
+        patterns: List[str] (Configured directory cones or patterns)
+        pattern_count: int
+        sparse_index: bool (True if index.sparse is enabled)
+        out_of_cone_files: List[str] (Uncommitted files residing outside cone boundaries)
+        warning: Optional[str] (Diagnostic warning if non-cone mode or out-of-cone modifications exist)
+    # INVARIANT: Directly inspecting git config core.sparseCheckout avoids spawning unnecessary processes on standard repos.
+    """
+    p_sc = run_git(repo_path, ["config", "--bool", "--get", "core.sparseCheckout"], timeout=timeout)
+    enabled = (p_sc.returncode == 0 and p_sc.stdout.strip().lower() == "true")
+
+    if not enabled:
+        return {
+            "enabled": False,
+            "cone_mode": False,
+            "patterns": [],
+            "pattern_count": 0,
+            "sparse_index": False,
+            "out_of_cone_files": [],
+            "warning": None,
+        }
+
+    p_cone = run_git(repo_path, ["config", "--bool", "--get", "core.sparseCheckoutCone"], timeout=timeout)
+    cone_mode = (p_cone.returncode == 0 and p_cone.stdout.strip().lower() == "true")
+
+    p_idx = run_git(repo_path, ["config", "--bool", "--get", "index.sparse"], timeout=timeout)
+    sparse_index = (p_idx.returncode == 0 and p_idx.stdout.strip().lower() == "true")
+
+    patterns: List[str] = []
+    p_list = run_git(repo_path, ["sparse-checkout", "list"], timeout=timeout)
+    if p_list.returncode == 0:
+        patterns = [l.strip() for l in p_list.stdout.splitlines() if l.strip()]
+    else:
+        git_dir = get_repo_git_dir(repo_path)
+        sc_file = git_dir / "info" / "sparse-checkout"
+        if sc_file.is_file():
+            try:
+                patterns = [l.strip() for l in sc_file.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
+            except Exception:
+                patterns = []
+
+    out_of_cone_files: List[str] = []
+    if cone_mode and dirty_files:
+        out_of_cone_files = [f for f in dirty_files if not is_path_in_cone(f, patterns)]
+
+    warning: Optional[str] = None
+    if not cone_mode:
+        warning = "Sparse checkout is configured in legacy non-cone pattern mode"
+    elif out_of_cone_files:
+        warning = f"{len(out_of_cone_files)} uncommitted file(s) exist outside sparse cone patterns"
+    elif not patterns:
+        warning = "Sparse checkout cone pattern is empty (root files only)"
+
+    return {
+        "enabled": True,
+        "cone_mode": cone_mode,
+        "patterns": patterns,
+        "pattern_count": len(patterns),
+        "sparse_index": sparse_index,
+        "out_of_cone_files": out_of_cone_files,
+        "warning": warning,
+    }
+
+
+def reapply_sparse_checkout(
+    repo_path: str,
+    cone: bool = True,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> Dict[str, Any]:
+    """
+    Safely reapply sparse-checkout filters on repo_path to enforce cone boundaries
+    and prevent unbounded working tree checkouts or conflicts.
+    # INVARIANT: GIT_TERMINAL_PROMPT=0 prevents interactive prompts during sparse-checkout operations.
+    """
+    args = ["sparse-checkout", "reapply"]
+    if cone:
+        args.append("--cone")
+    p = run_git_with_retry(repo_path, args, timeout=timeout)
+    ok = (p.returncode == 0)
+    return {
+        "repo": repo_path,
+        "success": ok,
+        "cone": cone,
+        "stdout": p.stdout.strip(),
+        "stderr": p.stderr.strip(),
+    }
 
 
 def find_repo_locks(repo_path: str, stale_threshold_seconds: float = 300.0) -> List[Dict[str, Any]]:
@@ -2933,6 +3075,15 @@ def inspect_repo(
         "stale_worktrees": stale_worktrees,
         "submodules": submodules,
         "is_shallow": is_shallow_repository(repo_path),
+        "sparse_checkout": {
+            "enabled": False,
+            "cone_mode": False,
+            "patterns": [],
+            "pattern_count": 0,
+            "sparse_index": False,
+            "out_of_cone_files": [],
+            "warning": None,
+        },
         "stale_refs": [],
         "pruned_refs": [],
         "gone_branches": [],
@@ -2951,6 +3102,10 @@ def inspect_repo(
     if is_dirty:
         info["is_dirty"] = True
         info["dirty_files"] = dirty_files
+
+    # 2b. Sparse-checkout status and cone diagnostics
+    sc_info = cache.get_sparse_checkout_info(repo_path, dirty_files=dirty_files, timeout=5) if cache else get_sparse_checkout_info(repo_path, dirty_files=dirty_files, timeout=5)
+    info["sparse_checkout"] = sc_info
 
     # 3. Remotes
     remotes = cache.get_remotes(repo_path, timeout=5) if cache else get_repo_remotes(repo_path, timeout=5)
@@ -3208,6 +3363,7 @@ def pull_repo(
     prune: bool = False,
     submodules: bool = False,
     unshallow: bool = False,
+    reapply_sparse: bool = False,
 ) -> Dict[str, Any]:
     """
     Pull updates for a single repository.
@@ -3218,6 +3374,7 @@ def pull_repo(
     #            before pull and restored afterwards, preserving worktree integrity without data loss.
     # INVARIANT: If unstash encounters a conflict, the stash is preserved in stash@{0} and the conflict is isolated.
     # INVARIANT: When dry_run is True, no working tree modifications, stashes, or ref updates occur.
+    # INVARIANT: When reapply_sparse is True or sparse-checkout is configured, cone patterns are safely reapplied and isolated.
     """
     curr_branch = run_git(repo_path, ["branch", "--show-current"]).stdout.strip()
 
@@ -3226,6 +3383,8 @@ def pull_repo(
     is_worktree = wt_info.get("is_worktree", False)
     worktree_main_path = wt_info.get("main_worktree")
     checked_out_branches = wt_info.get("checked_out_branches", {})
+
+    sparse_info = cache.get_sparse_checkout_info(repo_path, timeout=5) if cache else get_sparse_checkout_info(repo_path, timeout=5)
 
     if dry_run:
         is_dirty, dirty_files = check_repo_dirty(repo_path, timeout=timeout, cache=cache)
@@ -3287,6 +3446,8 @@ def pull_repo(
                 "behind": 0,
                 "is_shallow": repo_is_shallow,
                 "unshallow": unshallow,
+                "sparse_checkout": sparse_info,
+                "reapply_sparse": reapply_sparse,
                 "stale_refs": prune_res.get("stale_refs", []),
                 "pruned_refs": prune_res.get("pruned_refs", []),
                 "would_prune_refs": prune_res.get("would_prune_refs", []),
@@ -3343,6 +3504,11 @@ def pull_repo(
         if not success and benchmark:
             benchmark.record_failure("pull_error")
 
+        if reapply_sparse and sparse_info.get("enabled"):
+            sc_pat_cnt = sparse_info.get("pattern_count", 0)
+            prefix = f"[DRY-RUN] Reapplying sparse-checkout cone filters ({sc_pat_cnt} pattern(s))\n"
+            stdout = (prefix + stdout).strip() if stdout else prefix.strip()
+
         res_dict: Dict[str, Any] = {
             "repo": repo_path,
             "branch": curr_branch,
@@ -3360,6 +3526,8 @@ def pull_repo(
             "behind": behind_count,
             "is_shallow": repo_is_shallow,
             "unshallow": unshallow,
+            "sparse_checkout": sparse_info,
+            "reapply_sparse": reapply_sparse,
             "stale_refs": prune_res.get("stale_refs", []),
             "pruned_refs": prune_res.get("pruned_refs", []),
             "would_prune_refs": prune_res.get("would_prune_refs", []),
@@ -3550,6 +3718,17 @@ def pull_repo(
             sub_err = submodules_res.get("stderr") or "Submodule update failed"
             stderr = f"{stderr}\n{sub_err}".strip() if stderr else sub_err
 
+    sparse_reapply_res: Optional[Dict[str, Any]] = None
+    if reapply_sparse and sparse_info.get("enabled") and success:
+        sparse_reapply_res = _dispatch_fn("reapply_sparse_checkout", reapply_sparse_checkout)(
+            repo_path,
+            cone=sparse_info.get("cone_mode", True),
+            timeout=timeout,
+        )
+        if not sparse_reapply_res.get("success"):
+            reapply_err = sparse_reapply_res.get("stderr") or "Failed to reapply sparse-checkout"
+            stderr = f"{stderr}\n{reapply_err}".strip() if stderr else reapply_err
+
     result_dict: Dict[str, Any] = {
         "repo": repo_path,
         "branch": curr_branch,
@@ -3566,6 +3745,9 @@ def pull_repo(
         "diagnostic": diagnostic,
         "is_shallow": repo_is_shallow,
         "unshallow": unshallow,
+        "sparse_checkout": sparse_info,
+        "reapply_sparse": reapply_sparse,
+        "sparse_reapply": sparse_reapply_res,
         "stale_refs": prune_res.get("stale_refs", []),
         "pruned_refs": prune_res.get("pruned_refs", []),
         "would_prune_refs": prune_res.get("would_prune_refs", []),

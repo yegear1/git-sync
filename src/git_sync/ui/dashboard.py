@@ -283,6 +283,11 @@ class InteractiveDashboard:
             details.append(self.styler.dim("[worktree]"))
         if repo.get("stale_worktrees"):
             details.append(self.styler.yellow(f"wt_stale({len(repo['stale_worktrees'])})"))
+        if repo.get("sparse_checkout", {}).get("enabled"):
+            sc = repo["sparse_checkout"]
+            tag = "cone" if sc.get("cone_mode") else "full"
+            warn = "!" if sc.get("warning") else ""
+            details.append(self.styler.dim(f"[sparse:{tag}{warn}]"))
         if not details:
             details.append(self.styler.dim("sincronizado"))
 

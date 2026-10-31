@@ -5,6 +5,7 @@ Unit tests for git-sync core functionality.
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1278,6 +1279,223 @@ class TestGitSyncCore(unittest.TestCase):
         self.assertEqual(code_after, 0)
         status_after_data = json.loads(buf_after.getvalue())
         self.assertEqual(len(status_after_data["stale_worktrees"]), 0)
+
+
+class TestSparseCheckoutSupport(unittest.TestCase):
+    """Test suite for git sparse-checkout cone pattern detection, diagnostics, and synchronization."""
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        # Create standard non-sparse repo
+        self.standard_repo = self.root / "standard_repo"
+        self._init_repo(self.standard_repo)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _init_repo(self, repo_path: Path):
+        repo_path.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", str(repo_path)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo_path), "config", "user.name", "Tester"], check=True)
+        subprocess.run(["git", "-C", str(repo_path), "config", "user.email", "tester@example.com"], check=True)
+        (repo_path / "README.md").write_text("# Test Repo\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo_path), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(repo_path), "commit", "-m", "Initial commit"], check=True, capture_output=True)
+
+    def test_is_path_in_cone_semantics(self):
+        from git_sync.core import is_path_in_cone
+
+        patterns = ["src", "client/ui"]
+        # Root-level files are always inside cone
+        self.assertTrue(is_path_in_cone("README.md", patterns))
+        self.assertTrue(is_path_in_cone("setup.py", patterns))
+        self.assertTrue(is_path_in_cone(".gitignore", patterns))
+
+        # Files directly in configured cone directories
+        self.assertTrue(is_path_in_cone("src/main.py", patterns))
+        self.assertTrue(is_path_in_cone("src/utils/math.py", patterns))
+        self.assertTrue(is_path_in_cone("client/ui/button.tsx", patterns))
+
+        # Intermediate parent directories leading to a sub-cone
+        self.assertTrue(is_path_in_cone("client/index.ts", patterns))
+
+        # Files outside configured cones
+        self.assertFalse(is_path_in_cone("docs/index.md", patterns))
+        self.assertFalse(is_path_in_cone("client/backend/api.ts", patterns))
+        self.assertFalse(is_path_in_cone("build/output.log", patterns))
+
+    def test_get_sparse_checkout_info_non_sparse(self):
+        from git_sync.core import get_sparse_checkout_info
+
+        info = get_sparse_checkout_info(str(self.standard_repo))
+        self.assertFalse(info["enabled"])
+        self.assertFalse(info["cone_mode"])
+        self.assertEqual(info["patterns"], [])
+        self.assertEqual(info["pattern_count"], 0)
+        self.assertIsNone(info["warning"])
+
+    def test_get_sparse_checkout_info_cone_mode(self):
+        from git_sync.core import get_sparse_checkout_info
+
+        sparse_repo = self.root / "sparse_cone_repo"
+        self._init_repo(sparse_repo)
+        subprocess.run(
+            ["git", "-C", str(sparse_repo), "sparse-checkout", "set", "--cone", "src", "docs"],
+            check=True,
+            capture_output=True,
+        )
+
+        info = get_sparse_checkout_info(str(sparse_repo))
+        self.assertTrue(info["enabled"])
+        self.assertTrue(info["cone_mode"])
+        self.assertIn("src", info["patterns"])
+        self.assertIn("docs", info["patterns"])
+        self.assertEqual(info["pattern_count"], 2)
+        self.assertIsNone(info["warning"])
+
+    def test_out_of_cone_dirty_files_warning(self):
+        from git_sync.core import get_sparse_checkout_info
+
+        sparse_repo = self.root / "sparse_warn_repo"
+        self._init_repo(sparse_repo)
+        subprocess.run(
+            ["git", "-C", str(sparse_repo), "sparse-checkout", "set", "--cone", "src"],
+            check=True,
+            capture_output=True,
+        )
+
+        dirty_files = ["src/main.py", "untracked_outside/file.txt", "README.md"]
+        info = get_sparse_checkout_info(str(sparse_repo), dirty_files=dirty_files)
+        self.assertTrue(info["enabled"])
+        self.assertTrue(info["cone_mode"])
+        self.assertEqual(info["out_of_cone_files"], ["untracked_outside/file.txt"])
+        self.assertIsNotNone(info["warning"])
+        self.assertIn("1 uncommitted file(s) exist outside sparse cone patterns", info["warning"])
+
+    def test_reapply_sparse_checkout(self):
+        from git_sync.core import reapply_sparse_checkout
+
+        sparse_repo = self.root / "sparse_reapply_repo"
+        self._init_repo(sparse_repo)
+        subprocess.run(
+            ["git", "-C", str(sparse_repo), "sparse-checkout", "set", "--cone", "src"],
+            check=True,
+            capture_output=True,
+        )
+
+        res = reapply_sparse_checkout(str(sparse_repo), cone=True)
+        self.assertTrue(res["success"])
+        self.assertTrue(res["cone"])
+
+    def test_diagnose_git_error_sparse_and_checkout_conflicts(self):
+        from git_sync.core import diagnose_git_error
+
+        diag1 = diagnose_git_error("fatal: sparse checkout leaves no entry on working directory")
+        self.assertIsNotNone(diag1)
+        self.assertEqual(diag1["category"], "SPARSE_CHECKOUT_CONFLICT")
+        self.assertEqual(diag1["action_required"], "reapply_sparse_checkout")
+
+        diag2 = diagnose_git_error("error: The following untracked working tree files would be overwritten by checkout: foo.txt")
+        self.assertIsNotNone(diag2)
+        self.assertEqual(diag2["category"], "CHECKOUT_CONFLICT")
+        self.assertEqual(diag2["action_required"], "resolve_checkout_conflict")
+
+    def test_bulk_cache_sparse_checkout(self):
+        from git_sync.telemetry import BulkCache
+
+        sparse_repo = self.root / "sparse_cached_repo"
+        self._init_repo(sparse_repo)
+        subprocess.run(
+            ["git", "-C", str(sparse_repo), "sparse-checkout", "set", "--cone", "app"],
+            check=True,
+            capture_output=True,
+        )
+
+        cache = BulkCache(enabled=True)
+        info1 = cache.get_sparse_checkout_info(str(sparse_repo))
+        self.assertTrue(info1["enabled"])
+        self.assertEqual(cache.stats["misses"], 1)
+
+        info2 = cache.get_sparse_checkout_info(str(sparse_repo))
+        self.assertTrue(info2["enabled"])
+        self.assertEqual(cache.stats["hits"], 1)
+
+        cache.invalidate(str(sparse_repo))
+        self.assertEqual(cache.stats["cached_sparse_checkout"], 0)
+
+    def test_inspect_and_pull_sparse_repo(self):
+        from git_sync.core import inspect_repo, pull_repo
+
+        # Create upstream origin
+        origin = self.root / "upstream_sparse"
+        self._init_repo(origin)
+        (origin / "src").mkdir()
+        (origin / "src" / "code.py").write_text("print(1)\n", encoding="utf-8")
+        (origin / "docs").mkdir()
+        (origin / "docs" / "doc.txt").write_text("doc\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(origin), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(origin), "commit", "-m", "Add src and docs"], check=True)
+
+        # Clone client
+        client = self.root / "client_sparse"
+        subprocess.run(["git", "clone", str(origin), str(client)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(client), "config", "user.name", "Client"], check=True)
+        subprocess.run(["git", "-C", str(client), "config", "user.email", "client@example.com"], check=True)
+        subprocess.run(
+            ["git", "-C", str(client), "sparse-checkout", "set", "--cone", "src"],
+            check=True,
+            capture_output=True,
+        )
+
+        # Inspect repo detects sparse checkout
+        insp = inspect_repo(str(client), str(self.root), do_fetch=False)
+        self.assertTrue(insp["sparse_checkout"]["enabled"])
+        self.assertTrue(insp["sparse_checkout"]["cone_mode"])
+        self.assertEqual(insp["sparse_checkout"]["patterns"], ["src"])
+
+        # Add commit in upstream
+        (origin / "src" / "code.py").write_text("print(2)\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(origin), "add", "."], check=True)
+        subprocess.run(["git", "-C", str(origin), "commit", "-m", "Upstream update"], check=True)
+
+        # Pull repo with reapply_sparse=True
+        pull_res = pull_repo(str(client), reapply_sparse=True)
+        self.assertTrue(pull_res["success"])
+        self.assertTrue(pull_res["sparse_checkout"]["enabled"])
+        self.assertIsNotNone(pull_res["sparse_reapply"])
+        self.assertTrue(pull_res["sparse_reapply"]["success"])
+
+        # Docs folder was never populated in client tree (cone enforced)
+        self.assertFalse((client / "docs").exists())
+        self.assertTrue((client / "src" / "code.py").exists())
+
+    def test_cli_status_and_pull_sparse_checkout(self):
+        from git_sync.cli import main
+
+        sparse_repo = self.root / "cli_sparse_repo"
+        self._init_repo(sparse_repo)
+        subprocess.run(
+            ["git", "-C", str(sparse_repo), "sparse-checkout", "set", "--cone", "modules"],
+            check=True,
+            capture_output=True,
+        )
+
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            code = main(["status", "--root", str(self.root), "--no-fetch", "--json", "--compact"])
+        self.assertEqual(code, 0)
+        out = json.loads(buf.getvalue())
+        self.assertIn("sparse_checkout", out)
+        self.assertIn("cli_sparse_repo", out["sparse_checkout"])
+
+        # Status text rendering
+        buf_text = io.StringIO()
+        with patch("sys.stdout", buf_text):
+            code_text = main(["status", "--root", str(self.root), "--no-fetch"])
+        self.assertEqual(code_text, 0)
+        self.assertIn("sparse(cone:1)", buf_text.getvalue())
+        self.assertIn("📐 sparse-checkout: cone mode (1 pattern(s): modules)", buf_text.getvalue())
 
 
 if __name__ == "__main__":

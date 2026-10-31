@@ -150,6 +150,7 @@ class GitSyncConfig:
     pull_prune: bool = False
     pull_submodules: bool = False
     pull_unshallow: bool = False
+    pull_reapply_sparse: bool = False
     push_dry_run: bool = False
     push_all: bool = False
     push_branch: Optional[str] = None
@@ -199,6 +200,7 @@ class GitSyncConfig:
                 "prune": self.pull_prune,
                 "submodules": self.pull_submodules,
                 "unshallow": self.pull_unshallow,
+                "reapply_sparse": self.pull_reapply_sparse,
                 "remote": self.pull_remote,
             },
             "push": {
@@ -417,6 +419,8 @@ def resolve_config(
     pull_submodules = bool(pull_cfg.get("submodules", combined.get("pull_submodules", global_submodules)))
     global_unshallow = bool(combined.get("unshallow", False))
     pull_unshallow = bool(pull_cfg.get("unshallow", combined.get("pull_unshallow", global_unshallow)))
+    global_reapply_sparse = bool(combined.get("reapply_sparse", False))
+    pull_reapply_sparse = bool(pull_cfg.get("reapply_sparse", combined.get("pull_reapply_sparse", global_reapply_sparse)))
     pull_remote_raw = pull_cfg.get("remote", combined.get("pull_remote", None))
     pull_remote = str(pull_remote_raw) if pull_remote_raw is not None else None
 
@@ -482,6 +486,7 @@ def resolve_config(
         pull_prune=pull_prune,
         pull_submodules=pull_submodules,
         pull_unshallow=pull_unshallow,
+        pull_reapply_sparse=pull_reapply_sparse,
         push_dry_run=push_dry_run,
         push_all=push_all,
         push_branch=push_branch,
