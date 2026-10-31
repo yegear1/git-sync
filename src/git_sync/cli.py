@@ -47,7 +47,12 @@ from git_sync.engine import (
     run_git_with_retry,
 )
 from git_sync.telemetry import BulkCache, TelemetryBenchmark
-from git_sync.ui.progress import ProgressIndicator
+from git_sync.ui import (
+    AnsiStyler,
+    InteractiveDashboard,
+    ProgressIndicator,
+    format_diff_stat,
+)
 from git_sync.installer import (
     generate_completion_script,
     install_agent_skills,
@@ -357,6 +362,24 @@ def cmd_status(args: argparse.Namespace) -> int:
                     resp["telemetry"] = benchmark.to_dict()
                 print(json.dumps(resp))
         else:
+            if getattr(args, "dashboard", False) or getattr(args, "tui", False):
+                dashboard = InteractiveDashboard(
+                    root=root,
+                    repos=[],
+                    do_fetch=not args.no_fetch,
+                    workers=args.workers,
+                    timeout=args.timeout,
+                    retries=getattr(args, "retries", DEFAULT_RETRIES),
+                    remote=remote,
+                    exclude=exclude,
+                    group=getattr(args, "group", None),
+                    groups=getattr(args, "groups", None),
+                    ff_only=getattr(args, "ff_only", True),
+                    sync_branches=getattr(args, "sync_branches", True),
+                    autostash=getattr(args, "autostash", True),
+                    dry_run=getattr(args, "dry_run", False),
+                )
+                return dashboard.run()
             print(f"Nenhum repositório encontrado em {root}")
             if getattr(args, "benchmark", False):
                 _print_benchmark_output(benchmark, getattr(args, "json", False))
@@ -453,6 +476,25 @@ def cmd_status(args: argparse.Namespace) -> int:
         if getattr(args, "benchmark", False):
             _print_benchmark_output(benchmark, getattr(args, "json", False))
         return 0
+
+    if getattr(args, "dashboard", False) or getattr(args, "tui", False):
+        dashboard = InteractiveDashboard(
+            root=root,
+            repos=results,
+            do_fetch=not args.no_fetch,
+            workers=args.workers,
+            timeout=args.timeout,
+            retries=retries,
+            remote=remote,
+            exclude=exclude,
+            group=getattr(args, "group", None),
+            groups=getattr(args, "groups", None),
+            ff_only=getattr(args, "ff_only", True),
+            sync_branches=getattr(args, "sync_branches", True),
+            autostash=getattr(args, "autostash", True),
+            dry_run=getattr(args, "dry_run", False),
+        )
+        return dashboard.run()
 
     status_icons = {
         "UP_TO_DATE": "✅ OK",
@@ -589,7 +631,7 @@ def _prompt_resolution_choice(
             diff_text = get_divergence_diff(repo_path, branch=details.get("branch"), timeout=timeout)
             if diff_text:
                 print("\n--- DIFF INÍCIO ---")
-                print(diff_text[:3000])
+                print(format_diff_stat(diff_text[:3000]))
                 if len(diff_text) > 3000:
                     print(f"\n... (diff truncado em 3000 caracteres, total: {len(diff_text)})")
                 print("--- DIFF FIM ---\n")
@@ -899,7 +941,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                 else:
                     print(f"\n📂 Diff de divergência para {rel} ({details.get('branch')} ↔ {details.get('upstream')}):")
                     print("=" * 60)
-                    print(diff_text if diff_text else "(Nenhuma diferença ou sem upstream)")
+                    print(format_diff_stat(diff_text) if diff_text else "(Nenhuma diferença ou sem upstream)")
                 progress.advance(rel)
                 continue
 
@@ -1414,6 +1456,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     common.add_argument("--remote", default=argparse.SUPPRESS, help="Target specific Git remote (e.g. origin, upstream, fork)")
     common.add_argument("--dry-run", dest="dry_run", action="store_true", default=argparse.SUPPRESS, help="Simulate execution without modifying repositories")
     common.add_argument("--no-dry-run", dest="dry_run", action="store_false", default=argparse.SUPPRESS, help="Disable dry-run simulation mode")
+    common.add_argument("--dashboard", "--tui", dest="dashboard", action="store_true", default=argparse.SUPPRESS, help="Launch interactive terminal dashboard")
 
     parser = argparse.ArgumentParser(
         prog="git-sync",
@@ -1426,6 +1469,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--no-fetch", dest="fetch", action="store_false", default=None, help="Skip remote fetch (instant local check)")
     parser.add_argument("--pending", action="store_true", default=None, help="Only show repos with pending actions or dirty files")
     parser.add_argument("--group", default=None, help="Filter by subfolder/group")
+    parser.add_argument("-i", "--interactive", dest="interactive", action="store_true", default=False, help="Launch interactive terminal dashboard")
 
     subparsers = parser.add_subparsers(dest="command")
 
@@ -1440,6 +1484,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_status.add_argument("--fetch", dest="fetch", action="store_true", default=None, help="Fetch remotes")
     p_status.add_argument("--no-fetch", dest="fetch", action="store_false", default=None, help="Skip remote fetch (instant local check)")
     p_status.add_argument("--pending", action="store_true", default=None, help="Only show repos with pending actions or dirty files")
+    p_status.add_argument("-i", "--interactive", dest="interactive", action="store_true", default=False, help="Launch interactive terminal dashboard")
+
+    # dashboard / tui
+    for dash_cmd in ("dashboard", "tui"):
+        p_dash = subparsers.add_parser(dash_cmd, parents=[common], help="Launch interactive terminal dashboard")
+        p_dash.add_argument("--group", default=None, help="Filter by subfolder/group")
+        p_dash.add_argument("--fetch", dest="fetch", action="store_true", default=None, help="Fetch remotes")
+        p_dash.add_argument("--no-fetch", dest="fetch", action="store_false", default=None, help="Skip remote fetch (instant local check)")
+        p_dash.add_argument("--pending", action="store_true", default=None, help="Only show repos with pending actions or dirty files")
 
     # pull
     p_pull = subparsers.add_parser("pull", parents=[common], help="Pull changes for specified repositories or --all")
@@ -1506,6 +1559,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not args.command:
         args.command = "status"
+    elif args.command in ("dashboard", "tui"):
+        args.command = "status"
+        args.dashboard = True
 
     # Precedence resolution: Explicit CLI args > Selected Profile > Top-level Config > Defaults
     args.root = getattr(args, "root", None) or config.root
@@ -1583,6 +1639,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args.strategy = strategy_flag if strategy_flag is not None else config.pull_strategy
 
     args.interactive = getattr(args, "interactive", False)
+    args.dashboard = getattr(args, "dashboard", False) or (args.command == "status" and args.interactive)
 
     dry_run_flag = getattr(args, "dry_run", None)
     if args.command == "pull":

@@ -65,12 +65,25 @@ from git_sync.telemetry import (
     BulkCache,
     TelemetryBenchmark,
 )
+from git_sync.ui.dashboard import (
+    EXIT_CODE_SIGINT,
+    InteractiveDashboard,
+    get_repo_diff_stat,
+    read_single_key,
+)
 from git_sync.ui.progress import (
     ProgressIndicator,
+)
+from git_sync.ui.style import (
+    AnsiStyler,
+    format_diff_stat,
+    should_use_color,
+    style_text,
 )
 
 __all__ = [
     "AdaptiveConcurrencyController",
+    "AnsiStyler",
     "BulkCache",
     "DEFAULT_BACKOFF_FACTOR",
     "DEFAULT_DISK_LATENCY_THRESHOLD",
@@ -83,7 +96,9 @@ __all__ = [
     "DEFAULT_ROOT",
     "DEFAULT_TIMEOUT",
     "DEFAULT_WORKERS",
+    "EXIT_CODE_SIGINT",
     "GIT_ENV",
+    "InteractiveDashboard",
     "ProgressIndicator",
     "TOOL_DIR_PREFIXES",
     "TelemetryBenchmark",
@@ -100,8 +115,10 @@ __all__ = [
     "find_locked_repos",
     "find_push_pending_repos",
     "find_repo_locks",
+    "format_diff_stat",
     "get_divergence_details",
     "get_divergence_diff",
+    "get_repo_diff_stat",
     "get_repo_git_dir",
     "get_repo_remotes",
     "get_submodules_status",
@@ -114,6 +131,7 @@ __all__ = [
     "prune_repo_remotes",
     "pull_repo",
     "push_repo",
+    "read_single_key",
     "recover_index_lock",
     "recover_repo_locks",
     "resolve_default_root",
@@ -121,5 +139,7 @@ __all__ = [
     "restore_stash",
     "run_git",
     "run_git_with_retry",
+    "should_use_color",
     "stash_changes",
+    "style_text",
 ]
