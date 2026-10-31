@@ -78,6 +78,9 @@ DEFAULT_MAX_WORKERS = 32
 DEFAULT_MIN_WORKERS = 1
 DEFAULT_COMPACT_DIFF_TOKENS = 1000
 DEFAULT_CHARS_PER_TOKEN = 4
+GRADE_A_THRESHOLD_SECONDS = 0.50
+GRADE_B_THRESHOLD_SECONDS = 1.50
+GRADE_C_THRESHOLD_SECONDS = 3.00
 
 DEFAULT_IGNORE_DIRS = {
     "node_modules",
@@ -137,6 +140,8 @@ def _run_git(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOUT) ->
 
 
 def _dispatch_fn(name: str, fallback: Any) -> Any:
+    if hasattr(fallback, "_mock_return_value") or hasattr(fallback, "_mock_wraps") or hasattr(fallback, "mock_calls"):
+        return fallback
     core = sys.modules.get("git_sync.core")
     if core is not None:
         target = getattr(core, name, None)
@@ -1112,6 +1117,96 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
         }
 
 
+def compute_latency_grade(rtt_seconds: Optional[float], ok: bool = True) -> str:
+    """
+    Compute latency performance grade (A/B/C/F) for remote Git handshake round-trip times.
+    # INVARIANT: Failed or timed out probes unconditionally receive grade 'F'.
+
+    Grade Scale:
+      - A: < 0.50s (Fast / multiplexed socket / local fiber)
+      - B: 0.50s - 1.50s (Good / standard unmultiplexed remote handshake)
+      - C: 1.50s - 3.00s (Degraded / DNS latency or network congestion)
+      - F: >= 3.00s or probe failure / timeout (Failing SLA / severe bottleneck)
+    """
+    if not ok or rtt_seconds is None or rtt_seconds < 0:
+        return "F"
+    if rtt_seconds < GRADE_A_THRESHOLD_SECONDS:
+        return "A"
+    if rtt_seconds < GRADE_B_THRESHOLD_SECONDS:
+        return "B"
+    if rtt_seconds < GRADE_C_THRESHOLD_SECONDS:
+        return "C"
+    return "F"
+
+
+def probe_remote_reachability(
+    remote_url: str,
+    sample_repo: Optional[str] = None,
+    timeout: int = 5,
+) -> Dict[str, Any]:
+    """
+    Probe single remote reachability, measuring handshake RTT and computing latency grade.
+    # INVARIANT: Uses GIT_TERMINAL_PROMPT=0 to guarantee probing never hangs in automated environments.
+    """
+    is_ssh = "@" in remote_url or remote_url.startswith("ssh://")
+    protocol = "ssh" if is_ssh else "https"
+    host = ""
+    if "@" in remote_url and ":" in remote_url:
+        host = remote_url.split("@", 1)[1].split(":", 1)[0]
+    elif "://" in remote_url:
+        host = remote_url.split("://", 1)[1].split("/", 1)[0]
+
+    t0 = time.perf_counter()
+    try:
+        proc = run_git(sample_repo or ".", ["ls-remote", "--heads", remote_url], timeout=timeout)
+        rtt = round(time.perf_counter() - t0, 3)
+        if proc.returncode == 0:
+            return {
+                "ok": True,
+                "protocol": protocol,
+                "host": host,
+                "latency_seconds": rtt,
+                "grade": compute_latency_grade(rtt, ok=True),
+                "error": None,
+                "diagnostic": None,
+            }
+        else:
+            err_text = proc.stderr.strip()
+            diag = diagnose_git_error(err_text, remote_url)
+            return {
+                "ok": False,
+                "protocol": protocol,
+                "host": host,
+                "latency_seconds": rtt,
+                "grade": "F",
+                "error": err_text.splitlines()[-1] if err_text else "Authentication probe failed",
+                "diagnostic": diag,
+            }
+    except subprocess.TimeoutExpired:
+        rtt = round(time.perf_counter() - t0, 3)
+        diag = diagnose_git_error(f"Timeout ({timeout}s)", remote_url)
+        return {
+            "ok": False,
+            "protocol": protocol,
+            "host": host,
+            "latency_seconds": rtt,
+            "grade": "F",
+            "error": f"Timeout ({timeout}s)",
+            "diagnostic": diag,
+        }
+    except Exception as exc:
+        rtt = round(time.perf_counter() - t0, 3)
+        return {
+            "ok": False,
+            "protocol": protocol,
+            "host": host,
+            "latency_seconds": rtt,
+            "grade": "F",
+            "error": str(exc),
+            "diagnostic": None,
+        }
+
+
 def check_credentials_sanity(
     root_dir: str,
     repos: Optional[List[str]] = None,
@@ -1119,6 +1214,7 @@ def check_credentials_sanity(
     timeout: int = 5,
     test_remotes: bool = True,
     max_remotes_to_test: int = 15,
+    workers: int | str = DEFAULT_WORKERS,
 ) -> Dict[str, Any]:
     """
     Perform a proactive sanity check of Git credentials, SSH agent, key files,
@@ -1254,66 +1350,74 @@ def check_credentials_sanity(
         suggestions.append("Configure credential helper via 'git config --global credential.helper store' or authenticate via 'gh auth login'.")
 
     if test_remotes:
-        for r_url, sample_repo in unique_remotes.items():
-            is_ssh = "@" in r_url or r_url.startswith("ssh://")
-            protocol = "ssh" if is_ssh else "https"
-            host = ""
-            if "@" in r_url and ":" in r_url:
-                host = r_url.split("@", 1)[1].split(":", 1)[0]
-            elif "://" in r_url:
-                host = r_url.split("://", 1)[1].split("/", 1)[0]
+        def _probe_worker(item: Tuple[str, str]) -> Tuple[str, Dict[str, Any]]:
+            url, repo = item
+            probe_fn = _dispatch_fn("probe_remote_reachability", probe_remote_reachability)
+            res = probe_fn(remote_url=url, sample_repo=repo, timeout=timeout)
+            return url, res
 
-            try:
-                proc = run_git(sample_repo, ["ls-remote", "--heads", r_url], timeout=timeout)
-                if proc.returncode == 0:
-                    remotes_tested[r_url] = {
-                        "ok": True,
-                        "protocol": protocol,
-                        "host": host,
-                        "error": None,
-                        "diagnostic": None,
-                    }
+        items = list(unique_remotes.items())
+        eff_workers = min(len(items), max(1, workers if isinstance(workers, int) else 8))
+        if eff_workers > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=eff_workers) as executor:
+                probed = list(executor.map(_probe_worker, items))
+        else:
+            probed = [_probe_worker(it) for it in items]
+
+        for r_url, r_data in probed:
+            remotes_tested[r_url] = r_data
+            host = r_data.get("host") or r_url
+            grade = r_data.get("grade", "F")
+            latency = r_data.get("latency_seconds")
+            protocol = r_data.get("protocol", "https")
+
+            if not r_data.get("ok"):
+                diag = r_data.get("diagnostic")
+                if diag:
+                    err_msg = f"{host or r_url}: {diag['message']}"
+                    if err_msg not in errors:
+                        errors.append(err_msg)
+                    if diag.get("suggestion") and diag["suggestion"] not in suggestions:
+                        suggestions.append(diag["suggestion"])
                 else:
-                    err_text = proc.stderr.strip()
-                    diag = diagnose_git_error(err_text, r_url)
-                    remotes_tested[r_url] = {
-                        "ok": False,
-                        "protocol": protocol,
-                        "host": host,
-                        "error": err_text.splitlines()[-1] if err_text else "Authentication probe failed",
-                        "diagnostic": diag,
-                    }
-                    if diag:
-                        err_msg = f"{host or r_url}: {diag['message']}"
-                        if err_msg not in errors:
-                            errors.append(err_msg)
-                        if diag["suggestion"] not in suggestions:
-                            suggestions.append(diag["suggestion"])
+                    err_label = r_data.get("error") or "Failed"
+                    err_msg = f"{host or r_url}: {err_label}"
+                    if err_msg not in errors:
+                        errors.append(err_msg)
+            else:
+                # INVARIANT: Degraded latency (C/F) triggers targeted diagnostics for slow DNS or SSH mux sockets.
+                if grade in ("C", "F"):
+                    lat_str = f"{latency:.3f}s" if latency is not None else "unknown"
+                    if protocol == "ssh":
+                        if not ssh_mux_info.get("is_enabled"):
+                            warn_msg = (
+                                f"Remote '{host or r_url}' has degraded handshake latency ({lat_str}, Grade {grade}). "
+                                "SSH multiplexing is disabled."
+                            )
+                            sug_msg = (
+                                "Enable SSH multiplexing in ~/.ssh/config to speed up multi-repository fetch operations "
+                                "(audit with 'git-sync doctor --ssh')."
+                            )
+                        else:
+                            warn_msg = (
+                                f"Remote '{host or r_url}' has degraded handshake latency ({lat_str}, Grade {grade}) "
+                                "despite SSH multiplexing."
+                            )
+                            sug_msg = (
+                                f"Verify DNS resolution speed for '{host}' or recreate SSH control sockets in "
+                                f"'{ssh_mux_info.get('socket_dir', '~/.ssh')}'."
+                            )
                     else:
-                        err_msg = f"{host or r_url}: {err_text.splitlines()[-1] if err_text else 'Failed'}"
-                        if err_msg not in errors:
-                            errors.append(err_msg)
-            except subprocess.TimeoutExpired:
-                diag = diagnose_git_error(f"Timeout ({timeout}s)", r_url)
-                remotes_tested[r_url] = {
-                    "ok": False,
-                    "protocol": protocol,
-                    "host": host,
-                    "error": f"Timeout ({timeout}s)",
-                    "diagnostic": diag,
-                }
-                err_msg = f"{host or r_url}: Network timeout probing remote"
-                if err_msg not in errors:
-                    errors.append(err_msg)
-            except Exception as exc:
-                remotes_tested[r_url] = {
-                    "ok": False,
-                    "protocol": protocol,
-                    "host": host,
-                    "error": str(exc),
-                    "diagnostic": None,
-                }
-                errors.append(f"{host or r_url}: {exc}")
+                        warn_msg = (
+                            f"Remote '{host or r_url}' has degraded handshake latency ({lat_str}, Grade {grade}). "
+                            "Slow DNS resolution or network route detected."
+                        )
+                        sug_msg = f"Check DNS lookup latency or inspect network routing to '{host}'."
+
+                    if warn_msg not in warnings:
+                        warnings.append(warn_msg)
+                    if sug_msg not in suggestions:
+                        suggestions.append(sug_msg)
 
     # 5. Lock file inspection
     locked_repos = find_locked_repos(root_dir, repos=target_repos, timeout=timeout)
@@ -3561,12 +3665,16 @@ __all__ = [
     "DEFAULT_TIMEOUT",
     "DEFAULT_WORKERS",
     "GIT_ENV",
+    "GRADE_A_THRESHOLD_SECONDS",
+    "GRADE_B_THRESHOLD_SECONDS",
+    "GRADE_C_THRESHOLD_SECONDS",
     "TOOL_DIR_PREFIXES",
     "audit_branch_hygiene",
     "audit_ssh_multiplexing",
     "benchmark_ssh_multiplexing",
     "check_credentials_sanity",
     "check_repo_dirty",
+    "compute_latency_grade",
     "delete_local_branches",
     "diagnose_git_error",
     "discover_repos",
@@ -3586,6 +3694,7 @@ __all__ = [
     "is_transient_network_error",
     "match_repo",
     "prune_repo_remotes",
+    "probe_remote_reachability",
     "pull_repo",
     "push_repo",
     "recover_index_lock",

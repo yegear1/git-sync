@@ -23,15 +23,20 @@ from git_sync.core import (
     DEFAULT_BACKOFF_FACTOR,
     DEFAULT_MAX_BACKOFF,
     DEFAULT_RETRIES,
+    GRADE_A_THRESHOLD_SECONDS,
+    GRADE_B_THRESHOLD_SECONDS,
+    GRADE_C_THRESHOLD_SECONDS,
     TelemetryBenchmark,
     audit_ssh_multiplexing,
     benchmark_ssh_multiplexing,
     check_credentials_sanity,
+    compute_latency_grade,
     diagnose_git_error,
     inspect_github_cli,
     inspect_repo,
     inspect_ssh_config,
     is_transient_network_error,
+    probe_remote_reachability,
     run_git_with_retry,
 )
 
@@ -778,6 +783,212 @@ class TestOfflineAndRemediationDiagnostics(unittest.TestCase):
         remed_repos = [r["repo"] for r in data["remediations"]]
         self.assertIn("repo_offline", remed_repos)
         self.assertIn("repo_no_remote", remed_repos)
+
+
+class TestRemoteLatencyGradingAndDoctor(unittest.TestCase):
+    """Test remote health check telemetry, concurrent probing, latency grading (A/B/C/F), and doctor formatting."""
+
+    def test_compute_latency_grade_thresholds(self):
+        # Grade A: < 0.50s
+        self.assertEqual(compute_latency_grade(0.01), "A")
+        self.assertEqual(compute_latency_grade(0.499), "A")
+
+        # Grade B: 0.50s <= RTT < 1.50s
+        self.assertEqual(compute_latency_grade(0.50), "B")
+        self.assertEqual(compute_latency_grade(1.499), "B")
+
+        # Grade C: 1.50s <= RTT < 3.00s
+        self.assertEqual(compute_latency_grade(1.50), "C")
+        self.assertEqual(compute_latency_grade(2.999), "C")
+
+        # Grade F: >= 3.00s
+        self.assertEqual(compute_latency_grade(3.00), "F")
+        self.assertEqual(compute_latency_grade(12.5), "F")
+
+        # Failure or invalid values unconditionally Grade F
+        self.assertEqual(compute_latency_grade(0.2, ok=False), "F")
+        self.assertEqual(compute_latency_grade(None, ok=True), "F")
+        self.assertEqual(compute_latency_grade(-1.0, ok=True), "F")
+
+    @patch("git_sync.engine.git.run_git")
+    def test_probe_remote_reachability_success(self, mock_run_git):
+        mock_run_git.return_value = subprocess.CompletedProcess(
+            args=["git", "ls-remote"], returncode=0, stdout="hash\trefs/heads/main\n", stderr=""
+        )
+
+        res = probe_remote_reachability("git@github.com:org/repo.git", sample_repo="/dummy/repo", timeout=5)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["protocol"], "ssh")
+        self.assertEqual(res["host"], "github.com")
+        self.assertIsInstance(res["latency_seconds"], float)
+        self.assertIn(res["grade"], ("A", "B", "C", "F"))
+        self.assertIsNone(res["error"])
+        self.assertIsNone(res["diagnostic"])
+
+    @patch("git_sync.engine.git.run_git")
+    def test_probe_remote_reachability_auth_failure(self, mock_run_git):
+        mock_run_git.return_value = subprocess.CompletedProcess(
+            args=["git", "ls-remote"],
+            returncode=128,
+            stdout="",
+            stderr="git@github.com: Permission denied (publickey).",
+        )
+
+        res = probe_remote_reachability("git@github.com:org/repo.git", timeout=5)
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["grade"], "F")
+        self.assertIsNotNone(res["diagnostic"])
+        self.assertEqual(res["diagnostic"]["category"], "SSH_PERMISSION_DENIED")
+
+    @patch("git_sync.engine.git.run_git")
+    def test_probe_remote_reachability_timeout(self, mock_run_git):
+        mock_run_git.side_effect = subprocess.TimeoutExpired(cmd=["git", "ls-remote"], timeout=3)
+
+        res = probe_remote_reachability("https://github.com/org/repo.git", timeout=3)
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["grade"], "F")
+        self.assertIn("Timeout", res["error"])
+        self.assertEqual(res["diagnostic"]["category"], "NETWORK_TIMEOUT")
+
+    @patch("git_sync.engine.git.probe_remote_reachability")
+    @patch("git_sync.core.get_repo_remotes")
+    @patch("git_sync.core.discover_repos")
+    @patch("subprocess.run")
+    def test_check_credentials_sanity_concurrent_grading(self, mock_run, mock_discover, mock_remotes, mock_probe):
+        mock_discover.return_value = ["/dummy/repo1", "/dummy/repo2"]
+        mock_remotes.side_effect = [
+            {"origin": "git@github.com:org/repo1.git"},
+            {"origin": "https://gitlab.com/org/repo2.git"},
+        ]
+
+        def probe_side_effect(remote_url, sample_repo=None, timeout=5):
+            if "github.com" in remote_url:
+                return {
+                    "ok": True,
+                    "protocol": "ssh",
+                    "host": "github.com",
+                    "latency_seconds": 0.150,
+                    "grade": "A",
+                    "error": None,
+                    "diagnostic": None,
+                }
+            else:
+                return {
+                    "ok": True,
+                    "protocol": "https",
+                    "host": "gitlab.com",
+                    "latency_seconds": 1.850,
+                    "grade": "C",
+                    "error": None,
+                    "diagnostic": None,
+                }
+
+        mock_probe.side_effect = probe_side_effect
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        sanity = check_credentials_sanity("/dummy/root", timeout=5, test_remotes=True, workers=4)
+        self.assertTrue(sanity["ok"])
+        self.assertIn("git@github.com:org/repo1.git", sanity["remotes"])
+        self.assertIn("https://gitlab.com/org/repo2.git", sanity["remotes"])
+
+        gh_data = sanity["remotes"]["git@github.com:org/repo1.git"]
+        self.assertEqual(gh_data["grade"], "A")
+        self.assertEqual(gh_data["latency_seconds"], 0.150)
+
+        gl_data = sanity["remotes"]["https://gitlab.com/org/repo2.git"]
+        self.assertEqual(gl_data["grade"], "C")
+        self.assertEqual(gl_data["latency_seconds"], 1.850)
+
+        # Warning emitted for Grade C HTTPS remote (degraded DNS / slow route)
+        self.assertTrue(any("degraded handshake latency" in w and "gitlab.com" in w for w in sanity["warnings"]))
+        self.assertTrue(any("DNS lookup latency" in s for s in sanity["suggestions"]))
+
+    @patch("git_sync.engine.git.probe_remote_reachability")
+    @patch("git_sync.core.get_repo_remotes")
+    @patch("git_sync.core.discover_repos")
+    @patch("subprocess.run")
+    def test_check_credentials_sanity_slow_ssh_diagnostics(self, mock_run, mock_discover, mock_remotes, mock_probe):
+        mock_discover.return_value = ["/dummy/repo1"]
+        mock_remotes.return_value = {"origin": "git@github.com:org/repo1.git"}
+        mock_probe.return_value = {
+            "ok": True,
+            "protocol": "ssh",
+            "host": "github.com",
+            "latency_seconds": 2.200,
+            "grade": "C",
+            "error": None,
+            "diagnostic": None,
+        }
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+
+        # 1. Slow SSH without multiplexing
+        with patch("git_sync.engine.git.inspect_ssh_config", return_value={"is_enabled": False, "socket_dir_exists": False}):
+            sanity_no_mux = check_credentials_sanity("/dummy/root", timeout=5, test_remotes=True)
+            self.assertTrue(any("SSH multiplexing is disabled" in w for w in sanity_no_mux["warnings"]))
+
+        # 2. Slow SSH with multiplexing enabled
+        with patch("git_sync.engine.git.inspect_ssh_config", return_value={"is_enabled": True, "socket_dir": "/tmp/ssh", "socket_dir_exists": True}):
+            sanity_mux = check_credentials_sanity("/dummy/root", timeout=5, test_remotes=True)
+            self.assertTrue(any("despite SSH multiplexing" in w for w in sanity_mux["warnings"]))
+            self.assertTrue(any("recreate SSH control sockets" in s for s in sanity_mux["suggestions"]))
+
+    @patch("git_sync.cli.check_credentials_sanity")
+    def test_cli_doctor_formats_latency_grades(self, mock_sanity):
+        mock_sanity.return_value = {
+            "ok": True,
+            "ssh_agent": {"status": "ACTIVE", "socket": "/sock", "identities_count": 1, "identities": ["key1"]},
+            "ssh_keys": ["id_ed25519"],
+            "ssh_multiplexing": {"is_enabled": True, "control_master": "auto"},
+            "credential_helpers": ["store"],
+            "has_token_env": True,
+            "remotes": {
+                "git@github.com:org/fast-repo.git": {
+                    "ok": True,
+                    "protocol": "ssh",
+                    "host": "github.com",
+                    "latency_seconds": 0.124,
+                    "grade": "A",
+                    "error": None,
+                    "diagnostic": None,
+                },
+                "https://gitlab.com/org/slow-repo.git": {
+                    "ok": True,
+                    "protocol": "https",
+                    "host": "gitlab.com",
+                    "latency_seconds": 2.450,
+                    "grade": "C",
+                    "error": None,
+                    "diagnostic": None,
+                },
+            },
+            "warnings": [],
+            "errors": [],
+            "suggestions": [],
+        }
+
+        # Test Text Formatting Table
+        captured = []
+        with patch("sys.stdout.write", side_effect=captured.append):
+            exit_code = main(["doctor"])
+            self.assertEqual(exit_code, 0)
+
+        out_text = "".join(captured)
+        self.assertIn("Grade A (0.124s)", out_text)
+        self.assertIn("Grade C (2.450s)", out_text)
+        self.assertIn("VERIFICAÇÃO DE REMOTES TESTADOS", out_text)
+
+        # Test JSON Output
+        captured_json = []
+        with patch("sys.stdout.write", side_effect=captured_json.append):
+            exit_code_json = main(["doctor", "--json"])
+            self.assertEqual(exit_code_json, 0)
+
+        data = json.loads("".join(captured_json))
+        self.assertIn("remotes", data)
+        self.assertEqual(data["remotes"]["git@github.com:org/fast-repo.git"]["grade"], "A")
+        self.assertEqual(data["remotes"]["git@github.com:org/fast-repo.git"]["latency_seconds"], 0.124)
+        self.assertEqual(data["remotes"]["https://gitlab.com/org/slow-repo.git"]["grade"], "C")
+        self.assertEqual(data["remotes"]["https://gitlab.com/org/slow-repo.git"]["latency_seconds"], 2.450)
 
 
 if __name__ == "__main__":

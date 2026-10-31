@@ -178,11 +178,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if not args.json:
         print(f"\n🩺 Executando diagnóstico de credenciais e conectividade em {root}...")
 
+    workers = getattr(args, "workers", DEFAULT_WORKERS)
     sanity = check_credentials_sanity(
         root_dir=root,
         group=group,
         timeout=timeout,
         test_remotes=True,
+        workers=workers,
     )
 
     ssh_audit = None
@@ -258,19 +260,35 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         print("\n🌐 VERIFICAÇÃO DE REMOTES TESTADOS:")
         print("-" * 70)
         for r_url, r_data in remotes_tested.items():
-            proto = r_data["protocol"].upper()
-            host = r_data["host"] or r_url
+            proto = r_data.get("protocol", "https").upper()
+            host = r_data.get("host") or r_url
             repo_slug = r_url.replace("https://github.com/", "").replace("git@github.com:", "")
             display_name = f"{host} ({repo_slug})" if repo_slug != r_url else host
-            if len(display_name) > 42:
-                display_name = display_name[:39] + "..."
-            if r_data["ok"]:
-                print(f"  [{proto}] {display_name:<45} ✅ Autenticado")
+            if len(display_name) > 34:
+                display_name = display_name[:31] + "..."
+
+            latency = r_data.get("latency_seconds")
+            grade = r_data.get("grade")
+            if grade and latency is not None:
+                grade_info = f"Grade {grade} ({latency:.3f}s)"
+            elif grade:
+                grade_info = f"Grade {grade}"
             else:
-                err_label = r_data["error"]
+                grade_info = ""
+
+            if r_data["ok"]:
+                if grade_info:
+                    print(f"  [{proto}] {display_name:<34} {grade_info:<16} ✅ Autenticado")
+                else:
+                    print(f"  [{proto}] {display_name:<45} ✅ Autenticado")
+            else:
+                err_label = r_data.get("error", "Falha na conexão")
                 diag = r_data.get("diagnostic")
                 diag_cat = f"[{diag['category']}] " if diag else ""
-                print(f"  [{proto}] {display_name:<45} ❌ {diag_cat}{err_label}")
+                if grade_info:
+                    print(f"  [{proto}] {display_name:<34} {grade_info:<16} ❌ {diag_cat}{err_label}")
+                else:
+                    print(f"  [{proto}] {display_name:<45} ❌ {diag_cat}{err_label}")
                 if diag and diag.get("suggestion"):
                     print(f"        💡 Sugestão: {diag['suggestion']}")
 
