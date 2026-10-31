@@ -516,11 +516,12 @@ def install_completion(
 def _generate_bash_completion() -> str:
     """Generate self-contained Bash completion script."""
     return """# bash completion for git-sync -*- shell-script -*-
-# INVARIANT: Zero-dependency completion script compatible with standard bash-completion.
+# INVARIANT: Zero-dependency completion script compatible with standard bash-completion
+# and Git's native subcommand dispatcher (_git_sync for `git sync <TAB>`).
 
 _git_sync_completions() {
     local cur prev words cword
-    if declare -F _init_completion >/dev/null 2>&1; then
+    if [ -n "${COMP_LINE:-}" ] && declare -F _init_completion >/dev/null 2>&1; then
         _init_completion -n = || return
     else
         COMPREPLY=()
@@ -530,15 +531,15 @@ _git_sync_completions() {
         cword=$COMP_CWORD
     fi
 
-    local commands="doctor status pull push resolve dirty config install completion"
-    local common_opts="--config --profile --root --workers --auto-tune --adaptive --timeout --retries --preflight --exclude --compact --summary --json --benchmark --telemetry --no-cache --remote --dry-run --no-dry-run --help -h"
+    local commands="doctor status dashboard tui pull push resolve dirty unlock config install completion"
+    local common_opts="--config --profile --root --workers --auto-tune --adaptive --timeout --retries --preflight --exclude --compact --summary --changelog --max-tokens --json --benchmark --telemetry --no-cache --remote --dry-run --no-dry-run --help -h"
 
-    # Identify active subcommand
+    # Identify active subcommand (ignoring leading `git` and `sync` tokens when invoked as `git sync`)
     local cmd=""
     local i=1
     while [ $i -lt $cword ]; do
         case "${words[i]}" in
-            doctor|status|pull|push|resolve|dirty|config|install|completion)
+            doctor|status|dashboard|tui|pull|push|resolve|dirty|unlock|config|install|completion)
                 cmd="${words[i]}"
                 break
                 ;;
@@ -551,7 +552,7 @@ _git_sync_completions() {
     # Top-level completion (no subcommand chosen yet)
     if [ -z "$cmd" ]; then
         if [[ "$cur" == -* ]]; then
-            COMPREPLY=($(compgen -W "$common_opts --fetch --no-fetch --pending --group" -- "$cur"))
+            COMPREPLY=($(compgen -W "$common_opts --fetch --no-fetch --pending --dashboard --tui --group" -- "$cur"))
         else
             COMPREPLY=($(compgen -W "$commands" -- "$cur"))
         fi
@@ -560,17 +561,17 @@ _git_sync_completions() {
 
     # Subcommand-specific completion
     case "$cmd" in
-        status)
-            COMPREPLY=($(compgen -W "$common_opts --fetch --no-fetch --pending --group" -- "$cur"))
+        status|dashboard|tui)
+            COMPREPLY=($(compgen -W "$common_opts --fetch --no-fetch --pending --changelog --dashboard --tui -i --interactive --group" -- "$cur"))
             return 0
             ;;
         doctor)
-            COMPREPLY=($(compgen -W "$common_opts --group" -- "$cur"))
+            COMPREPLY=($(compgen -W "$common_opts --ssh --group" -- "$cur"))
             return 0
             ;;
         pull)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=($(compgen -W "$common_opts --all --ff-only --no-ff-only --sync-branches --no-sync-branches --autostash --no-autostash --strategy -i --interactive --group" -- "$cur"))
+                COMPREPLY=($(compgen -W "$common_opts --all --ff-only --no-ff-only --sync-branches --no-sync-branches --autostash --no-autostash --recover-locks --strategy -i --interactive --group" -- "$cur"))
             elif [ "$prev" = "--strategy" ]; then
                 COMPREPLY=($(compgen -W "abort rebase merge" -- "$cur"))
             else
@@ -592,9 +593,19 @@ _git_sync_completions() {
             ;;
         resolve)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=($(compgen -W "$common_opts --all --strategy --diff -i --interactive --group --fetch --no-fetch" -- "$cur"))
+                COMPREPLY=($(compgen -W "$common_opts --all --strategy --diff --max-tokens -i --interactive --group --fetch --no-fetch" -- "$cur"))
             elif [ "$prev" = "--strategy" ]; then
                 COMPREPLY=($(compgen -W "abort rebase merge stash" -- "$cur"))
+            else
+                local repos
+                repos=$(git-sync --complete-repos 2>/dev/null)
+                COMPREPLY=($(compgen -W "$repos" -- "$cur"))
+            fi
+            return 0
+            ;;
+        unlock)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=($(compgen -W "$common_opts --all --force --group" -- "$cur"))
             else
                 local repos
                 repos=$(git-sync --complete-repos 2>/dev/null)
@@ -607,7 +618,7 @@ _git_sync_completions() {
             return 0
             ;;
         config)
-            COMPREPLY=($(compgen -W "$common_opts" -- "$cur"))
+            COMPREPLY=($(compgen -W "$common_opts --init --edit --global" -- "$cur"))
             return 0
             ;;
         install)
@@ -629,18 +640,29 @@ _git_sync_completions() {
     esac
 }
 
+# Native `git sync <TAB>` hook invoked by git-completion.bash
+_git_sync() {
+    _git_sync_completions "$@"
+}
+
 complete -F _git_sync_completions git-sync
 """
 
 
 def _generate_zsh_completion() -> str:
     """Generate self-contained Zsh completion script."""
-    return """#compdef git-sync
-# INVARIANT: Zero-dependency completion script for Zsh.
+    return """#compdef git-sync git-sync=git
+# INVARIANT: Zero-dependency completion script for Zsh supporting both `git-sync` and `git sync`.
 
 _git_sync() {
     local curcontext="$curcontext" state line
     typeset -A opt_args
+
+    # Normalize word array when invoked via `git sync <TAB>` with unshifted `git` prefix
+    if [[ "${words[1]}" == "git" && "${words[2]}" == "sync" ]]; then
+        shift words
+        (( CURRENT-- ))
+    fi
 
     local -a common_args=(
         '--config[Path to custom .git-sync.json configuration file]:file:_files'
@@ -654,6 +676,8 @@ _git_sync() {
         '--preflight[Run pre-flight credential and remote sanity check]'
         '--compact[Output compact summary omitting repository items array]'
         '--summary[Alias for --compact]'
+        '--changelog[Classify pending commits into Keep-a-Changelog categories]'
+        '--max-tokens[Maximum token budget for diff output]:tokens:'
         '--json[Output machine-readable JSON]'
         '--benchmark[Measure and display execution performance telemetry]'
         '--telemetry[Alias for --benchmark]'
@@ -674,11 +698,14 @@ _git_sync() {
             local -a commands=(
                 'doctor:Run proactive credential and connectivity diagnostics'
                 'status:Show status of all repositories'
+                'dashboard:Launch interactive compact terminal dashboard'
+                'tui:Alias for interactive terminal dashboard'
                 'pull:Pull changes for specified repositories or --all'
                 'push:Push committed changes to remote repository'
                 'resolve:Inspect and resolve divergent branches'
                 'dirty:Show repositories with uncommitted or untracked changes'
-                'config:Display active workspace profile and configuration'
+                'unlock:Inspect and recover stale Git lock files'
+                'config:Display or bootstrap workspace profile and configuration'
                 'install:Install or update global symlink in ~/.local/bin'
                 'completion:Generate shell autocompletion script (bash or zsh)'
             )
@@ -689,14 +716,19 @@ _git_sync() {
                 doctor)
                     _arguments \\
                         $common_args \\
+                        '--ssh[Benchmark SSH ControlMaster multiplexing]' \\
                         '--group[Filter target repositories by group]:group:'
                     ;;
-                status)
+                status|dashboard|tui)
                     _arguments \\
                         $common_args \\
                         '--fetch[Fetch remotes]' \\
                         '--no-fetch[Skip remote fetch]' \\
                         '--pending[Only show repos with pending actions or dirty files]' \\
+                        '--changelog[Classify pending commits into Keep-a-Changelog categories]' \\
+                        '--dashboard[Launch interactive terminal dashboard]' \\
+                        '--tui[Alias for --dashboard]' \\
+                        '(-i --interactive)'{-i,--interactive}'[Interactive triage loop]' \\
                         '--group[Filter by subfolder/group]:group:'
                     ;;
                 pull)
@@ -709,6 +741,7 @@ _git_sync() {
                         '--no-sync-branches[Skip fast-forward auxiliary tracking branches]' \\
                         '--autostash[Automatically stash dirty changes before pull and restore after]' \\
                         '--no-autostash[Do not autostash dirty changes]' \\
+                        '--recover-locks[Automatically clean up stale .git/*.lock files]' \\
                         '--strategy[Fallback resolution strategy]:strategy:(abort rebase merge)' \\
                         '(-i --interactive)'{-i,--interactive}'[Prompt interactively if fast-forward fails]' \\
                         '--group[Filter target repositories by group]:group:' \\
@@ -730,10 +763,19 @@ _git_sync() {
                         '--all[Resolve all repositories with divergent branches]' \\
                         '--strategy[Automated resolution strategy]:strategy:(abort rebase merge stash)' \\
                         '--diff[Display divergence diff without applying changes]' \\
+                        '--max-tokens[Maximum token budget for diff output]:tokens:' \\
                         '(-i --interactive)'{-i,--interactive}'[Prompt interactively for resolution strategy]' \\
                         '--group[Filter target repositories by group]:group:' \\
                         '--fetch[Fetch remotes before checking divergence]' \\
                         '--no-fetch[Skip remote fetch before checking divergence]' \\
+                        '*:repository:->repos'
+                    ;;
+                unlock)
+                    _arguments \\
+                        $common_args \\
+                        '--all[Inspect and unlock all repositories]' \\
+                        '--force[Force remove active locks younger than threshold]' \\
+                        '--group[Filter target repositories by group]:group:' \\
                         '*:repository:->repos'
                     ;;
                 dirty)
@@ -742,7 +784,11 @@ _git_sync() {
                         '--group[Filter repositories by group]:group:'
                     ;;
                 config)
-                    _arguments $common_args
+                    _arguments \\
+                        $common_args \\
+                        '--init[Bootstrap default configuration file]' \\
+                        '--edit[Open configuration file in editor]' \\
+                        '--global[Target global XDG configuration file]'
                     ;;
                 install)
                     _arguments \\
@@ -767,6 +813,10 @@ _git_sync() {
             fi
             ;;
     esac
+}
+
+_git-sync() {
+    _git_sync "$@"
 }
 
 _git_sync "$@"

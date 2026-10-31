@@ -21,6 +21,36 @@ Built specifically for high-throughput developer workflows and autonomous AI age
 - **Interactive Hang Prevention:** Injects `GIT_TERMINAL_PROMPT=0` and configurable execution timeouts (default: 20s) across all Git subprocesses to prevent orphaned background tasks.
 - **Fast-Forward Safety Invariants:** Enforces `--ff-only` by default on all pull operations and atomically updates auxiliary tracking branches without disruptive worktree switching.
 - **Autonomous Agent Payloads:** Emits compact JSON summaries via `--json` and filtered outputs via `--pending` to isolate pull/push/dirty repositories with minimal token overhead.
+- **Native Git Subcommand & Completion:** Invocable either as `git-sync` or directly via Git's subcommand dispatcher as `git sync`, with full Bash and Zsh tab completion.
+
+<p align="center">
+  <img src="docs/demo.svg" alt="git-sync terminal showcase" width="840">
+</p>
+
+<details>
+<summary>View plain-text terminal transcript</summary>
+
+```text
+➜ ~/github $ git sync status --pending --changelog
+REPOSITORY               BRANCH     STATUS          SYNC    DIRTY   CHANGELOG
+─────────────────────────────────────────────────────────────────────────────────────────────
+ye-dev/api-gateway       main       PULL_PENDING    ↓2      clean   Added: 1, Fixed: 1
+  └─ ↓ a1b2c3d [Added] feat(router): add rate-limit token bucket middleware
+  └─ ↓ f4e5d6c [Fixed] fix(tls): renew upstream mTLS session ticket cache
+ye-dev/auth-service      main       PULL_PENDING    ↓1      ~2      Security: 1
+  └─ ↓ 9c8b7a6 [Security] sec(jwt): enforce strict EdDSA key rotation window
+ye-dev/git-sync          main       PUSH_PENDING    ↑1      clean   Added: 1
+ye-dev/infra-deploy      main       SYNCED          ✓       clean   —
+
+Summary: 30 total | 27 synced | 2 pull pending | 1 push pending | 1 dirty  (0.38s)
+
+➜ ~/github $ git sync pull --all
+✓ ye-dev/api-gateway    fast-forward main (2 commits) + 1 aux branch
+✓ ye-dev/auth-service   autostashed 2 files → fast-forward main → restored stash
+✨ Synchronized 2 repositories cleanly in 0.42s (zero conflicts).
+```
+
+</details>
 
 ## Architecture
 

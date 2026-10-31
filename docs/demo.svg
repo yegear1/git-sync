@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 430" width="840" height="430" role="img" aria-labelledby="demo-title demo-desc">
+  <title id="demo-title">git-sync terminal showcase</title>
+  <desc id="demo-desc">Concurrent Git repository status inspection with Keep-a-Changelog classification and fast-forward pull across a multi-repo workspace.</desc>
+  <style>
+    .bg { fill: #0d1117; rx: 10px; ry: 10px; stroke: #30363d; stroke-width: 1.5; }
+    .header { fill: #161b22; }
+    .txt { font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace; font-size: 13px; fill: #e6edf3; xml:space: preserve; }
+    .title { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 12px; font-weight: 600; fill: #8b949e; text-anchor: middle; }
+    .dim { fill: #8b949e; }
+    .bold { font-weight: 700; }
+    .green { fill: #3fb950; }
+    .cyan { fill: #58a6ff; }
+    .yellow { fill: #d29922; }
+    .red { fill: #f85149; }
+    .purple { fill: #bc8cff; }
+  </style>
+
+  <!-- Window Frame -->
+  <rect class="bg" x="1" y="1" width="838" height="428" rx="10" ry="10"/>
+  <path class="header" d="M 1 11 Q 1 1 11 1 L 829 1 Q 839 1 839 11 L 839 38 L 1 38 Z"/>
+  <line x1="1" y1="38" x2="839" y2="38" stroke="#30363d" stroke-width="1"/>
+
+  <!-- Window Controls -->
+  <circle cx="22" cy="19" r="6" fill="#ff5f56"/>
+  <circle cx="42" cy="19" r="6" fill="#ffbd2e"/>
+  <circle cx="62" cy="19" r="6" fill="#27c93f"/>
+  <text class="title" x="420" y="23">git-sync — ~/github (30 repositories, 12 workers)</text>
+
+  <!-- Terminal Body -->
+  <text class="txt" x="24" y="68"><tspan class="green bold">➜</tspan> <tspan class="cyan bold">~/github</tspan> $ git sync status --pending --changelog</text>
+
+  <text class="txt bold dim" x="24" y="96">REPOSITORY               BRANCH     STATUS          SYNC    DIRTY   CHANGELOG</text>
+  <text class="txt dim" x="24" y="112">─────────────────────────────────────────────────────────────────────────────────────────────</text>
+
+  <text class="txt" x="24" y="132">ye-dev/api-gateway       <tspan class="cyan">main</tspan>       <tspan class="yellow bold">PULL_PENDING</tspan>    <tspan class="yellow">↓2</tspan>      clean   <tspan class="green">Added: 1</tspan>, <tspan class="cyan">Fixed: 1</tspan></text>
+  <text class="txt dim" x="24" y="150">  └─ ↓ a1b2c3d [Added] feat(router): add rate-limit token bucket middleware</text>
+  <text class="txt dim" x="24" y="168">  └─ ↓ f4e5d6c [Fixed] fix(tls): renew upstream mTLS session ticket cache</text>
+
+  <text class="txt" x="24" y="192">ye-dev/auth-service      <tspan class="cyan">main</tspan>       <tspan class="yellow bold">PULL_PENDING</tspan>    <tspan class="yellow">↓1</tspan>      <tspan class="yellow">~2</tspan>      <tspan class="purple">Security: 1</tspan></text>
+  <text class="txt dim" x="24" y="210">  └─ ↓ 9c8b7a6 [Security] sec(jwt): enforce strict EdDSA key rotation window</text>
+
+  <text class="txt" x="24" y="234">ye-dev/git-sync          <tspan class="cyan">main</tspan>       <tspan class="cyan bold">PUSH_PENDING</tspan>    <tspan class="cyan">↑1</tspan>      clean   <tspan class="green">Added: 1</tspan></text>
+  <text class="txt" x="24" y="256">ye-dev/infra-deploy      <tspan class="cyan">main</tspan>       <tspan class="green bold">SYNCED</tspan>          <tspan class="dim">✓</tspan>       clean   <tspan class="dim">—</tspan></text>
+
+  <text class="txt dim" x="24" y="282">Summary: 30 total | <tspan class="green">27 synced</tspan> | <tspan class="yellow">2 pull pending</tspan> | <tspan class="cyan">1 push pending</tspan> | <tspan class="yellow">1 dirty</tspan>  (0.38s)</text>
+
+  <!-- Second Command -->
+  <text class="txt" x="24" y="318"><tspan class="green bold">➜</tspan> <tspan class="cyan bold">~/github</tspan> $ git sync pull --all</text>
+  <text class="txt" x="24" y="344"><tspan class="green">✓</tspan> ye-dev/api-gateway    <tspan class="dim">fast-forward main (2 commits) + 1 aux branch</tspan></text>
+  <text class="txt" x="24" y="366"><tspan class="green">✓</tspan> ye-dev/auth-service   <tspan class="dim">autostashed 2 files → fast-forward main → restored stash</tspan></text>
+  <text class="txt bold green" x="24" y="396">✨ Synchronized 2 repositories cleanly in 0.42s (zero conflicts).</text>
+</svg>

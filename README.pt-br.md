@@ -21,6 +21,36 @@ Construído especificamente para fluxos de trabalho de alto rendimento e agentes
 - **Prevenção de Travamentos Interativos:** Injeta `GIT_TERMINAL_PROMPT=0` e timeouts de execução configuráveis (padrão: 20s) em todos os subprocessos Git para evitar processos travados em segundo plano.
 - **Invariantes de Segurança Fast-Forward:** Aplica `--ff-only` por padrão em operações de pull e atualiza atomicamente branches auxiliares de tracking sem necessidade de alternar a working tree.
 - **Payloads para Agentes Autônomos:** Emite resumos em JSON compacto via `--json` e saídas filtradas via `--pending` para isolar repositórios que necessitam de ação com consumo mínimo de tokens.
+- **Subcomando Nativo do Git e Autocompletar:** Invocável tanto como `git-sync` quanto diretamente via despachante do Git como `git sync`, com autocompletar completo para Bash e Zsh.
+
+<p align="center">
+  <img src="docs/demo.svg" alt="Demonstração do git-sync no terminal" width="840">
+</p>
+
+<details>
+<summary>Ver transcrição em texto puro do terminal</summary>
+
+```text
+➜ ~/github $ git sync status --pending --changelog
+REPOSITORY               BRANCH     STATUS          SYNC    DIRTY   CHANGELOG
+─────────────────────────────────────────────────────────────────────────────────────────────
+ye-dev/api-gateway       main       PULL_PENDING    ↓2      clean   Added: 1, Fixed: 1
+  └─ ↓ a1b2c3d [Added] feat(router): add rate-limit token bucket middleware
+  └─ ↓ f4e5d6c [Fixed] fix(tls): renew upstream mTLS session ticket cache
+ye-dev/auth-service      main       PULL_PENDING    ↓1      ~2      Security: 1
+  └─ ↓ 9c8b7a6 [Security] sec(jwt): enforce strict EdDSA key rotation window
+ye-dev/git-sync          main       PUSH_PENDING    ↑1      clean   Added: 1
+ye-dev/infra-deploy      main       SYNCED          ✓       clean   —
+
+Summary: 30 total | 27 synced | 2 pull pending | 1 push pending | 1 dirty  (0.38s)
+
+➜ ~/github $ git sync pull --all
+✓ ye-dev/api-gateway    fast-forward main (2 commits) + 1 aux branch
+✓ ye-dev/auth-service   autostashed 2 files → fast-forward main → restored stash
+✨ Synchronized 2 repositories cleanly in 0.42s (zero conflicts).
+```
+
+</details>
 
 ## Arquitetura
 

@@ -136,16 +136,72 @@ class TestInstallerAndCompletion(unittest.TestCase):
     def test_generate_completion_script_bash_and_zsh(self) -> None:
         bash_script = generate_completion_script("bash")
         self.assertIn("complete -F _git_sync_completions git-sync", bash_script)
+        self.assertIn("_git_sync()", bash_script)
         self.assertIn("--compact", bash_script)
+        self.assertIn("--changelog", bash_script)
         self.assertIn("--complete-repos", bash_script)
 
         zsh_script = generate_completion_script("zsh")
-        self.assertIn("#compdef git-sync", zsh_script)
+        self.assertIn("#compdef git-sync git-sync=git", zsh_script)
+        self.assertIn("_git-sync()", zsh_script)
         self.assertIn("doctor:Run proactive credential", zsh_script)
+        self.assertIn("--changelog", zsh_script)
         self.assertIn("--complete-repos", zsh_script)
 
         with self.assertRaises(ValueError):
             generate_completion_script("fish")
+
+    def test_bash_completion_supports_git_sync_and_git_subcommand(self) -> None:
+        """Verify `_git_sync` in Bash resolves subcommands and flags for both `git-sync` and `git sync`."""
+        comp_file = self.target_dir / "git-sync.bash"
+        comp_file.write_text(generate_completion_script("bash"), encoding="utf-8")
+
+        # 1. Native `git sync <TAB>` top-level subcommands
+        cmd_subcommands = (
+            f"source {comp_file}; "
+            "COMP_WORDS=(git sync ''); COMP_CWORD=2; _git_sync; "
+            "printf '%s\\n' \"${COMPREPLY[@]}\""
+        )
+        proc1 = subprocess.run(["bash", "-c", cmd_subcommands], capture_output=True, text=True, timeout=5)
+        self.assertEqual(proc1.returncode, 0, proc1.stderr)
+        replies1 = set(proc1.stdout.splitlines())
+        self.assertIn("status", replies1)
+        self.assertIn("pull", replies1)
+        self.assertIn("dashboard", replies1)
+        self.assertIn("unlock", replies1)
+
+        # 2. Native `git sync status --<TAB>` subcommand options
+        cmd_flags = (
+            f"source {comp_file}; "
+            "COMP_WORDS=(git sync status '--'); COMP_CWORD=3; _git_sync; "
+            "printf '%s\\n' \"${COMPREPLY[@]}\""
+        )
+        proc2 = subprocess.run(["bash", "-c", cmd_flags], capture_output=True, text=True, timeout=5)
+        self.assertEqual(proc2.returncode, 0, proc2.stderr)
+        replies2 = set(proc2.stdout.splitlines())
+        self.assertIn("--changelog", replies2)
+        self.assertIn("--pending", replies2)
+        self.assertIn("--no-fetch", replies2)
+
+    def test_svg_demo_asset_and_readme_embedding(self) -> None:
+        """Verify docs/demo.svg exists (<10 KB valid XML) and is embedded in README files with text fallback."""
+        import xml.etree.ElementTree as ET
+
+        repo_root = Path(__file__).resolve().parent.parent
+        svg_path = repo_root / "docs" / "demo.svg"
+        self.assertTrue(svg_path.is_file(), "docs/demo.svg must exist")
+
+        svg_bytes = svg_path.read_bytes()
+        self.assertLess(len(svg_bytes), 10240, "docs/demo.svg must be under 10 KB")
+
+        root = ET.fromstring(svg_bytes.decode("utf-8"))
+        self.assertTrue(root.tag.endswith("svg"))
+
+        for readme_name in ("README.md", "README.pt-br.md"):
+            readme_text = (repo_root / readme_name).read_text(encoding="utf-8")
+            self.assertIn("docs/demo.svg", readme_text)
+            self.assertIn("<details>", readme_text)
+            self.assertIn("</details>", readme_text)
 
     def test_install_completion(self) -> None:
         comp_dir = self.target_dir / "completions"
