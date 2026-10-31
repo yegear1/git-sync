@@ -7,9 +7,9 @@
 
 ## Active Task
 
-### 📌 Task [00.10]: Worktree Stale Pruning and Orphaned Worktree Cleanup Command
+### 📌 Task [00.11]: Shallow Submodule Deepening and Unshallow Fetch Recovery
 
-- **Description:** Extend `git-sync` with `git-sync worktree prune` and status diagnostics to identify detached/orphaned worktree admin directories and clean broken metadata safely.
+- **Description:** Extend `git-sync` with automated detection of truncated shallow submodule trees (`.git/shallow`) and guided unshallow fetching (`--unshallow`) during branch synchronization.
 - **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Action Type:**
   - [x] Read-only / Documentation
@@ -17,7 +17,7 @@
 - **Status:** PLANNING
 
 ### Acceptance Criteria
-- [ ] `git-sync worktree prune` cleans missing worktree metadata and warns on dirty linked worktrees.
+- [ ] Shallow submodule clones are safely detected and unshallowed without corrupting history.
 - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -36,16 +36,17 @@
 | [00.7] | Native `git sync` Subcommand Autocompletion and SVG Terminal Demo | [d0d64cd] | 2026-10-31 |
 | [00.8] | Remote Health Check Telemetry and Latency Grading in Doctor | [9e584da] | 2026-10-31 |
 | [00.9] | Automated Git Submodule Drift Detection and Optional Recursive Update | [bcba8cb] | 2026-10-31 |
+| [00.10] | Worktree Stale Pruning and Orphaned Worktree Cleanup Command | [6834019] | 2026-10-31 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-### 📌 Task [00.11]: Shallow Submodule Deepening and Unshallow Fetch Recovery
-- **Description:** Extend `git-sync` with automated detection of truncated shallow submodule trees (`.git/shallow`) and guided unshallow fetching (`--unshallow`) during branch synchronization.
+### 📌 Task [00.12]: Sparse-Checkout Cone Pattern Detection and Synchronization Diagnostic
+- **Description:** Extend `git-sync` with detection and safe synchronization handling for repositories configured with `git sparse-checkout` cone patterns.
 - **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Acceptance Criteria:**
-  - [ ] Shallow submodule clones are safely detected and unshallowed without corrupting history.
+  - [ ] Sparse-checkout repositories are identified in status and protected from unbounded checkout conflicts.
   - [ ] Canonical test suite passes with exit code 0.
 
 ---
