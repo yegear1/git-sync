@@ -78,6 +78,7 @@ from git_sync.engine.git import (
     stash_changes,
     summarize_commit_categories,
     truncate_diff,
+    update_submodules,
 )
 from git_sync.telemetry import (
     BulkCache,
@@ -178,4 +179,5 @@ __all__ = [
     "style_text",
     "summarize_commit_categories",
     "truncate_diff",
+    "update_submodules",
 ]

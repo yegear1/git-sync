@@ -1552,7 +1552,12 @@ def get_repo_remotes(repo_path: str, timeout: int = 5) -> Dict[str, str]:
 
 
 
-def get_submodules_status(repo_path: str, timeout: int = 5) -> List[Dict[str, Any]]:
+def get_submodules_status(
+    repo_path: str,
+    timeout: int = 5,
+    recursive: bool = True,
+    detailed: bool = False,
+) -> List[Dict[str, Any]]:
     """
     Query submodule status for repo_path.
     Returns a list of dicts:
@@ -1560,12 +1565,17 @@ def get_submodules_status(repo_path: str, timeout: int = 5) -> List[Dict[str, An
         commit: str (commit SHA)
         describe: str (branch/tag description, e.g. heads/main)
         status: str (UP_TO_DATE, MODIFIED, UNINITIALIZED, CONFLICT)
+        out_of_sync: bool (True if status != UP_TO_DATE)
+        detached: bool (True if checked out in detached HEAD)
     # INVARIANT: If .gitmodules file does not exist, repository has no submodules; skip subprocess entirely.
     """
     if not os.path.isfile(os.path.join(repo_path, ".gitmodules")):
         return []
 
-    proc = run_git(repo_path, ["submodule", "status"], timeout=timeout)
+    cmd = ["submodule", "status"]
+    if recursive:
+        cmd.append("--recursive")
+    proc = run_git(repo_path, cmd, timeout=timeout)
     if proc.returncode != 0 or not proc.stdout.strip():
         return []
 
@@ -1595,14 +1605,129 @@ def get_submodules_status(repo_path: str, timeout: int = 5) -> List[Dict[str, An
                 describe = desc_raw
 
         status_str = prefix_map.get(prefix, "UNKNOWN")
+        is_out_of_sync = (status_str != "UP_TO_DATE")
+
+        is_detached = False
+        if detailed and status_str != "UNINITIALIZED":
+            sub_dir = os.path.join(repo_path, sub_path)
+            if os.path.isdir(sub_dir):
+                p_b = run_git(sub_dir, ["branch", "--show-current"], timeout=timeout)
+                if p_b.returncode == 0:
+                    is_detached = (not p_b.stdout.strip())
+
         submodules.append({
             "path": sub_path,
             "commit": commit,
             "describe": describe,
             "status": status_str,
+            "out_of_sync": is_out_of_sync,
+            "detached": is_detached,
         })
 
     return submodules
+
+
+def update_submodules(
+    repo_path: str,
+    recursive: bool = True,
+    init: bool = True,
+    timeout: int = DEFAULT_TIMEOUT,
+    dry_run: bool = False,
+    cache: Optional[BulkCache] = None,
+) -> Dict[str, Any]:
+    """
+    Update git submodules recursively with safe terminal prompt isolation (GIT_TERMINAL_PROMPT=0).
+    # INVARIANT: GIT_TERMINAL_PROMPT=0 prevents interactive hangs during submodule fetch/checkout.
+    # INVARIANT: When dry_run is True, no submodule checkout occurs; pending drift is previewed.
+    """
+    core = sys.modules.get("git_sync.core")
+    if core is not None:
+        target = getattr(core, "update_submodules", None)
+        if target is not None and target is not update_submodules:
+            return target(repo_path, recursive=recursive, init=init, timeout=timeout, dry_run=dry_run, cache=cache)
+    return _real_update_submodules(repo_path, recursive=recursive, init=init, timeout=timeout, dry_run=dry_run, cache=cache)
+
+
+def _real_update_submodules(
+    repo_path: str,
+    recursive: bool = True,
+    init: bool = True,
+    timeout: int = DEFAULT_TIMEOUT,
+    dry_run: bool = False,
+    cache: Optional[BulkCache] = None,
+) -> Dict[str, Any]:
+    if not os.path.isfile(os.path.join(repo_path, ".gitmodules")):
+        return {
+            "has_submodules": False,
+            "updated": False,
+            "success": True,
+            "dry_run": dry_run,
+            "count": 0,
+            "items": [],
+            "submodules": [],
+            "stdout": "",
+            "stderr": "",
+            "error": None,
+        }
+
+    subs_before = get_submodules_status(repo_path, timeout=timeout, recursive=recursive, detailed=True)
+    if not subs_before:
+        return {
+            "has_submodules": False,
+            "updated": False,
+            "success": True,
+            "dry_run": dry_run,
+            "count": 0,
+            "items": [],
+            "submodules": [],
+            "stdout": "",
+            "stderr": "",
+            "error": None,
+        }
+
+    drift_items = [s for s in subs_before if s.get("out_of_sync") or s.get("status") != "UP_TO_DATE"]
+
+    if dry_run:
+        return {
+            "has_submodules": True,
+            "updated": False,
+            "success": True,
+            "dry_run": True,
+            "count": len(subs_before),
+            "drift_count": len(drift_items),
+            "pending_updates": drift_items,
+            "items": subs_before,
+            "submodules": subs_before,
+            "stdout": f"[DRY-RUN] Submodules checked ({len(drift_items)} pending update out of {len(subs_before)})",
+            "stderr": "",
+            "error": None,
+        }
+
+    cmd = ["submodule", "update"]
+    if init:
+        cmd.append("--init")
+    if recursive:
+        cmd.append("--recursive")
+
+    proc = run_git(repo_path, cmd, timeout=timeout)
+    if cache:
+        cache.invalidate(repo_path)
+
+    subs_after = get_submodules_status(repo_path, timeout=timeout, recursive=recursive, detailed=True)
+    success = (proc.returncode == 0)
+
+    return {
+        "has_submodules": True,
+        "updated": success,
+        "success": success,
+        "dry_run": False,
+        "count": len(subs_after),
+        "items": subs_after,
+        "submodules": subs_after,
+        "stdout": proc.stdout.strip(),
+        "stderr": proc.stderr.strip(),
+        "error": proc.stderr.strip() if not success else None,
+    }
 
 
 def discover_repos(root_dir: str, exclude: Optional[List[str]] = None) -> List[str]:
@@ -1769,6 +1894,9 @@ def stash_changes(
     tag = message or f"git-sync-autostash-{int(time.time() * 1000)}"
     proc = run_git(repo_path, ["stash", "push", "-u", "-m", tag], timeout=timeout)
     if proc.returncode == 0:
+        combined = (proc.stdout or "") + " " + (proc.stderr or "")
+        if "No local changes to save" in combined:
+            return True, tag, "NO_CHANGES"
         return True, tag, None
     err = proc.stderr.strip() or proc.stdout.strip() or "Failed to stash changes"
     return False, tag, err
@@ -1797,6 +1925,15 @@ def restore_stash(
         }
 
     out = (p_pop_index.stdout + "\n" + p_pop_index.stderr).strip()
+    if "No stash entries found" in out or "No stash found" in out:
+        return {
+            "success": True,
+            "conflict": False,
+            "conflict_files": [],
+            "index_restored": False,
+            "stash_ref": None,
+            "error": None,
+        }
 
     # Check if there are conflict files in working copy
     p_status = run_git(repo_path, ["status", "--porcelain"], timeout=timeout)
@@ -2722,6 +2859,7 @@ def pull_repo(
     retries: int = DEFAULT_RETRIES,
     recover_stale_lock: bool = False,
     prune: bool = False,
+    submodules: bool = False,
 ) -> Dict[str, Any]:
     """
     Pull updates for a single repository.
@@ -2766,6 +2904,17 @@ def pull_repo(
                 cache=cache,
             )
 
+        submodules_res: Optional[Dict[str, Any]] = None
+        if submodules:
+            submodules_res = _dispatch_fn("update_submodules", update_submodules)(
+                repo_path,
+                recursive=True,
+                init=True,
+                timeout=timeout,
+                dry_run=True,
+                cache=cache,
+            )
+
         p_up = run_git(repo_path, ["rev-parse", "--abbrev-ref", "@{u}"], timeout=5)
         upstream = p_up.stdout.strip()
         if p_up.returncode != 0 or not upstream or "fatal:" in upstream:
@@ -2789,6 +2938,7 @@ def pull_repo(
                 "stale_refs": prune_res.get("stale_refs", []),
                 "pruned_refs": prune_res.get("pruned_refs", []),
                 "would_prune_refs": prune_res.get("would_prune_refs", []),
+                "submodules": submodules_res,
             }
 
         p_ahead = run_git(repo_path, ["rev-list", "--count", f"{upstream}..HEAD"], timeout=5)
@@ -2859,6 +3009,7 @@ def pull_repo(
             "stale_refs": prune_res.get("stale_refs", []),
             "pruned_refs": prune_res.get("pruned_refs", []),
             "would_prune_refs": prune_res.get("would_prune_refs", []),
+            "submodules": submodules_res,
         }
         if resolved_info:
             res_dict["resolved"] = resolved_info
@@ -2898,7 +3049,9 @@ def pull_repo(
                     if rec_ok:
                         stash_ok, tag, stash_err = stash_changes(repo_path, timeout=timeout)
 
-            if not stash_ok:
+            if stash_err == "NO_CHANGES":
+                stashed = False
+            elif not stash_ok:
                 diag = diagnose_git_error(stash_err or "", None)
                 if benchmark:
                     benchmark.record_failure("autostash_error")
@@ -2924,9 +3077,10 @@ def pull_repo(
                     "dry_run": False,
                     "diagnostic": diag,
                 }
-            stashed = True
-            stash_tag = tag
-            autostash_info["stashed"] = True
+            else:
+                stashed = True
+                stash_tag = tag
+                autostash_info["stashed"] = True
 
     cmd = ["pull"]
     if ff_only:
@@ -3016,6 +3170,21 @@ def pull_repo(
     if success and cache:
         cache.invalidate(repo_path)
 
+    submodules_res: Optional[Dict[str, Any]] = None
+    if submodules and success:
+        submodules_res = _dispatch_fn("update_submodules", update_submodules)(
+            repo_path,
+            recursive=True,
+            init=True,
+            timeout=timeout,
+            dry_run=False,
+            cache=cache,
+        )
+        if submodules_res and not submodules_res.get("success", True):
+            success = False
+            sub_err = submodules_res.get("stderr") or "Submodule update failed"
+            stderr = f"{stderr}\n{sub_err}".strip() if stderr else sub_err
+
     result_dict: Dict[str, Any] = {
         "repo": repo_path,
         "branch": curr_branch,
@@ -3033,6 +3202,7 @@ def pull_repo(
         "stale_refs": prune_res.get("stale_refs", []),
         "pruned_refs": prune_res.get("pruned_refs", []),
         "would_prune_refs": prune_res.get("would_prune_refs", []),
+        "submodules": submodules_res,
     }
     if benchmark and prune:
         benchmark.record_hygiene(
@@ -3707,4 +3877,5 @@ __all__ = [
     "split_diff_files",
     "stash_changes",
     "truncate_diff",
+    "update_submodules",
 ]

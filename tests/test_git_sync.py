@@ -32,6 +32,7 @@ from git_sync.core import (
     push_repo,
     run_git,
     summarize_commit_categories,
+    update_submodules,
 )
 from git_sync.ui.dashboard import InteractiveDashboard
 
@@ -314,6 +315,158 @@ class TestGitSyncCore(unittest.TestCase):
         info_modified = inspect_repo(str(parent), str(self.root), do_fetch=False)
         self.assertEqual(len(info_modified["submodules"]), 1)
         self.assertEqual(info_modified["submodules"][0]["status"], "MODIFIED")
+
+    def test_update_submodules_drift_and_dry_run(self):
+        # Non-submodule repo returns clean false
+        non_sub = self._init_repo(self.root / "no_sub_pkg")
+        res_none = update_submodules(str(non_sub))
+        self.assertFalse(res_none["has_submodules"])
+        self.assertTrue(res_none["success"])
+
+        # Setup parent and sub
+        sub = self._init_repo(self.root / "sub_lib")
+        (sub / "code.py").write_text("v1\n")
+        run_git(str(sub), ["add", "code.py"])
+        run_git(str(sub), ["commit", "-m", "init sub"])
+
+        parent = self._init_repo(self.root / "parent_app")
+        (parent / "app.py").write_text("app\n")
+        run_git(str(parent), ["add", "app.py"])
+        run_git(str(parent), ["commit", "-m", "parent init"])
+        run_git(str(parent), ["-c", "protocol.file.allow=always", "submodule", "add", str(sub), "vendor/lib"])
+        run_git(str(parent), ["commit", "-m", "add submodule vendor/lib"])
+
+        # 1. Update submodules when already up to date
+        res_clean = update_submodules(str(parent))
+        self.assertTrue(res_clean["has_submodules"])
+        self.assertTrue(res_clean["updated"])
+        self.assertTrue(res_clean["success"])
+        self.assertEqual(len(res_clean["submodules"]), 1)
+        self.assertEqual(res_clean["submodules"][0]["status"], "UP_TO_DATE")
+
+        # 2. Induce drift inside submodule
+        (parent / "vendor" / "lib" / "code.py").write_text("v2 modified\n")
+        run_git(str(parent / "vendor" / "lib"), ["commit", "-am", "sub drift"])
+
+        # Dry run check
+        dry_res = update_submodules(str(parent), dry_run=True)
+        self.assertTrue(dry_res["has_submodules"])
+        self.assertTrue(dry_res["dry_run"])
+        self.assertFalse(dry_res["updated"])
+        self.assertEqual(dry_res["drift_count"], 1)
+
+        # Actual update should restore pointer to parent's committed index
+        up_res = update_submodules(str(parent), dry_run=False)
+        self.assertTrue(up_res["success"])
+        self.assertTrue(up_res["updated"])
+        status_after = get_submodules_status(str(parent))
+        self.assertEqual(status_after[0]["status"], "UP_TO_DATE")
+
+    def test_pull_repo_with_submodules_recursive(self):
+        bare_sub = self._init_bare_remote(self.root / "sub_remote.git")
+        sub_local = self._init_repo(self.root / "sub_local")
+        (sub_local / "lib.py").write_text("1\n")
+        run_git(str(sub_local), ["add", "lib.py"])
+        run_git(str(sub_local), ["commit", "-m", "sub 1"])
+        run_git(str(sub_local), ["remote", "add", "origin", str(bare_sub)])
+        run_git(str(sub_local), ["push", "-u", "origin", "main"])
+
+        bare_parent = self._init_bare_remote(self.root / "parent_remote.git")
+        parent_dev = self._init_repo(self.root / "parent_dev")
+        (parent_dev / "main.py").write_text("main\n")
+        run_git(str(parent_dev), ["add", "main.py"])
+        run_git(str(parent_dev), ["commit", "-m", "parent 1"])
+        run_git(str(parent_dev), ["-c", "protocol.file.allow=always", "submodule", "add", str(bare_sub), "vendor/sub"])
+        run_git(str(parent_dev), ["commit", "-m", "add sub"])
+        run_git(str(parent_dev), ["remote", "add", "origin", str(bare_parent)])
+        run_git(str(parent_dev), ["push", "-u", "origin", "main"])
+
+        # Clone parent
+        parent_clone = self.root / "parent_clone"
+        run_git(str(self.root), ["-c", "protocol.file.allow=always", "clone", "--recurse-submodules", str(bare_parent), str(parent_clone)])
+
+        # Update sub in dev and push to parent remote
+        (parent_dev / "vendor" / "sub" / "lib.py").write_text("2\n")
+        run_git(str(parent_dev / "vendor" / "sub"), ["commit", "-am", "sub 2"])
+        run_git(str(parent_dev / "vendor" / "sub"), ["push", "origin", "main"])
+        run_git(str(parent_dev), ["commit", "-am", "update sub ref to 2"])
+        run_git(str(parent_dev), ["push", "origin", "main"])
+
+        # In clone, pull without submodules leaves sub out of sync
+        pull_res_no_sub = pull_repo(str(parent_clone), submodules=False)
+        self.assertTrue(pull_res_no_sub["success"])
+        subs_drift = get_submodules_status(str(parent_clone))
+        self.assertEqual(subs_drift[0]["status"], "MODIFIED")
+
+        # Now pull with submodules=True updates submodule
+        pull_res_with_sub = pull_repo(str(parent_clone), submodules=True)
+        self.assertTrue(pull_res_with_sub["success"])
+        self.assertIsNotNone(pull_res_with_sub.get("submodules"))
+        self.assertTrue(pull_res_with_sub["submodules"]["updated"])
+        subs_synced = get_submodules_status(str(parent_clone))
+        self.assertEqual(subs_synced[0]["status"], "UP_TO_DATE")
+
+    def test_cli_pull_and_status_submodules(self):
+        sub = self._init_repo(self.root / "cli_sub")
+        (sub / "pkg.py").write_text("v1\n")
+        run_git(str(sub), ["add", "pkg.py"])
+        run_git(str(sub), ["commit", "-m", "v1"])
+
+        parent = self._init_repo(self.root / "cli_parent")
+        (parent / "run.py").write_text("run\n")
+        run_git(str(parent), ["add", "run.py"])
+        run_git(str(parent), ["commit", "-m", "init parent"])
+        run_git(str(parent), ["-c", "protocol.file.allow=always", "submodule", "add", str(sub), "vendor/cli_sub"])
+        run_git(str(parent), ["commit", "-m", "add sub"])
+        bare_parent = self._init_bare_remote(self.root / "cli_parent_remote.git")
+        run_git(str(parent), ["remote", "add", "origin", str(bare_parent)])
+        run_git(str(parent), ["push", "-u", "origin", "main"])
+
+        # Induce drift in submodule
+        (parent / "vendor" / "cli_sub" / "pkg.py").write_text("v2\n")
+        run_git(str(parent / "vendor" / "cli_sub"), ["commit", "-am", "drift v2"])
+
+        # 1. status --submodules text mode
+        f_out = io.StringIO()
+        with patch("sys.stdout", f_out):
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--submodules"])
+        self.assertEqual(ret, 0)
+        out = f_out.getvalue()
+        self.assertIn("submódulos", out)
+        self.assertIn("vendor/cli_sub", out)
+
+        # 2. status --json includes submodule_drift and remediation
+        f_json = io.StringIO()
+        with patch("sys.stdout", f_json):
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--json", "--compact"])
+        self.assertEqual(ret, 0)
+        data = json.loads(f_json.getvalue())
+        self.assertIn("cli_parent", data.get("submodule_drift", []))
+        drift_remeds = [rem for rem in data.get("remediations", []) if rem.get("action_required") == "update_submodules"]
+        self.assertTrue(len(drift_remeds) >= 1)
+        self.assertEqual(drift_remeds[0]["repo"], "cli_parent")
+
+        # 3. pull cli_parent --submodules updates the submodule
+        f_pull = io.StringIO()
+        with patch("sys.stdout", f_pull):
+            ret = main(["--root", str(self.root), "pull", "cli_parent", "--submodules"])
+        self.assertEqual(ret, 0)
+        pull_out = f_pull.getvalue()
+        self.assertIn("Submódulo 'vendor/cli_sub':", pull_out)
+
+        # Status after pull should no longer have drift
+        status_clean = get_submodules_status(str(parent))
+        self.assertEqual(status_clean[0]["status"], "UP_TO_DATE")
+
+        # 4. pull --submodules --json output structure
+        f_pull_json = io.StringIO()
+        with patch("sys.stdout", f_pull_json):
+            ret = main(["--root", str(self.root), "pull", "cli_parent", "--submodules", "--json"])
+        self.assertEqual(ret, 0)
+        pull_data = json.loads(f_pull_json.getvalue())
+        self.assertTrue(len(pull_data) >= 1)
+        self.assertIn("submodules", pull_data[0])
+        self.assertTrue(pull_data[0]["submodules"]["has_submodules"])
 
     def test_pull_repo_skips_active_worktree_branch(self):
         bare = self._init_bare_remote(self.root / "pull_wt_remote.git")

@@ -148,6 +148,7 @@ class GitSyncConfig:
     pull_autostash: bool = True
     pull_dry_run: bool = False
     pull_prune: bool = False
+    pull_submodules: bool = False
     push_dry_run: bool = False
     push_all: bool = False
     push_branch: Optional[str] = None
@@ -156,8 +157,10 @@ class GitSyncConfig:
     status_compact: bool = False
     status_prune: bool = False
     status_changelog: bool = False
+    status_submodules: bool = False
     hygiene: bool = False
     prune: bool = False
+    submodules: bool = False
     benchmark: bool = False
     use_cache: bool = True
     retries: int = 2
@@ -192,6 +195,7 @@ class GitSyncConfig:
                 "autostash": self.pull_autostash,
                 "dry_run": self.pull_dry_run,
                 "prune": self.pull_prune,
+                "submodules": self.pull_submodules,
                 "remote": self.pull_remote,
             },
             "push": {
@@ -205,10 +209,12 @@ class GitSyncConfig:
                 "pending": self.status_pending,
                 "compact": self.status_compact,
                 "prune": self.status_prune,
+                "submodules": self.status_submodules,
                 "changelog": self.status_changelog,
                 "hygiene": self.hygiene,
             },
             "prune": self.prune,
+            "submodules": self.submodules,
             "hygiene": self.hygiene,
             "benchmark": self.benchmark,
             "use_cache": self.use_cache,
@@ -403,6 +409,8 @@ def resolve_config(
     pull_dry_run = bool(pull_cfg.get("dry_run", combined.get("dry_run", False)))
     global_prune = bool(combined.get("prune", False))
     pull_prune = bool(pull_cfg.get("prune", combined.get("pull_prune", global_prune)))
+    global_submodules = bool(combined.get("submodules", False))
+    pull_submodules = bool(pull_cfg.get("submodules", combined.get("pull_submodules", global_submodules)))
     pull_remote_raw = pull_cfg.get("remote", combined.get("pull_remote", None))
     pull_remote = str(pull_remote_raw) if pull_remote_raw is not None else None
 
@@ -421,6 +429,7 @@ def resolve_config(
     status_pending = bool(status_cfg.get("pending", combined.get("pending", False)))
     status_compact = bool(status_cfg.get("compact", combined.get("compact", False)))
     status_prune = bool(status_cfg.get("prune", combined.get("status_prune", global_prune)))
+    status_submodules = bool(status_cfg.get("submodules", combined.get("status_submodules", global_submodules)))
     status_changelog = bool(status_cfg.get("changelog", combined.get("changelog", False)))
     global_hygiene = bool(combined.get("hygiene", False))
     hygiene = bool(status_cfg.get("hygiene", combined.get("hygiene", global_hygiene)))
@@ -465,6 +474,7 @@ def resolve_config(
         pull_autostash=pull_autostash,
         pull_dry_run=pull_dry_run,
         pull_prune=pull_prune,
+        pull_submodules=pull_submodules,
         push_dry_run=push_dry_run,
         push_all=push_all,
         push_branch=push_branch,
@@ -472,9 +482,11 @@ def resolve_config(
         status_pending=status_pending,
         status_compact=status_compact,
         status_prune=status_prune,
+        status_submodules=status_submodules,
         status_changelog=status_changelog,
         hygiene=hygiene,
         prune=global_prune,
+        submodules=global_submodules,
         benchmark=benchmark,
         use_cache=use_cache,
         retries=retries,

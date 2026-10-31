@@ -483,6 +483,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "diverged": [r["rel_path"] for r in results if r["status"] == "DIVERGED"],
             "worktrees": [r["rel_path"] for r in results if r.get("is_worktree")],
             "has_submodules": [r["rel_path"] for r in results if r.get("submodules")],
+            "submodule_drift": [r["rel_path"] for r in results if any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", []))],
             "no_remote": [r["rel_path"] for r in results if r["status"] == "NO_REMOTE"],
             "no_upstream": [r["rel_path"] for r in results if r["status"] == "NO_UPSTREAM"],
             "offline": [r["rel_path"] for r in results if r.get("network_state") == "offline"],
@@ -499,6 +500,18 @@ def cmd_status(args: argparse.Namespace) -> int:
                 if r.get("remediation")
             ],
         }
+        existing_remed_pairs = {(rem["repo"], rem.get("action_required")) for rem in summary["remediations"]}
+        for dr in results:
+            if any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in dr.get("submodules", [])):
+                if (dr["rel_path"], "update_submodules") not in existing_remed_pairs:
+                    summary["remediations"].append({
+                        "repo": dr["rel_path"],
+                        "status": "SUBMODULE_DRIFT",
+                        "network_state": dr.get("network_state", "healthy"),
+                        "action_required": "update_submodules",
+                        "remediation": f"git -C '{dr['path']}' submodule update --init --recursive",
+                    })
+                    existing_remed_pairs.add((dr["rel_path"], "update_submodules"))
         if changelog_enabled:
             summary["changelogs"] = {
                 r["rel_path"]: {
@@ -647,6 +660,17 @@ def cmd_status(args: argparse.Namespace) -> int:
                     brk_tag = " [BREAKING]" if c.get("is_breaking") else ""
                     scope_tag = f"({c['scope']})" if c.get("scope") else ""
                     print(f"      • [{c['category']}]{brk_tag} {c['type']}{scope_tag}: {c['description']} ({c['hash']})")
+        if getattr(args, "submodules", False) and r.get("submodules"):
+            print(f"    📦 submódulos ({len(r['submodules'])}):")
+            for sub in r["submodules"]:
+                st_icon = "✅" if sub.get("status") == "UP_TO_DATE" else "⚠️"
+                sub_cmt = (sub.get("commit") or "")[:7]
+                desc_str = f" ({sub.get('describe')})" if sub.get("describe") else ""
+                detached_str = " [detached HEAD]" if sub.get("detached") else ""
+                print(f"      • {st_icon} {sub.get('path')}: {sub.get('status')} [{sub_cmt}{desc_str}]{detached_str}")
+                desc_str = f" ({sub.get('describe')})" if sub.get("describe") else ""
+                detached_str = " [detached HEAD]" if sub.get("detached") else ""
+                print(f"      • {st_icon} {sub.get('path')}: {sub.get('status')} [{sub_cmt}{desc_str}]{detached_str}")
 
     print("=" * 95)
     offline_count = sum(1 for r in results if r.get("network_state") == "offline")
@@ -825,7 +849,12 @@ def cmd_pull(args: argparse.Namespace) -> int:
                     progress.advance(prog_label)
         t_insp = time.perf_counter() - t1
         benchmark.record_stage("inspection", t_insp)
-        targets = [r["path"] for r in inspections if "PULL" in r["status"] or r["aux_branches_behind"]]
+        targets = [
+            r["path"] for r in inspections
+            if "PULL" in r["status"]
+            or r["aux_branches_behind"]
+            or (getattr(args, "submodules", False) and any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", [])))
+        ]
         if not targets:
             benchmark.stop()
             if args.json:
@@ -876,6 +905,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 benchmark=benchmark,
                 retries=retries,
                 recover_stale_lock=getattr(args, "recover_locks", False),
+                submodules=getattr(args, "submodules", False),
             )
             res["repo_rel"] = rel
 
@@ -925,6 +955,16 @@ def cmd_pull(args: argparse.Namespace) -> int:
                     iso_icon = "  ↳ ℹ️ [DRY-RUN]" if dry_run else "  ↳ ⚠️"
                     iso_status = "isolada de fast-forward" if dry_run else "isolada (ativa em worktree alvo)"
                     print(f"{iso_icon} Branch auxiliar '{iso_b}': {iso_status} [{iso_rel}]")
+                sub_info = res.get("submodules")
+                if sub_info and sub_info.get("has_submodules"):
+                    for sub in sub_info.get("submodules", []):
+                        sub_path = sub.get("path")
+                        sub_st = sub.get("status")
+                        sub_commit = (sub.get("commit") or "")[:7]
+                        sub_desc = f" ({sub.get('describe')})" if sub.get("describe") else ""
+                        sub_icon = "  ↳ ℹ️ [DRY-RUN]" if dry_run else ("  ↳ ✅" if sub_info.get("success") else "  ↳ ❌")
+                        sub_action = "atualização recursiva prevista" if dry_run else ("submódulo atualizado" if sub_st == "UP_TO_DATE" else f"submódulo {sub_st}")
+                        print(f"{sub_icon} Submódulo '{sub_path}': {sub_action} [{sub_commit}{sub_desc}]")
 
     t_pull = time.perf_counter() - t2
     benchmark.record_stage("pull", t_pull)
@@ -1629,6 +1669,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     common.add_argument("--dashboard", "--tui", dest="dashboard", action="store_true", default=argparse.SUPPRESS, help="Launch interactive terminal dashboard")
     common.add_argument("--max-tokens", type=int, default=argparse.SUPPRESS, help="Maximum token budget for diff inspection (~4 chars/token)")
     common.add_argument("--changelog", action="store_true", default=argparse.SUPPRESS, help="Summarize pending incoming and outgoing commit categories (Conventional Commits)")
+    common.add_argument("--submodules", action="store_true", default=argparse.SUPPRESS, help="Inspect drift and recursively update git submodules")
+    common.add_argument("--no-submodules", dest="submodules", action="store_false", default=argparse.SUPPRESS, help="Do not update or inspect submodules")
 
     parser = argparse.ArgumentParser(
         prog="git-sync",
@@ -1842,6 +1884,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     max_tokens_flag = getattr(args, "max_tokens", None)
     args.max_tokens = max_tokens_flag if max_tokens_flag is not None else getattr(config, "max_tokens", None)
+
+    submodules_flag = getattr(args, "submodules", None)
+    if args.command == "pull":
+        args.submodules = submodules_flag if submodules_flag is not None else config.pull_submodules
+    elif args.command == "status":
+        args.submodules = submodules_flag if submodules_flag is not None else config.status_submodules
+    else:
+        args.submodules = submodules_flag if submodules_flag is not None else config.submodules
 
     if args.command == "doctor":
         return cmd_doctor(args)

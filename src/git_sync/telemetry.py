@@ -320,25 +320,32 @@ class BulkCache:
             self._remotes[norm] = remotes
         return remotes
 
-    def get_submodules_status(self, repo_path: str, timeout: int = 5) -> List[Dict[str, Any]]:
+    def get_submodules_status(
+        self,
+        repo_path: str,
+        timeout: int = 5,
+        recursive: bool = True,
+        detailed: bool = False,
+    ) -> List[Dict[str, Any]]:
         # INVARIANT: If .gitmodules file does not exist, repository has no submodules; skip subprocess entirely
         if not os.path.isfile(os.path.join(repo_path, ".gitmodules")):
             return []
 
         norm = os.path.abspath(repo_path)
+        cache_key = f"{norm}:{recursive}:{detailed}"
         get_submodules_fn = _get_git_fn("get_submodules_status")
         if not self.enabled:
-            return get_submodules_fn(repo_path, timeout=timeout)
+            return get_submodules_fn(repo_path, timeout=timeout, recursive=recursive, detailed=detailed)
 
         with self._lock:
-            if norm in self._submodules:
+            if cache_key in self._submodules:
                 self._hits += 1
-                return self._submodules[norm]
+                return self._submodules[cache_key]
             self._misses += 1
 
-        subs = get_submodules_fn(repo_path, timeout=timeout)
+        subs = get_submodules_fn(repo_path, timeout=timeout, recursive=recursive, detailed=detailed)
         with self._lock:
-            self._submodules[norm] = subs
+            self._submodules[cache_key] = subs
         return subs
 
     def invalidate(self, repo_path: str) -> None:
@@ -346,7 +353,9 @@ class BulkCache:
         norm = os.path.abspath(repo_path)
         with self._lock:
             self._remotes.pop(norm, None)
-            self._submodules.pop(norm, None)
+            matching_sub_keys = [k for k in self._submodules if k == norm or k.startswith(f"{norm}:")]
+            for k in matching_sub_keys:
+                self._submodules.pop(k, None)
             wt_entry = self._worktrees.pop(norm, None)
             if wt_entry:
                 for wt in wt_entry.get("worktrees", []):
