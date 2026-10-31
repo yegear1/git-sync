@@ -7,7 +7,7 @@
 
 ## Active Task
 
-### 📌 Task [00.2]: Visual TUI and Compact Interactive Dashboard
+### 📌 Task [00.3]: Visual TUI and Compact Interactive Dashboard
 
 - **Description:** Support high-density terminal dashboard mode for live multi-repository status and interactive pulls.
 - **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/`, `tests/`
@@ -29,6 +29,7 @@
 |---|---|---|---|
 | [00.0] | Initial clean public baseline of git-sync workspace orchestrator | [baseline] | 2026-10-27 |
 | [00.1] | Fine-Grained Partial Worktree Branch Synchronization and Conflict Isolation | [81009aa] | 2026-10-28 |
+| [00.2] | Open Source Readiness, MIT Licensing, Sanitization, and Community Governance | [30856f6] | 2026-10-31 |
 
 ---
 
