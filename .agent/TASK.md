@@ -7,17 +7,17 @@
 
 ## Active Task
 
-### 📌 Task [00.9]: Automated Git Submodule Drift Detection and Optional Recursive Update
+### 📌 Task [00.10]: Worktree Stale Pruning and Orphaned Worktree Cleanup Command
 
-- **Description:** Extend `git-sync status` and `git-sync pull` with `--submodules` support to surface detached/out-of-sync submodule commits and optionally update submodules recursively (`git submodule update --init --recursive`) with `GIT_TERMINAL_PROMPT=0`.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/core.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
+- **Description:** Extend `git-sync` with `git-sync worktree prune` and status diagnostics to identify detached/orphaned worktree admin directories and clean broken metadata safely.
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Action Type:**
   - [x] Read-only / Documentation
   - [x] Source code changes
 - **Status:** PLANNING
 
 ### Acceptance Criteria
-- [ ] `git-sync pull --submodules` updates initialized submodules cleanly and reports submodule status in text and JSON.
+- [ ] `git-sync worktree prune` cleans missing worktree metadata and warns on dirty linked worktrees.
 - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -35,16 +35,17 @@
 | [00.6] | Deterministic Conventional Commit Classifier for Pending Upstream & Local Commits | [dfc876a] | 2026-10-31 |
 | [00.7] | Native `git sync` Subcommand Autocompletion and SVG Terminal Demo | [d0d64cd] | 2026-10-31 |
 | [00.8] | Remote Health Check Telemetry and Latency Grading in Doctor | [9e584da] | 2026-10-31 |
+| [00.9] | Automated Git Submodule Drift Detection and Optional Recursive Update | [bcba8cb] | 2026-10-31 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-### 📌 Task [00.10]: Worktree Stale Pruning and Orphaned Worktree Cleanup Command
-- **Description:** Extend `git-sync` with `git-sync worktree prune` and status diagnostics to identify detached/orphaned worktree admin directories and clean broken metadata safely.
+### 📌 Task [00.11]: Shallow Submodule Deepening and Unshallow Fetch Recovery
+- **Description:** Extend `git-sync` with automated detection of truncated shallow submodule trees (`.git/shallow`) and guided unshallow fetching (`--unshallow`) during branch synchronization.
 - **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Acceptance Criteria:**
-  - [ ] `git-sync worktree prune` cleans missing worktree metadata and warns on dirty linked worktrees.
+  - [ ] Shallow submodule clones are safely detected and unshallowed without corrupting history.
   - [ ] Canonical test suite passes with exit code 0.
 
 ---
