@@ -152,8 +152,8 @@ python3 scripts/build.py --check-dist
 # Limpar artefatos de build transitórios
 python3 scripts/build.py --clean
 
-# Instalar o pacote wheel localmente
-pip install dist/git_sync-*.whl
+# Instalar o pacote wheel localmente (ou via PyPI: pip install git-sync-cli)
+pip install dist/git_sync_cli-*.whl
 ```
 
 ## Licença

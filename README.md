@@ -152,8 +152,8 @@ python3 scripts/build.py --check-dist
 # Clean transient build artifacts
 python3 scripts/build.py --clean
 
-# Install local wheel package
-pip install dist/git_sync-*.whl
+# Install local wheel package (or via PyPI: pip install git-sync-cli)
+pip install dist/git_sync_cli-*.whl
 ```
 
 ## License

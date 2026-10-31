@@ -60,7 +60,7 @@ class TestPackagingAndDistributionHygiene(unittest.TestCase):
         content = pyproject_path.read_text(encoding="utf-8")
 
         # Basic metadata checks
-        self.assertIn('name = "git-sync"', content)
+        self.assertIn('name = "git-sync-cli"', content)
         self.assertIn(f'version = "{__version__}"', content)
         self.assertIn('git-sync = "git_sync.cli:main"', content)
         self.assertTrue('license = "MIT"' in content or 'license = { text = "MIT" }' in content)
@@ -77,7 +77,7 @@ class TestPackagingAndDistributionHygiene(unittest.TestCase):
         try:
             import tomllib
             data = tomllib.loads(content)
-            self.assertEqual(data["project"]["name"], "git-sync")
+            self.assertEqual(data["project"]["name"], "git-sync-cli")
             self.assertEqual(data["project"]["version"], __version__)
             self.assertIn(data["project"]["license"], ("MIT", {"text": "MIT"}))
             self.assertEqual(

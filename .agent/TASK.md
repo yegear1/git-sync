@@ -28,8 +28,8 @@
 | Task | Title | Commit(s) | Date |
 |---|---|---|---|
 | [00.0] | Initial clean public baseline of git-sync workspace orchestrator | [baseline] | 2026-10-27 |
-| [00.1] | Fine-Grained Partial Worktree Branch Synchronization and Conflict Isolation | [81009aa] | 2026-10-28 |
-| [00.2] | Open Source Readiness, MIT Licensing, Sanitization, and Community Governance | [30856f6] | 2026-10-31 |
+| [00.1] | Fine-Grained Partial Worktree Branch Synchronization and Conflict Isolation | [92e882d] | 2026-10-28 |
+| [00.2] | Open Source Readiness, MIT Licensing, Sanitization, and Community Governance | [6442a85] | 2026-10-31 |
 
 ---
 
