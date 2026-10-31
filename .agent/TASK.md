@@ -7,17 +7,17 @@
 
 ## Active Task
 
-### 📌 Task [00.12]: Sparse-Checkout Cone Pattern Detection and Synchronization Diagnostic
+### 📌 Task [00.13]: Multi-Profile Dynamic Workspace Switching and Profile Scoped Defaults
 
-- **Description:** Extend `git-sync` with detection and safe synchronization handling for repositories configured with `git sparse-checkout` cone patterns.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
+- **Description:** Enhance CLI and interactive dashboard with runtime workspace profile switching (`--profile <name>`) and scoped configuration presets.
+- **Systems Involved:** `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/test_config.py`
 - **Action Type:**
   - [x] Read-only / Documentation
   - [x] Source code changes
 - **Status:** PLANNING
 
 ### Acceptance Criteria
-- [ ] Sparse-checkout repositories are identified in status and protected from unbounded checkout conflicts.
+- [ ] Named profiles can be selected dynamically and apply scoped root and worker options without restart.
 - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -38,16 +38,17 @@
 | [00.9] | Automated Git Submodule Drift Detection and Optional Recursive Update | [bcba8cb] | 2026-10-31 |
 | [00.10] | Worktree Stale Pruning and Orphaned Worktree Cleanup Command | [6834019] | 2026-10-31 |
 | [00.11] | Shallow Submodule Deepening and Unshallow Fetch Recovery | [2d52d52] | 2026-10-31 |
+| [00.12] | Sparse-Checkout Cone Pattern Detection and Synchronization Diagnostic | [c7b4f13] | 2026-10-31 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-### 📌 Task [00.13]: Multi-Profile Dynamic Workspace Switching and Profile Scoped Defaults
-- **Description:** Enhance CLI and interactive dashboard with runtime workspace profile switching (`--profile <name>`) and scoped configuration presets.
-- **Systems Involved:** `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/test_config.py`
+### 📌 Task [00.14]: Direct Push Pre-Flight Telemetry and Protected Branch Force-Push Defense
+- **Description:** Provide proactive pre-flight checks and branch protection safeguards during push execution across workspaces.
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Acceptance Criteria:**
-  - [ ] Named profiles can be selected dynamically and apply scoped root and worker options without restart.
+  - [ ] Pushing to protected branch configurations flags safety diagnostics and prevents accidental remote overrides.
   - [ ] Canonical test suite passes with exit code 0.
 
 ---
