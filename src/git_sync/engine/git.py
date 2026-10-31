@@ -388,6 +388,29 @@ def get_repo_git_dir(repo_path: str) -> Path:
     return p
 
 
+def is_shallow_repository(repo_path: str) -> bool:
+    """
+    Check whether repo_path is a shallow clone by inspecting the shallow boundary file in gitdir.
+    # INVARIANT: Directly inspecting git_dir/shallow eliminates subprocess overhead during bulk audits.
+    """
+    git_dir = get_repo_git_dir(repo_path)
+    if not git_dir.is_dir():
+        return False
+    if (git_dir / "shallow").is_file():
+        return True
+    # If git_dir has commondir (linked worktree), check the common gitdir for shallow file
+    commondir_file = git_dir / "commondir"
+    if commondir_file.is_file():
+        try:
+            target = commondir_file.read_text(encoding="utf-8").strip()
+            common_dir = (git_dir / target).resolve()
+            if (common_dir / "shallow").is_file():
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def find_repo_locks(repo_path: str, stale_threshold_seconds: float = 300.0) -> List[Dict[str, Any]]:
     """
     Find all active or stale Git lock files in a repository (.git/*.lock or worktree gitdir).
@@ -1769,6 +1792,7 @@ def get_submodules_status(
         status: str (UP_TO_DATE, MODIFIED, UNINITIALIZED, CONFLICT)
         out_of_sync: bool (True if status != UP_TO_DATE)
         detached: bool (True if checked out in detached HEAD)
+        is_shallow: bool (True if submodule history is shallow/truncated)
     # INVARIANT: If .gitmodules file does not exist, repository has no submodules; skip subprocess entirely.
     """
     if not os.path.isfile(os.path.join(repo_path, ".gitmodules")):
@@ -1810,12 +1834,15 @@ def get_submodules_status(
         is_out_of_sync = (status_str != "UP_TO_DATE")
 
         is_detached = False
-        if detailed and status_str != "UNINITIALIZED":
+        is_shallow = False
+        if status_str != "UNINITIALIZED":
             sub_dir = os.path.join(repo_path, sub_path)
             if os.path.isdir(sub_dir):
-                p_b = run_git(sub_dir, ["branch", "--show-current"], timeout=timeout)
-                if p_b.returncode == 0:
-                    is_detached = (not p_b.stdout.strip())
+                is_shallow = is_shallow_repository(sub_dir)
+                if detailed:
+                    p_b = run_git(sub_dir, ["branch", "--show-current"], timeout=timeout)
+                    if p_b.returncode == 0:
+                        is_detached = (not p_b.stdout.strip())
 
         submodules.append({
             "path": sub_path,
@@ -1824,9 +1851,79 @@ def get_submodules_status(
             "status": status_str,
             "out_of_sync": is_out_of_sync,
             "detached": is_detached,
+            "is_shallow": is_shallow,
+            "shallow": is_shallow,
         })
 
     return submodules
+
+
+def unshallow_submodule(
+    repo_path: str,
+    sub_path: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    remote: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Safely unshallow a truncated shallow submodule by fetching its complete commit history.
+    # INVARIANT: If submodule is not shallow, skip --unshallow to prevent Git fatal error:
+    #            'fatal: --unshallow on a complete repository does not make sense'.
+    # INVARIANT: GIT_TERMINAL_PROMPT=0 prevents interactive credential hangs.
+    """
+    core = sys.modules.get("git_sync.core")
+    if core is not None:
+        target = getattr(core, "unshallow_submodule", None)
+        if target is not None and target is not unshallow_submodule:
+            return target(repo_path, sub_path, timeout=timeout, remote=remote)
+    return _real_unshallow_submodule(repo_path, sub_path, timeout=timeout, remote=remote)
+
+
+def _real_unshallow_submodule(
+    repo_path: str,
+    sub_path: str,
+    timeout: int = DEFAULT_TIMEOUT,
+    remote: Optional[str] = None,
+) -> Dict[str, Any]:
+    sub_dir = os.path.join(repo_path, sub_path)
+    if not os.path.isdir(sub_dir):
+        return {
+            "path": sub_path,
+            "success": False,
+            "was_shallow": False,
+            "unshallowed": False,
+            "stdout": "",
+            "stderr": f"Submodule directory '{sub_path}' does not exist",
+            "error": f"Submodule directory '{sub_path}' does not exist",
+        }
+
+    if not is_shallow_repository(sub_dir):
+        return {
+            "path": sub_path,
+            "success": True,
+            "was_shallow": False,
+            "unshallowed": False,
+            "stdout": "Submodule is already complete (not shallow)",
+            "stderr": "",
+            "error": None,
+        }
+
+    cmd = ["fetch", "--unshallow"]
+    if remote:
+        cmd.append(remote)
+
+    proc = run_git(sub_dir, cmd, timeout=timeout)
+    still_shallow = is_shallow_repository(sub_dir)
+    success = (proc.returncode == 0) and not still_shallow
+
+    return {
+        "path": sub_path,
+        "success": success,
+        "was_shallow": True,
+        "unshallowed": success,
+        "stdout": proc.stdout.strip(),
+        "stderr": proc.stderr.strip(),
+        "error": proc.stderr.strip() if not success else None,
+    }
 
 
 def update_submodules(
@@ -1835,19 +1932,22 @@ def update_submodules(
     init: bool = True,
     timeout: int = DEFAULT_TIMEOUT,
     dry_run: bool = False,
+    unshallow: bool = False,
     cache: Optional[BulkCache] = None,
 ) -> Dict[str, Any]:
     """
-    Update git submodules recursively with safe terminal prompt isolation (GIT_TERMINAL_PROMPT=0).
+    Update git submodules recursively with safe terminal prompt isolation (GIT_TERMINAL_PROMPT=0)
+    and optional unshallow recovery for shallow submodules.
     # INVARIANT: GIT_TERMINAL_PROMPT=0 prevents interactive hangs during submodule fetch/checkout.
-    # INVARIANT: When dry_run is True, no submodule checkout occurs; pending drift is previewed.
+    # INVARIANT: When dry_run is True, no submodule checkout or unshallow fetch occurs.
+    # INVARIANT: Unshallow is only applied to repositories where is_shallow_repository is True.
     """
     core = sys.modules.get("git_sync.core")
     if core is not None:
         target = getattr(core, "update_submodules", None)
         if target is not None and target is not update_submodules:
-            return target(repo_path, recursive=recursive, init=init, timeout=timeout, dry_run=dry_run, cache=cache)
-    return _real_update_submodules(repo_path, recursive=recursive, init=init, timeout=timeout, dry_run=dry_run, cache=cache)
+            return target(repo_path, recursive=recursive, init=init, timeout=timeout, dry_run=dry_run, unshallow=unshallow, cache=cache)
+    return _real_update_submodules(repo_path, recursive=recursive, init=init, timeout=timeout, dry_run=dry_run, unshallow=unshallow, cache=cache)
 
 
 def _real_update_submodules(
@@ -1856,6 +1956,7 @@ def _real_update_submodules(
     init: bool = True,
     timeout: int = DEFAULT_TIMEOUT,
     dry_run: bool = False,
+    unshallow: bool = False,
     cache: Optional[BulkCache] = None,
 ) -> Dict[str, Any]:
     if not os.path.isfile(os.path.join(repo_path, ".gitmodules")):
@@ -1864,6 +1965,8 @@ def _real_update_submodules(
             "updated": False,
             "success": True,
             "dry_run": dry_run,
+            "unshallow": unshallow,
+            "unshallowed": [],
             "count": 0,
             "items": [],
             "submodules": [],
@@ -1879,6 +1982,8 @@ def _real_update_submodules(
             "updated": False,
             "success": True,
             "dry_run": dry_run,
+            "unshallow": unshallow,
+            "unshallowed": [],
             "count": 0,
             "items": [],
             "submodules": [],
@@ -1888,22 +1993,40 @@ def _real_update_submodules(
         }
 
     drift_items = [s for s in subs_before if s.get("out_of_sync") or s.get("status") != "UP_TO_DATE"]
+    shallow_items = [s for s in subs_before if s.get("is_shallow")]
 
     if dry_run:
+        would_unshallow = [s["path"] for s in shallow_items] if unshallow else []
         return {
             "has_submodules": True,
             "updated": False,
             "success": True,
             "dry_run": True,
+            "unshallow": unshallow,
+            "unshallowed": [],
             "count": len(subs_before),
             "drift_count": len(drift_items),
+            "shallow_count": len(shallow_items),
+            "would_unshallow": would_unshallow,
             "pending_updates": drift_items,
             "items": subs_before,
             "submodules": subs_before,
-            "stdout": f"[DRY-RUN] Submodules checked ({len(drift_items)} pending update out of {len(subs_before)})",
+            "stdout": f"[DRY-RUN] Submodules checked ({len(drift_items)} pending update, {len(shallow_items)} shallow)",
             "stderr": "",
             "error": None,
         }
+
+    unshallowed_paths: List[str] = []
+    unshallow_errors: List[str] = []
+
+    # If unshallow requested, deepen any currently shallow submodules before checkout
+    if unshallow:
+        for sub in shallow_items:
+            res_u = _real_unshallow_submodule(repo_path, sub["path"], timeout=timeout)
+            if res_u.get("unshallowed"):
+                unshallowed_paths.append(sub["path"])
+            elif not res_u.get("success"):
+                unshallow_errors.append(f"{sub['path']}: {res_u.get('error') or 'unshallow failed'}")
 
     cmd = ["submodule", "update"]
     if init:
@@ -1912,23 +2035,42 @@ def _real_update_submodules(
         cmd.append("--recursive")
 
     proc = run_git(repo_path, cmd, timeout=timeout)
+
+    # After update/init, if any submodule was newly initialized as shallow and unshallow requested, unshallow it
+    if unshallow:
+        subs_mid = get_submodules_status(repo_path, timeout=timeout, recursive=recursive, detailed=False)
+        for sub in subs_mid:
+            if sub.get("is_shallow") and sub["path"] not in unshallowed_paths:
+                res_u = _real_unshallow_submodule(repo_path, sub["path"], timeout=timeout)
+                if res_u.get("unshallowed"):
+                    unshallowed_paths.append(sub["path"])
+                elif not res_u.get("success"):
+                    unshallow_errors.append(f"{sub['path']}: {res_u.get('error') or 'unshallow failed'}")
+
     if cache:
         cache.invalidate(repo_path)
 
     subs_after = get_submodules_status(repo_path, timeout=timeout, recursive=recursive, detailed=True)
-    success = (proc.returncode == 0)
+    success = (proc.returncode == 0) and not unshallow_errors
+
+    stderr_combined = proc.stderr.strip()
+    if unshallow_errors:
+        err_msg = "; ".join(unshallow_errors)
+        stderr_combined = f"{stderr_combined}\n{err_msg}".strip() if stderr_combined else err_msg
 
     return {
         "has_submodules": True,
         "updated": success,
         "success": success,
         "dry_run": False,
+        "unshallow": unshallow,
+        "unshallowed": unshallowed_paths,
         "count": len(subs_after),
         "items": subs_after,
         "submodules": subs_after,
         "stdout": proc.stdout.strip(),
-        "stderr": proc.stderr.strip(),
-        "error": proc.stderr.strip() if not success else None,
+        "stderr": stderr_combined,
+        "error": stderr_combined if not success else None,
     }
 
 
@@ -2790,6 +2932,7 @@ def inspect_repo(
         "worktrees": worktrees,
         "stale_worktrees": stale_worktrees,
         "submodules": submodules,
+        "is_shallow": is_shallow_repository(repo_path),
         "stale_refs": [],
         "pruned_refs": [],
         "gone_branches": [],
@@ -3064,6 +3207,7 @@ def pull_repo(
     recover_stale_lock: bool = False,
     prune: bool = False,
     submodules: bool = False,
+    unshallow: bool = False,
 ) -> Dict[str, Any]:
     """
     Pull updates for a single repository.
@@ -3108,14 +3252,16 @@ def pull_repo(
                 cache=cache,
             )
 
+        repo_is_shallow = is_shallow_repository(repo_path)
         submodules_res: Optional[Dict[str, Any]] = None
-        if submodules:
+        if submodules or unshallow:
             submodules_res = _dispatch_fn("update_submodules", update_submodules)(
                 repo_path,
                 recursive=True,
                 init=True,
                 timeout=timeout,
                 dry_run=True,
+                unshallow=unshallow,
                 cache=cache,
             )
 
@@ -3139,6 +3285,8 @@ def pull_repo(
                 "dry_run": True,
                 "ahead": 0,
                 "behind": 0,
+                "is_shallow": repo_is_shallow,
+                "unshallow": unshallow,
                 "stale_refs": prune_res.get("stale_refs", []),
                 "pruned_refs": prune_res.get("pruned_refs", []),
                 "would_prune_refs": prune_res.get("would_prune_refs", []),
@@ -3210,6 +3358,8 @@ def pull_repo(
             "dry_run": True,
             "ahead": ahead_count,
             "behind": behind_count,
+            "is_shallow": repo_is_shallow,
+            "unshallow": unshallow,
             "stale_refs": prune_res.get("stale_refs", []),
             "pruned_refs": prune_res.get("pruned_refs", []),
             "would_prune_refs": prune_res.get("would_prune_refs", []),
@@ -3285,6 +3435,16 @@ def pull_repo(
                 stashed = True
                 stash_tag = tag
                 autostash_info["stashed"] = True
+
+    repo_is_shallow = is_shallow_repository(repo_path)
+    if unshallow and repo_is_shallow:
+        fetch_unsh = ["fetch", "--unshallow"]
+        if remote:
+            fetch_unsh.append(remote)
+        p_unsh = run_git_with_retry(repo_path, fetch_unsh, timeout=timeout, benchmark=benchmark)
+        if p_unsh.returncode != 0:
+            unsh_err = p_unsh.stderr.strip()
+            stderr = f"{stderr}\n{unsh_err}".strip() if stderr else unsh_err
 
     cmd = ["pull"]
     if ff_only:
@@ -3375,13 +3535,14 @@ def pull_repo(
         cache.invalidate(repo_path)
 
     submodules_res: Optional[Dict[str, Any]] = None
-    if submodules and success:
+    if (submodules or unshallow) and success:
         submodules_res = _dispatch_fn("update_submodules", update_submodules)(
             repo_path,
             recursive=True,
             init=True,
             timeout=timeout,
             dry_run=False,
+            unshallow=unshallow,
             cache=cache,
         )
         if submodules_res and not submodules_res.get("success", True):
@@ -3403,6 +3564,8 @@ def pull_repo(
         "autostash": autostash_info,
         "dry_run": False,
         "diagnostic": diagnostic,
+        "is_shallow": repo_is_shallow,
+        "unshallow": unshallow,
         "stale_refs": prune_res.get("stale_refs", []),
         "pruned_refs": prune_res.get("pruned_refs", []),
         "would_prune_refs": prune_res.get("would_prune_refs", []),
@@ -4065,6 +4228,7 @@ __all__ = [
     "inspect_github_cli",
     "inspect_repo",
     "inspect_ssh_config",
+    "is_shallow_repository",
     "is_transient_network_error",
     "match_repo",
     "probe_remote_reachability",
@@ -4082,5 +4246,6 @@ __all__ = [
     "split_diff_files",
     "stash_changes",
     "truncate_diff",
+    "unshallow_submodule",
     "update_submodules",
 ]

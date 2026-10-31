@@ -26,6 +26,7 @@ from git_sync.core import (
     get_submodules_status,
     get_worktree_info,
     inspect_repo,
+    is_shallow_repository,
     match_repo,
     parse_commit_log,
     prune_repo_worktrees,
@@ -33,6 +34,7 @@ from git_sync.core import (
     push_repo,
     run_git,
     summarize_commit_categories,
+    unshallow_submodule,
     update_submodules,
 )
 from git_sync.ui.dashboard import InteractiveDashboard
@@ -468,6 +470,133 @@ class TestGitSyncCore(unittest.TestCase):
         self.assertTrue(len(pull_data) >= 1)
         self.assertIn("submodules", pull_data[0])
         self.assertTrue(pull_data[0]["submodules"]["has_submodules"])
+
+    def test_shallow_submodule_detection_and_unshallow_recovery(self):
+        # 1. Setup remote submodule with multiple commits
+        sub_remote = self._init_repo(self.root / "sub_remote_pkg")
+        (sub_remote / "pkg.py").write_text("v1\n")
+        run_git(str(sub_remote), ["add", "pkg.py"])
+        run_git(str(sub_remote), ["commit", "-m", "sub commit 1"])
+        (sub_remote / "pkg.py").write_text("v2\n")
+        run_git(str(sub_remote), ["commit", "-am", "sub commit 2"])
+
+        # 2. Setup superproject and add shallow submodule with depth 1
+        parent = self._init_repo(self.root / "parent_shallow_pkg")
+        (parent / "main.py").write_text("app\n")
+        run_git(str(parent), ["add", "main.py"])
+        run_git(str(parent), ["commit", "-m", "parent commit 1"])
+        run_git(str(parent), ["-c", "protocol.file.allow=always", "submodule", "add", "--depth", "1", f"file://{sub_remote.resolve()}", "vendor/shallow_sub"])
+        run_git(str(parent), ["commit", "-m", "add shallow submodule"])
+
+        sub_path = parent / "vendor" / "shallow_sub"
+        self.assertTrue(is_shallow_repository(str(sub_path)))
+        self.assertFalse(is_shallow_repository(str(parent)))
+
+        # 3. get_submodules_status detects shallow status
+        subs = get_submodules_status(str(parent))
+        self.assertEqual(len(subs), 1)
+        self.assertTrue(subs[0]["is_shallow"])
+        self.assertTrue(subs[0]["shallow"])
+
+        # 4. inspect_repo surfaces shallow submodule and repo shallow state
+        insp = inspect_repo(str(parent), str(self.root), do_fetch=False)
+        self.assertFalse(insp["is_shallow"])
+        self.assertTrue(insp["submodules"][0]["is_shallow"])
+
+        # 5. update_submodules dry-run reports would_unshallow
+        dry_res = update_submodules(str(parent), dry_run=True, unshallow=True)
+        self.assertTrue(dry_res["has_submodules"])
+        self.assertEqual(dry_res["would_unshallow"], ["vendor/shallow_sub"])
+        self.assertTrue(is_shallow_repository(str(sub_path)))
+
+        # 6. unshallow_submodule safely unshallows and deepens the submodule
+        unsh_res = unshallow_submodule(str(parent), "vendor/shallow_sub")
+        self.assertTrue(unsh_res["success"])
+        self.assertTrue(unsh_res["was_shallow"])
+        self.assertTrue(unsh_res["unshallowed"])
+        self.assertFalse(is_shallow_repository(str(sub_path)))
+
+        # 7. Repeated unshallow_submodule is idempotent and skips redundant fetch
+        unsh_repeat = unshallow_submodule(str(parent), "vendor/shallow_sub")
+        self.assertTrue(unsh_repeat["success"])
+        self.assertFalse(unsh_repeat["was_shallow"])
+        self.assertFalse(unsh_repeat["unshallowed"])
+
+        # 8. Unshallow on non-existent submodule handles error cleanly
+        bad_res = unshallow_submodule(str(parent), "non_existent")
+        self.assertFalse(bad_res["success"])
+
+    def test_cli_pull_and_status_unshallow(self):
+        sub_remote = self._init_repo(self.root / "cli_sub_remote")
+        (sub_remote / "lib.py").write_text("v1\n")
+        run_git(str(sub_remote), ["add", "lib.py"])
+        run_git(str(sub_remote), ["commit", "-m", "sub 1"])
+        (sub_remote / "lib.py").write_text("v2\n")
+        run_git(str(sub_remote), ["commit", "-am", "sub 2"])
+
+        parent = self._init_repo(self.root / "cli_shallow_parent")
+        (parent / "run.py").write_text("run\n")
+        run_git(str(parent), ["add", "run.py"])
+        run_git(str(parent), ["commit", "-m", "init"])
+        run_git(str(parent), ["-c", "protocol.file.allow=always", "submodule", "add", "--depth", "1", f"file://{sub_remote.resolve()}", "vendor/cli_sub"])
+        run_git(str(parent), ["commit", "-m", "add shallow sub"])
+
+        bare_parent = self._init_bare_remote(self.root / "cli_shallow_remote.git")
+        run_git(str(parent), ["remote", "add", "origin", str(bare_parent)])
+        run_git(str(parent), ["push", "-u", "origin", "main"])
+
+        # 1. status --submodules text mode displays [shallow]
+        f_out = io.StringIO()
+        with patch("sys.stdout", f_out):
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--submodules"])
+        self.assertEqual(ret, 0)
+        out = f_out.getvalue()
+        self.assertIn("[shallow]", out)
+        self.assertIn("1 shallow", out)
+
+        # 2. status --json includes shallow_submodules and unshallow remediation
+        f_json = io.StringIO()
+        with patch("sys.stdout", f_json):
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--json", "--compact"])
+        self.assertEqual(ret, 0)
+        data = json.loads(f_json.getvalue())
+        self.assertIn("cli_shallow_parent", data.get("shallow_submodules", []))
+        unsh_remeds = [rem for rem in data.get("remediations", []) if rem.get("action_required") == "unshallow_submodules"]
+        self.assertTrue(len(unsh_remeds) >= 1)
+        self.assertIn("--unshallow", unsh_remeds[0]["remediation"])
+
+        # 3. pull with --submodules --unshallow deepens submodule
+        f_pull = io.StringIO()
+        with patch("sys.stdout", f_pull):
+            ret = main(["--root", str(self.root), "pull", "cli_shallow_parent", "--submodules", "--unshallow"])
+        self.assertEqual(ret, 0)
+        pull_out = f_pull.getvalue()
+        self.assertIn("[unshallowed]", pull_out)
+
+        sub_dir = parent / "vendor" / "cli_sub"
+        self.assertFalse(is_shallow_repository(str(sub_dir)))
+
+    def test_pull_repo_with_unshallow_primary_and_submodules(self):
+        # 1. Bare remote for primary
+        bare = self._init_bare_remote(self.root / "primary_remote.git")
+        dev = self._init_repo(self.root / "dev_primary")
+        (dev / "a.txt").write_text("1\n")
+        run_git(str(dev), ["add", "a.txt"])
+        run_git(str(dev), ["commit", "-m", "1"])
+        (dev / "a.txt").write_text("2\n")
+        run_git(str(dev), ["commit", "-am", "2"])
+        run_git(str(dev), ["remote", "add", "origin", str(bare)])
+        run_git(str(dev), ["push", "-u", "origin", "main"])
+
+        # 2. Shallow clone of primary
+        shallow_primary = self.root / "shallow_primary"
+        run_git(str(self.root), ["clone", "--depth", "1", f"file://{bare.resolve()}", str(shallow_primary)])
+        self.assertTrue(is_shallow_repository(str(shallow_primary)))
+
+        # 3. Pull with unshallow=True on shallow primary
+        res = pull_repo(str(shallow_primary), unshallow=True)
+        self.assertTrue(res["success"])
+        self.assertFalse(is_shallow_repository(str(shallow_primary)))
 
     def test_pull_repo_skips_active_worktree_branch(self):
         bare = self._init_bare_remote(self.root / "pull_wt_remote.git")

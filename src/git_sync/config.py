@@ -149,6 +149,7 @@ class GitSyncConfig:
     pull_dry_run: bool = False
     pull_prune: bool = False
     pull_submodules: bool = False
+    pull_unshallow: bool = False
     push_dry_run: bool = False
     push_all: bool = False
     push_branch: Optional[str] = None
@@ -161,6 +162,7 @@ class GitSyncConfig:
     hygiene: bool = False
     prune: bool = False
     submodules: bool = False
+    unshallow: bool = False
     benchmark: bool = False
     use_cache: bool = True
     retries: int = 2
@@ -196,6 +198,7 @@ class GitSyncConfig:
                 "dry_run": self.pull_dry_run,
                 "prune": self.pull_prune,
                 "submodules": self.pull_submodules,
+                "unshallow": self.pull_unshallow,
                 "remote": self.pull_remote,
             },
             "push": {
@@ -215,6 +218,7 @@ class GitSyncConfig:
             },
             "prune": self.prune,
             "submodules": self.submodules,
+            "unshallow": self.unshallow,
             "hygiene": self.hygiene,
             "benchmark": self.benchmark,
             "use_cache": self.use_cache,
@@ -411,6 +415,8 @@ def resolve_config(
     pull_prune = bool(pull_cfg.get("prune", combined.get("pull_prune", global_prune)))
     global_submodules = bool(combined.get("submodules", False))
     pull_submodules = bool(pull_cfg.get("submodules", combined.get("pull_submodules", global_submodules)))
+    global_unshallow = bool(combined.get("unshallow", False))
+    pull_unshallow = bool(pull_cfg.get("unshallow", combined.get("pull_unshallow", global_unshallow)))
     pull_remote_raw = pull_cfg.get("remote", combined.get("pull_remote", None))
     pull_remote = str(pull_remote_raw) if pull_remote_raw is not None else None
 
@@ -475,6 +481,7 @@ def resolve_config(
         pull_dry_run=pull_dry_run,
         pull_prune=pull_prune,
         pull_submodules=pull_submodules,
+        pull_unshallow=pull_unshallow,
         push_dry_run=push_dry_run,
         push_all=push_all,
         push_branch=push_branch,
@@ -487,6 +494,7 @@ def resolve_config(
         hygiene=hygiene,
         prune=global_prune,
         submodules=global_submodules,
+        unshallow=global_unshallow,
         benchmark=benchmark,
         use_cache=use_cache,
         retries=retries,

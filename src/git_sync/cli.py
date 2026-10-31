@@ -487,6 +487,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "stale_worktrees": [r["rel_path"] for r in results if r.get("stale_worktrees")],
             "has_submodules": [r["rel_path"] for r in results if r.get("submodules")],
             "submodule_drift": [r["rel_path"] for r in results if any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", []))],
+            "shallow_submodules": [r["rel_path"] for r in results if any(s.get("is_shallow") for s in r.get("submodules", []))],
             "no_remote": [r["rel_path"] for r in results if r["status"] == "NO_REMOTE"],
             "no_upstream": [r["rel_path"] for r in results if r["status"] == "NO_UPSTREAM"],
             "offline": [r["rel_path"] for r in results if r.get("network_state") == "offline"],
@@ -515,6 +516,17 @@ def cmd_status(args: argparse.Namespace) -> int:
                         "remediation": f"git -C '{dr['path']}' submodule update --init --recursive",
                     })
                     existing_remed_pairs.add((dr["rel_path"], "update_submodules"))
+            shallow_subs = [s for s in dr.get("submodules", []) if s.get("is_shallow")]
+            if shallow_subs:
+                if (dr["rel_path"], "unshallow_submodules") not in existing_remed_pairs:
+                    summary["remediations"].append({
+                        "repo": dr["rel_path"],
+                        "status": "SHALLOW_SUBMODULE",
+                        "network_state": dr.get("network_state", "healthy"),
+                        "action_required": "unshallow_submodules",
+                        "remediation": f"git-sync pull '{dr['rel_path']}' --submodules --unshallow",
+                    })
+                    existing_remed_pairs.add((dr["rel_path"], "unshallow_submodules"))
             if dr.get("stale_worktrees"):
                 if (dr["rel_path"], "prune_worktrees") not in existing_remed_pairs:
                     summary["remediations"].append({
@@ -612,10 +624,15 @@ def cmd_status(args: argparse.Namespace) -> int:
             details.append(f"worktrees_stale({len(r['stale_worktrees'])})")
         if r.get("submodules"):
             dirty_subs = [s for s in r["submodules"] if s.get("status") != "UP_TO_DATE"]
+            shallow_subs = [s for s in r["submodules"] if s.get("is_shallow")]
+            sub_parts = []
             if dirty_subs:
-                details.append(f"submodules({len(dirty_subs)}/{len(r['submodules'])} pendentes)")
+                sub_parts.append(f"{len(dirty_subs)}/{len(r['submodules'])} pendentes")
             else:
-                details.append(f"submodules({len(r['submodules'])})")
+                sub_parts.append(f"{len(r['submodules'])}")
+            if shallow_subs:
+                sub_parts.append(f"{len(shallow_subs)} shallow")
+            details.append(f"submodules({', '.join(sub_parts)})")
         if r.get("multi_remote") or len(r.get("remotes", {})) > 1:
             remote_names = ", ".join(sorted(r.get("remotes", {}).keys()))
             details.append(f"remotes[{remote_names}]")
@@ -678,14 +695,12 @@ def cmd_status(args: argparse.Namespace) -> int:
         if getattr(args, "submodules", False) and r.get("submodules"):
             print(f"    📦 submódulos ({len(r['submodules'])}):")
             for sub in r["submodules"]:
-                st_icon = "✅" if sub.get("status") == "UP_TO_DATE" else "⚠️"
+                st_icon = "✅" if sub.get("status") == "UP_TO_DATE" and not sub.get("is_shallow") else "⚠️"
                 sub_cmt = (sub.get("commit") or "")[:7]
                 desc_str = f" ({sub.get('describe')})" if sub.get("describe") else ""
                 detached_str = " [detached HEAD]" if sub.get("detached") else ""
-                print(f"      • {st_icon} {sub.get('path')}: {sub.get('status')} [{sub_cmt}{desc_str}]{detached_str}")
-                desc_str = f" ({sub.get('describe')})" if sub.get("describe") else ""
-                detached_str = " [detached HEAD]" if sub.get("detached") else ""
-                print(f"      • {st_icon} {sub.get('path')}: {sub.get('status')} [{sub_cmt}{desc_str}]{detached_str}")
+                shallow_str = " [shallow]" if sub.get("is_shallow") else ""
+                print(f"      • {st_icon} {sub.get('path')}: {sub.get('status')} [{sub_cmt}{desc_str}]{detached_str}{shallow_str}")
 
     print("=" * 95)
     offline_count = sum(1 for r in results if r.get("network_state") == "offline")
@@ -869,6 +884,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
             if "PULL" in r["status"]
             or r["aux_branches_behind"]
             or (getattr(args, "submodules", False) and any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", [])))
+            or (getattr(args, "unshallow", False) and (r.get("is_shallow") or any(s.get("is_shallow") for s in r.get("submodules", []))))
         ]
         if not targets:
             benchmark.stop()
@@ -921,6 +937,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 retries=retries,
                 recover_stale_lock=getattr(args, "recover_locks", False),
                 submodules=getattr(args, "submodules", False),
+                unshallow=getattr(args, "unshallow", False),
             )
             res["repo_rel"] = rel
 
@@ -972,14 +989,21 @@ def cmd_pull(args: argparse.Namespace) -> int:
                     print(f"{iso_icon} Branch auxiliar '{iso_b}': {iso_status} [{iso_rel}]")
                 sub_info = res.get("submodules")
                 if sub_info and sub_info.get("has_submodules"):
+                    unshallowed_set = set(sub_info.get("unshallowed", []))
                     for sub in sub_info.get("submodules", []):
                         sub_path = sub.get("path")
                         sub_st = sub.get("status")
                         sub_commit = (sub.get("commit") or "")[:7]
                         sub_desc = f" ({sub.get('describe')})" if sub.get("describe") else ""
+                        if sub_path in unshallowed_set:
+                            sub_shallow = " [unshallowed]"
+                        elif sub.get("is_shallow"):
+                            sub_shallow = " [shallow]"
+                        else:
+                            sub_shallow = ""
                         sub_icon = "  ↳ ℹ️ [DRY-RUN]" if dry_run else ("  ↳ ✅" if sub_info.get("success") else "  ↳ ❌")
                         sub_action = "atualização recursiva prevista" if dry_run else ("submódulo atualizado" if sub_st == "UP_TO_DATE" else f"submódulo {sub_st}")
-                        print(f"{sub_icon} Submódulo '{sub_path}': {sub_action} [{sub_commit}{sub_desc}]")
+                        print(f"{sub_icon} Submódulo '{sub_path}': {sub_action} [{sub_commit}{sub_desc}]{sub_shallow}")
 
     t_pull = time.perf_counter() - t2
     benchmark.record_stage("pull", t_pull)
@@ -1849,6 +1873,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     common.add_argument("--changelog", action="store_true", default=argparse.SUPPRESS, help="Summarize pending incoming and outgoing commit categories (Conventional Commits)")
     common.add_argument("--submodules", action="store_true", default=argparse.SUPPRESS, help="Inspect drift and recursively update git submodules")
     common.add_argument("--no-submodules", dest="submodules", action="store_false", default=argparse.SUPPRESS, help="Do not update or inspect submodules")
+    common.add_argument("--unshallow", action="store_true", default=argparse.SUPPRESS, help="Fetch full history for shallow submodules and repositories")
 
     parser = argparse.ArgumentParser(
         prog="git-sync",
@@ -2086,6 +2111,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.submodules = submodules_flag if submodules_flag is not None else config.status_submodules
     else:
         args.submodules = submodules_flag if submodules_flag is not None else config.submodules
+
+    unshallow_flag = getattr(args, "unshallow", None)
+    if args.command == "pull":
+        args.unshallow = unshallow_flag if unshallow_flag is not None else config.pull_unshallow
+    else:
+        args.unshallow = unshallow_flag if unshallow_flag is not None else config.unshallow
 
     if args.command == "doctor":
         return cmd_doctor(args)

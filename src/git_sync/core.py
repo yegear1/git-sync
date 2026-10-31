@@ -60,6 +60,7 @@ from git_sync.engine.git import (
     inspect_github_cli,
     inspect_repo,
     inspect_ssh_config,
+    is_shallow_repository,
     is_transient_network_error,
     match_repo,
     parse_commit_log,
@@ -79,6 +80,7 @@ from git_sync.engine.git import (
     stash_changes,
     summarize_commit_categories,
     truncate_diff,
+    unshallow_submodule,
     update_submodules,
 )
 from git_sync.telemetry import (
@@ -159,6 +161,7 @@ __all__ = [
     "inspect_github_cli",
     "inspect_repo",
     "inspect_ssh_config",
+    "is_shallow_repository",
     "is_transient_network_error",
     "match_repo",
     "parse_commit_log",
@@ -181,5 +184,6 @@ __all__ = [
     "style_text",
     "summarize_commit_categories",
     "truncate_diff",
+    "unshallow_submodule",
     "update_submodules",
 ]

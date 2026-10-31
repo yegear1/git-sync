@@ -403,6 +403,16 @@ class TestCliConfigurationPrecedence(unittest.TestCase):
         self.assertEqual(cfg_profile.pull_strategy, "merge")
         self.assertEqual(cfg_profile.to_dict()["pull"]["strategy"], "merge")
 
+    def test_resolve_config_with_unshallow(self):
+        data = {
+            "pull": {"unshallow": True},
+            "unshallow": False,
+        }
+        cfg = resolve_config(data)
+        self.assertTrue(cfg.pull_unshallow)
+        self.assertFalse(cfg.unshallow)
+        self.assertTrue(cfg.to_dict()["pull"]["unshallow"])
+
     def test_resolve_default_root_hierarchy(self):
         # 1. GIT_SYNC_ROOT env var has highest precedence
         with patch.dict(os.environ, {"GIT_SYNC_ROOT": "/custom/env/root"}):

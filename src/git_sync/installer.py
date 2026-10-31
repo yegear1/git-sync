@@ -532,7 +532,7 @@ _git_sync_completions() {
     fi
 
     local commands="doctor status dashboard tui pull push resolve dirty unlock config install completion worktree"
-    local common_opts="--config --profile --root --workers --auto-tune --adaptive --timeout --retries --preflight --exclude --compact --summary --changelog --max-tokens --json --benchmark --telemetry --no-cache --remote --dry-run --no-dry-run --help -h"
+    local common_opts="--config --profile --root --workers --auto-tune --adaptive --timeout --retries --preflight --exclude --compact --summary --changelog --submodules --no-submodules --unshallow --max-tokens --json --benchmark --telemetry --no-cache --remote --dry-run --no-dry-run --help -h"
 
     # Identify active subcommand (ignoring leading `git` and `sync` tokens when invoked as `git sync`)
     local cmd=""
@@ -689,6 +689,9 @@ _git_sync() {
         '--compact[Output compact summary omitting repository items array]'
         '--summary[Alias for --compact]'
         '--changelog[Classify pending commits into Keep-a-Changelog categories]'
+        '--submodules[Inspect drift and recursively update git submodules]'
+        '--no-submodules[Do not update or inspect submodules]'
+        '--unshallow[Fetch full history for shallow submodules and repositories]'
         '--max-tokens[Maximum token budget for diff output]:tokens:'
         '--json[Output machine-readable JSON]'
         '--benchmark[Measure and display execution performance telemetry]'

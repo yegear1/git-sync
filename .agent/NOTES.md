@@ -16,7 +16,7 @@
 | `git-sync status` | `--fetch`/`--no-fetch`, `--pending`, `--compact`/`--summary`, `--changelog`, `--submodules`, `--dashboard`/`--tui`, `-i`/`--interactive`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json` | Table / Dashboard / JSON | Inspection of sync states across all repos in root |
 | `git-sync dashboard` / `tui` | `--fetch`/`--no-fetch`, `--pending`, `--changelog`, `--group <dir>` | Interactive Dashboard | High-density terminal dashboard with single-key action loop (`Enter`, `p`, `r`, `c`, `d`, `j`/`k`, `q`) |
 | `git-sync doctor` | `--ssh`, `--group <dir>`, `--json` | Diagnostics table / JSON | Proactive credential sanity check (SSH agent, keys, credential helper, SSH multiplexing, remote reachability, locked repos) |
-| `git-sync pull` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--ff-only`/`--no-ff-only`, `--autostash`/`--no-autostash`, `--sync-branches`/`--no-sync-branches`, `--submodules`/`--no-submodules`, `--strategy <abort\|rebase\|merge>`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--recover-locks`, `-i`/`--interactive`, `--group <dir>`, `--json` | Progress logs / JSON | Fast-forward update of current branch + auxiliary branches with dirty tree autostash, divergence resolution & stale lock recovery |
+| `git-sync pull` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--ff-only`/`--no-ff-only`, `--autostash`/`--no-autostash`, `--sync-branches`/`--no-sync-branches`, `--submodules`/`--no-submodules`, `--unshallow`, `--strategy <abort\|rebase\|merge>`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--recover-locks`, `-i`/`--interactive`, `--group <dir>`, `--json` | Progress logs / JSON | Fast-forward update of current branch + auxiliary branches with dirty tree autostash, divergence resolution, stale lock recovery & shallow submodule deepening |
 | `git-sync resolve` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--strategy <abort\|rebase\|merge\|stash>`, `--diff`, `--max-tokens <n>`, `-i`/`--interactive`, `--group <dir>`, `--fetch`/`--no-fetch`, `--compact`/`--summary`, `--json` | Interactive prompt / JSON | Guided diagnostics, diff inspection, and resolution for diverged branches |
 | `git-sync push` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--branch <name>`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json` | Progress logs / JSON | Push committed branches to upstream remote tracking targets |
 | `git-sync dirty` | `--group <dir>`, `--json` | List of modified files | Quick audit of uncommitted work |
@@ -27,7 +27,7 @@
 | `git-sync worktree` | `prune`/`list`, `[repos...]`, `--all`, `--expire <time>`, `--group <dir>`, `--dry-run`, `--json` | Table / Progress logs / JSON | Inspect linked worktree topology, clean missing worktree metadata/orphaned admin dirs, and warn on dirty linked worktrees |
 
 Global options (usable before or after subcommands):
-`-v`, `--version`, `--config <path>`, `--profile <name>`, `--root <dir>`, `--workers <n|auto>`, `--auto-tune` / `--adaptive`, `--timeout <sec>`, `--retries <n>`, `--preflight`, `--exclude <patterns...>`, `--compact`, `--summary`, `--changelog`, `--submodules` / `--no-submodules`, `--max-tokens <n>`, `--benchmark`, `--telemetry`, `--no-cache`, `--remote <name>`, `--dry-run`, `--no-dry-run`, `--json`.
+`-v`, `--version`, `--config <path>`, `--profile <name>`, `--root <dir>`, `--workers <n|auto>`, `--auto-tune` / `--adaptive`, `--timeout <sec>`, `--retries <n>`, `--preflight`, `--exclude <patterns...>`, `--compact`, `--summary`, `--changelog`, `--submodules` / `--no-submodules`, `--unshallow`, `--max-tokens <n>`, `--benchmark`, `--telemetry`, `--no-cache`, `--remote <name>`, `--dry-run`, `--no-dry-run`, `--json`.
 
 ### 2. Agent JSON Schema (`--json`)
 
@@ -48,6 +48,7 @@ Omit the heavy `items` list and output only high-level operational triage arrays
   "stale_worktrees": [],
   "has_submodules": [],
   "submodule_drift": [],
+  "shallow_submodules": [],
   "no_remote": [],
   "no_upstream": [],
   "offline": [],
@@ -79,6 +80,7 @@ Outputs the top-level summary plus the complete array of repository metadata:
   "stale_worktrees": [],
   "has_submodules": [],
   "submodule_drift": [],
+  "shallow_submodules": [],
   "no_remote": [],
   "errors": [],
   "items": [
@@ -318,6 +320,7 @@ Configuration layers:
 - **Token-Budget Aware Diff Truncation & File-Boundary Preservation:** Naive character slicing of Git diffs splits across patch headers or file hunks, producing broken diffs that fail LLM parsing or syntax highlighting. `truncate_diff` parses unified diffs by chunking on `diff --git ` boundaries. Whole file chunks are preserved up to `max_tokens * 4` characters. If a single file chunk exceeds the budget, it is partially truncated at the closest newline boundary, and an explicit `[... truncated X more file(s), ~Y chars ...]` marker is appended.
 - **Deterministic Conventional Commit Classification & Unit Separator Log Framing:** Parsing Git commit logs with standard newlines breaks on multi-line commit bodies or embedded markdown lists. Using ASCII unit separator formatting (`%h%x00%s%x00%b%x1f`) unambiguously delimits commit records (`0x1F`) and field boundaries (`0x00`). Conventional Commit headers are deterministically parsed and mapped into Keep-a-Changelog buckets (`Breaking`, `Security`, `Added`, `Fixed`, `Changed`, `Removed`) with breaking changes flagged via `!` or `BREAKING[- ]CHANGE:` footers without LLM latency or external dependencies.
 - **Submodule Drift Detection & Autostash Isolation:** When `git status --porcelain` detects uncommitted submodule commits (` M vendor/sub`), running `git stash push -u` does not stash submodule commits and outputs `No local changes to save`. Autostash handlers must inspect this output to prevent recording phantom stashes that fail during unstash (`git stash pop`). Submodules are updated recursively via `update_submodules` using `git submodule update --init --recursive` with strict `GIT_TERMINAL_PROMPT=0` environment isolation.
+- **Shallow Submodule Deepening & Unshallow Fetch Recovery:** Truncated shallow submodule clones (`.git/shallow`) lack full commit history. Executing `git fetch --unshallow` on a complete repository throws fatal error 128 (`fatal: --unshallow on a complete repository does not make sense`). Shallow states must be inspected directly via on-disk inode checks (`get_repo_git_dir(path) / "shallow"`), bypassing subprocess overhead, and safely deepened via `unshallow_submodule` or `git-sync pull --submodules --unshallow` before submodule checkout.
 
 ---
 
