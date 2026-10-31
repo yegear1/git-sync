@@ -2,7 +2,7 @@
 
 This directory contains procedural skills tailored specifically to this project's architecture and domain.
 
-Organizational cross-cutting procedures (UI design, QA playbooks, host infrastructure) belong in [`ye-sandbox/agent-skills`](https://github.com/ye-sandbox/agent-skills) and run from `~/.cursor/skills`.
+Shared cross-cutting procedures (UI design, QA playbooks, host infrastructure) belong in the shared agent skills directory and run from `~/.cursor/skills` or `~/.gemini/antigravity/skills`.
 
 ## When to Create a Local Skill
 

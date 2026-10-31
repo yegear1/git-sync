@@ -36,11 +36,11 @@ Omit the heavy `items` list and output only high-level operational triage arrays
 
 ```json
 {
-  "root": "/home/yegear/github",
+  "root": "/home/user/github",
   "total": 30,
-  "pull_pending": ["ye-sandbox/template-agent"],
-  "push_pending": ["ye-dev/git-sync"],
-  "dirty": ["ye-dev/zimbra-glpi"],
+  "pull_pending": ["org/template-agent"],
+  "push_pending": ["org/git-sync"],
+  "dirty": ["org/service-app"],
   "diverged": [],
   "worktrees": [],
   "has_submodules": [],
@@ -50,7 +50,7 @@ Omit the heavy `items` list and output only high-level operational triage arrays
   "errors": [],
   "remediations": [
     {
-      "repo": "ye-dev/scratch-repo",
+      "repo": "org/scratch-repo",
       "status": "NO_REMOTE",
       "network_state": "unconfigured",
       "action_required": "configure_remote",

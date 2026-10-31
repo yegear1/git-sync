@@ -1436,7 +1436,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # status
     p_status = subparsers.add_parser("status", parents=[common], help="Show status of all repositories")
-    p_status.add_argument("--group", default=None, help="Filter by subfolder (e.g. ye-dev, ye-sandbox)")
+    p_status.add_argument("--group", default=None, help="Filter by subfolder/group (e.g. work, personal, oss)")
     p_status.add_argument("--fetch", dest="fetch", action="store_true", default=None, help="Fetch remotes")
     p_status.add_argument("--no-fetch", dest="fetch", action="store_false", default=None, help="Skip remote fetch (instant local check)")
     p_status.add_argument("--pending", action="store_true", default=None, help="Only show repos with pending actions or dirty files")

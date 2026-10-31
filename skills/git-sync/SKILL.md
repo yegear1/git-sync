@@ -45,15 +45,15 @@ git-sync status --pending
 **JSON Output Contract:**
 ```json
 {
-  "root": "/home/yegear/github",
+  "root": "/home/user/github",
   "total": 38,
-  "pull_pending": ["ye-sandbox/template-agent"],
-  "push_pending": ["ye-dev/git-sync"],
-  "dirty": ["ye-sandbox/polyglot-terminal"],
+  "pull_pending": ["org/template-agent"],
+  "push_pending": ["org/git-sync"],
+  "dirty": ["org/terminal-ui"],
   "diverged": [],
   "worktrees": [],
   "has_submodules": [],
-  "no_remote": ["tests/clipflow-web-test-1"],
+  "no_remote": ["tests/sample-repo-test-1"],
   "errors": []
 }
 ```
@@ -67,7 +67,7 @@ git-sync status --pending
 git-sync pull --all --compact --json
 
 # Pull specific repositories with structured JSON output:
-git-sync pull ye-dev/git-sync ye-sandbox/clipflow-web --compact --json
+git-sync pull org/git-sync org/repo-b --compact --json
 
 # Interactive pull for human terminals with animated progress indicator:
 git-sync pull --all

@@ -8,9 +8,9 @@ version = "0.1.0"
 description = "Fast, concurrent multi-repository synchronization tool for GitHub workspaces."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [
-    {name = "yegear1", email = "pogdopogdopogchamp@gmail.com"}
+    {name = "yegear1", email = "yegear1@users.noreply.github.com"}
 ]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -23,8 +23,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ye-sandbox/git-sync"
-Repository = "https://github.com/ye-sandbox/git-sync"
+Homepage = "https://github.com/yegear1/git-sync"
+Repository = "https://github.com/yegear1/git-sync"
 
 [project.scripts]
 git-sync = "git_sync.cli:main"
