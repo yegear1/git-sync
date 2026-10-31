@@ -37,6 +37,7 @@ from git_sync.engine import (
     find_diverged_repos,
     find_locked_repos,
     find_push_pending_repos,
+    format_changelog_summary,
     get_divergence_details,
     get_divergence_diff,
     inspect_github_cli,
@@ -402,6 +403,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
     retries = getattr(args, "retries", DEFAULT_RETRIES)
     is_fetch = not args.no_fetch
+    changelog_flag = getattr(args, "changelog", None)
+    changelog_enabled = bool(changelog_flag if changelog_flag is not None else getattr(config, "status_changelog", False))
     configured_w = None if auto_tuned else args.workers
     effective_workers = controller.determine_workers(
         len(all_repos),
@@ -412,7 +415,20 @@ def cmd_status(args: argparse.Namespace) -> int:
     benchmark.optimal_workers = effective_workers
     with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
         futures = {
-            executor.submit(inspect_repo, r, root, not args.no_fetch, args.timeout, cache, remote, benchmark, retries): r
+            executor.submit(
+                inspect_repo,
+                r,
+                root,
+                not args.no_fetch,
+                args.timeout,
+                cache,
+                remote,
+                benchmark,
+                retries,
+                False,
+                False,
+                changelog_enabled,
+            ): r
             for r in all_repos
         }
         with ProgressIndicator("Inspecionando repositórios...", total=len(all_repos), enabled=show_progress) as progress:
@@ -465,6 +481,18 @@ def cmd_status(args: argparse.Namespace) -> int:
                 if r.get("remediation")
             ],
         }
+        if changelog_enabled:
+            summary["changelogs"] = {
+                r["rel_path"]: {
+                    "incoming_categories": (r.get("changelog") or {}).get("incoming_categories", {}),
+                    "outgoing_categories": (r.get("changelog") or {}).get("outgoing_categories", {}),
+                    "incoming_breaking": (r.get("changelog") or {}).get("incoming_breaking", 0),
+                    "outgoing_breaking": (r.get("changelog") or {}).get("outgoing_breaking", 0),
+                    "has_breaking": (r.get("changelog") or {}).get("has_breaking", False),
+                }
+                for r in results
+                if r.get("changelog") and (r["changelog"].get("incoming") or r["changelog"].get("outgoing"))
+            }
         if not getattr(args, "compact", False):
             summary["items"] = results
         if getattr(args, "benchmark", False):
@@ -478,6 +506,15 @@ def cmd_status(args: argparse.Namespace) -> int:
         dirty_count = sum(1 for r in results if r["is_dirty"])
         diverged_count = sum(1 for r in results if r["status"] == "DIVERGED")
         print(f"Total: {len(results)} repositórios | Pendentes de Pull: {pending_pull} | Pendentes de Push: {pending_push} | Divergidos: {diverged_count} | Modificados (Dirty): {dirty_count}\n")
+        if changelog_enabled:
+            for r in results:
+                if r.get("changelog") and (r["changelog"].get("incoming") or r["changelog"].get("outgoing")):
+                    cl = r["changelog"]
+                    inc_s = format_changelog_summary(cl.get("incoming_categories", {})) or "-"
+                    out_s = format_changelog_summary(cl.get("outgoing_categories", {})) or "-"
+                    brk = " ⚠️ BREAKING" if cl.get("has_breaking") else ""
+                    print(f"  • {r['rel_path']}{brk}: incoming[{inc_s}] | outgoing[{out_s}]")
+            print()
         if getattr(args, "benchmark", False):
             _print_benchmark_output(benchmark, getattr(args, "json", False))
         return 0
@@ -540,6 +577,16 @@ def cmd_status(args: argparse.Namespace) -> int:
             details.append(f"{r['behind']} atrás")
         if r["ahead"] > 0:
             details.append(f"{r['ahead']} à frente")
+        if changelog_enabled and r.get("changelog"):
+            cl = r["changelog"]
+            if cl.get("has_breaking"):
+                details.append("⚠️ BREAKING")
+            if cl.get("incoming_categories"):
+                inc_s = format_changelog_summary(cl["incoming_categories"])
+                details.append(f"incoming[{inc_s}]")
+            if cl.get("outgoing_categories"):
+                out_s = format_changelog_summary(cl["outgoing_categories"])
+                details.append(f"outgoing[{out_s}]")
         if r["aux_branches_behind"]:
             aux_desc = ", ".join(f"{k}:{v}" for k, v in r["aux_branches_behind"].items())
             details.append(f"aux_behind[{aux_desc}]")
@@ -568,6 +615,20 @@ def cmd_status(args: argparse.Namespace) -> int:
 
         detail_str = "; ".join(details)
         print(f"{sym:<15} {r['rel_path']:<40} {r['branch']:<12} {detail_str}")
+        if changelog_enabled and r.get("changelog"):
+            cl = r["changelog"]
+            if cl.get("incoming"):
+                print(f"    ⬇️ incoming ({len(cl['incoming'])}):")
+                for c in cl["incoming"]:
+                    brk_tag = " [BREAKING]" if c.get("is_breaking") else ""
+                    scope_tag = f"({c['scope']})" if c.get("scope") else ""
+                    print(f"      • [{c['category']}]{brk_tag} {c['type']}{scope_tag}: {c['description']} ({c['hash']})")
+            if cl.get("outgoing"):
+                print(f"    ⬆️ outgoing ({len(cl['outgoing'])}):")
+                for c in cl["outgoing"]:
+                    brk_tag = " [BREAKING]" if c.get("is_breaking") else ""
+                    scope_tag = f"({c['scope']})" if c.get("scope") else ""
+                    print(f"      • [{c['category']}]{brk_tag} {c['type']}{scope_tag}: {c['description']} ({c['hash']})")
 
     print("=" * 95)
     offline_count = sum(1 for r in results if r.get("network_state") == "offline")
@@ -1549,6 +1610,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     common.add_argument("--no-dry-run", dest="dry_run", action="store_false", default=argparse.SUPPRESS, help="Disable dry-run simulation mode")
     common.add_argument("--dashboard", "--tui", dest="dashboard", action="store_true", default=argparse.SUPPRESS, help="Launch interactive terminal dashboard")
     common.add_argument("--max-tokens", type=int, default=argparse.SUPPRESS, help="Maximum token budget for diff inspection (~4 chars/token)")
+    common.add_argument("--changelog", action="store_true", default=argparse.SUPPRESS, help="Summarize pending incoming and outgoing commit categories (Conventional Commits)")
 
     parser = argparse.ArgumentParser(
         prog="git-sync",
@@ -1710,6 +1772,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     compact_flag = getattr(args, "compact", None)
     args.compact = compact_flag if compact_flag is not None else config.status_compact
+
+    changelog_flag = getattr(args, "changelog", None)
+    args.changelog = changelog_flag if changelog_flag is not None else config.status_changelog
 
     ff_only_flag = getattr(args, "ff_only", None)
     args.ff_only = ff_only_flag if ff_only_flag is not None else config.pull_ff_only

@@ -16,16 +16,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from git_sync.cli import main
 from git_sync.core import (
+    ClassifiedCommit,
+    classify_commit,
     discover_repos,
     find_push_pending_repos,
+    format_changelog_summary,
+    get_repo_commits,
+    get_repo_pending_changelog,
     get_submodules_status,
     get_worktree_info,
     inspect_repo,
     match_repo,
+    parse_commit_log,
     pull_repo,
     push_repo,
     run_git,
+    summarize_commit_categories,
 )
+from git_sync.ui.dashboard import InteractiveDashboard
 
 
 class TestGitSyncCore(unittest.TestCase):
@@ -575,6 +583,284 @@ class TestGitSyncCore(unittest.TestCase):
         data = json.loads(buf_json.getvalue())
         self.assertIn("pkg_offline", data["no_remote"])
         self.assertEqual(data["errors"], [])
+
+    def test_conventional_commit_classifier_categories(self):
+        """Verify deterministic Conventional Commit classification into Keep-a-Changelog buckets."""
+        # Added (feat, feature, add)
+        c1 = classify_commit("a1b2c3d", "feat(api): add v2 telemetry endpoint")
+        self.assertEqual(c1.type, "feat")
+        self.assertEqual(c1.scope, "api")
+        self.assertEqual(c1.description, "add v2 telemetry endpoint")
+        self.assertEqual(c1.category, "Added")
+        self.assertFalse(c1.is_breaking)
+
+        # Fixed (fix, bugfix, hotfix)
+        c2 = classify_commit("b2c3d4e", "fix(engine): handle empty diff in hunk chunker")
+        self.assertEqual(c2.type, "fix")
+        self.assertEqual(c2.scope, "engine")
+        self.assertEqual(c2.category, "Fixed")
+        self.assertFalse(c2.is_breaking)
+
+        # Changed (perf, refactor, docs, chore, style, build, ci, test)
+        c3 = classify_commit("c3d4e5f", "perf(cli): speed up repo discovery walk")
+        self.assertEqual(c3.category, "Changed")
+
+        c4 = classify_commit("d4e5f6a", "refactor(config): simplify source provenance tracking")
+        self.assertEqual(c4.category, "Changed")
+
+        c5 = classify_commit("e5f6a7b", "docs(agent): update NOTES with changelog schema")
+        self.assertEqual(c5.category, "Changed")
+
+        c6 = classify_commit("f6a7b8c", "chore(deps): update test fixtures")
+        self.assertEqual(c6.category, "Changed")
+
+        # Removed (revert, remove, deprecate, delete)
+        c7 = classify_commit("0123456", "revert(core): rollback broken auth interceptor")
+        self.assertEqual(c7.category, "Removed")
+
+        c8 = classify_commit("1234567", "deprecate(api): mark v1 endpoint as obsolete")
+        self.assertEqual(c8.category, "Removed")
+
+        # Security (sec, security, vuln)
+        c9 = classify_commit("2345678", "sec(auth): sanitize bearer token in stdout logs")
+        self.assertEqual(c9.category, "Security")
+        self.assertEqual(c9.scope, "auth")
+
+    def test_conventional_commit_breaking_changes(self):
+        """Verify breaking changes are flagged via '!' in prefix or body footer."""
+        # 1. Breaking via '!' in header
+        c1 = classify_commit("3456789", "feat!: drop python 3.9 support")
+        self.assertTrue(c1.is_breaking)
+        self.assertEqual(c1.category, "Breaking")
+        self.assertEqual(c1.type, "feat")
+
+        # 2. Breaking via '!' with scope
+        c2 = classify_commit("4567890", "fix(auth)!: require signed tokens for all routes")
+        self.assertTrue(c2.is_breaking)
+        self.assertEqual(c2.category, "Breaking")
+        self.assertEqual(c2.scope, "auth")
+
+        # 3. Breaking via body BREAKING CHANGE: footer
+        body3 = "Refactors response schemas.\n\nBREAKING CHANGE: payload key 'user_id' renamed to 'id'."
+        c3 = classify_commit("5678901", "feat(api): overhaul user response payload", body=body3)
+        self.assertTrue(c3.is_breaking)
+        self.assertEqual(c3.category, "Breaking")
+        self.assertIn("payload key 'user_id' renamed to 'id'", c3.breaking_note or "")
+
+        # 4. Breaking via body BREAKING-CHANGE: footer
+        body4 = "Removes old flag.\n\nBREAKING-CHANGE: --legacy-mode is no longer supported."
+        c4 = classify_commit("6789012", "refactor(cli): remove legacy mode", body=body4)
+        self.assertTrue(c4.is_breaking)
+        self.assertEqual(c4.category, "Breaking")
+        self.assertIn("--legacy-mode is no longer supported", c4.breaking_note or "")
+
+    def test_non_conventional_commit_heuristic_fallback(self):
+        """Verify non-conventional commit messages fall back to intuitive heuristics."""
+        c1 = classify_commit("7890123", "Add support for dark mode theme")
+        self.assertEqual(c1.category, "Added")
+
+        c2 = classify_commit("8901234", "Fix race condition in socket multiplexer")
+        self.assertEqual(c2.category, "Fixed")
+
+        c3 = classify_commit("9012345", "Remove obsolete helper functions")
+        self.assertEqual(c3.category, "Removed")
+
+        c4 = classify_commit("0123456", "Security patch for credential leak")
+        self.assertEqual(c4.category, "Security")
+
+        c5 = classify_commit("1234567", "Update README.md with badges")
+        self.assertEqual(c5.category, "Changed")
+
+        c6 = classify_commit("2345678", "Breaking change: drop deprecated endpoints")
+        self.assertTrue(c6.is_breaking)
+        self.assertEqual(c6.category, "Breaking")
+
+    def test_parse_commit_log_unit_separator(self):
+        """Verify parsing git log output delimited with null and unit separator."""
+        log_output = (
+            "a1b2c3d\x00feat(cli): add --changelog flag\x00Adds Conventional Commit triage\x1f"
+            "b2c3d4e\x00fix!: prevent panic on null ref\x00BREAKING CHANGE: null no longer accepted\x1f"
+            "c3d4e5f\x00docs: update changelog guide\x00\x1f"
+        )
+        commits = parse_commit_log(log_output)
+        self.assertEqual(len(commits), 3)
+
+        self.assertEqual(commits[0].hash, "a1b2c3d")
+        self.assertEqual(commits[0].category, "Added")
+        self.assertFalse(commits[0].is_breaking)
+
+        self.assertEqual(commits[1].hash, "b2c3d4e")
+        self.assertEqual(commits[1].category, "Breaking")
+        self.assertTrue(commits[1].is_breaking)
+
+        self.assertEqual(commits[2].hash, "c3d4e5f")
+        self.assertEqual(commits[2].category, "Changed")
+        self.assertFalse(commits[2].is_breaking)
+
+        # Empty or whitespace output
+        self.assertEqual(parse_commit_log(""), [])
+        self.assertEqual(parse_commit_log("\n  \n"), [])
+
+    def test_summarize_and_format_changelog(self):
+        """Verify category summarization and canonical ordering."""
+        commits = [
+            classify_commit("1", "feat!: breaking api change"),
+            classify_commit("2", "feat: new feature 1"),
+            classify_commit("3", "feat: new feature 2"),
+            classify_commit("4", "fix: resolve bug 1"),
+            classify_commit("5", "docs: update docs"),
+            classify_commit("6", "sec: patch leak"),
+        ]
+        summary = summarize_commit_categories(commits)
+        self.assertEqual(summary["Breaking"], 1)
+        self.assertEqual(summary["Security"], 1)
+        self.assertEqual(summary["Added"], 2)
+        self.assertEqual(summary["Fixed"], 1)
+        self.assertEqual(summary["Changed"], 1)
+
+        summary_str = format_changelog_summary(summary)
+        self.assertEqual(summary_str, "Breaking: 1, Security: 1, Added: 2, Fixed: 1, Changed: 1")
+        self.assertEqual(format_changelog_summary({}), "")
+
+    def test_get_repo_pending_changelog_real_git(self):
+        """Verify live git commit classification between local and upstream."""
+        origin = self._init_repo(self.root / "origin_changelog")
+        run_git(str(origin), ["checkout", "-b", "main"])
+        (origin / "init.txt").write_text("initial\n")
+        run_git(str(origin), ["add", "init.txt"])
+        run_git(str(origin), ["commit", "-m", "chore: initial commit"])
+
+        # Clone to local
+        local = self.root / "local_changelog"
+        run_git(str(self.root), ["clone", str(origin), str(local)])
+
+        # Upstream adds incoming commits
+        (origin / "feat1.txt").write_text("feature 1\n")
+        run_git(str(origin), ["add", "feat1.txt"])
+        run_git(str(origin), ["commit", "-m", "feat(api): add endpoint v2"])
+
+        (origin / "fix1.txt").write_text("fix 1\n")
+        run_git(str(origin), ["add", "fix1.txt"])
+        run_git(str(origin), ["commit", "-m", "fix(db): reconnect on timeout"])
+
+        # Local adds outgoing commits (diverged)
+        (local / "feat_local.txt").write_text("local feature\n")
+        run_git(str(local), ["add", "feat_local.txt"])
+        run_git(str(local), ["commit", "-m", "feat!: breaking schema revamp"])
+
+        (local / "docs_local.txt").write_text("local docs\n")
+        run_git(str(local), ["add", "docs_local.txt"])
+        run_git(str(local), ["commit", "-m", "docs: update install steps"])
+
+        # Fetch remote refs in local repo
+        run_git(str(local), ["fetch", "origin"])
+
+        # Inspect repo with changelog=True
+        info = inspect_repo(str(local), str(self.root), do_fetch=False, changelog=True)
+        self.assertEqual(info["status"], "DIVERGED")
+        self.assertEqual(info["ahead"], 2)
+        self.assertEqual(info["behind"], 2)
+
+        cl = info["changelog"]
+        self.assertIsNotNone(cl)
+        self.assertEqual(len(cl["incoming"]), 2)
+        self.assertEqual(len(cl["outgoing"]), 2)
+        self.assertEqual(cl["incoming_categories"], {"Added": 1, "Fixed": 1})
+        self.assertEqual(cl["outgoing_categories"], {"Breaking": 1, "Changed": 1})
+        self.assertTrue(cl["has_breaking"])
+        self.assertEqual(cl["outgoing_breaking"], 1)
+        self.assertEqual(cl["incoming_breaking"], 0)
+
+    def test_status_cli_changelog_table_and_json(self):
+        """Verify CLI status --changelog renders table summaries and structured JSON."""
+        origin = self._init_repo(self.root / "srv_changelog")
+        run_git(str(origin), ["checkout", "-b", "main"])
+        (origin / "base.txt").write_text("base\n")
+        run_git(str(origin), ["add", "base.txt"])
+        run_git(str(origin), ["commit", "-m", "chore: base"])
+
+        local = self.root / "app_changelog"
+        run_git(str(self.root), ["clone", str(origin), str(local)])
+
+        # Add commit in local
+        (local / "patch.txt").write_text("patch\n")
+        run_git(str(local), ["add", "patch.txt"])
+        run_git(str(local), ["commit", "-m", "feat(ui): add compact dashboard"])
+
+        # 1. Text table with --changelog
+        buf_text = io.StringIO()
+        with patch("sys.stdout", buf_text):
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--changelog"])
+        self.assertEqual(ret, 0)
+        table_output = buf_text.getvalue()
+        self.assertIn("app_changelog", table_output)
+        self.assertIn("outgoing[Added: 1]", table_output)
+        self.assertIn("feat(ui): add compact dashboard", table_output)
+
+        # 2. JSON compact with --changelog
+        buf_json = io.StringIO()
+        with patch("sys.stdout", buf_json):
+            ret_json = main(["--root", str(self.root), "status", "--no-fetch", "--changelog", "--compact", "--json"])
+        self.assertEqual(ret_json, 0)
+        compact_data = json.loads(buf_json.getvalue())
+        self.assertIn("app_changelog", compact_data["changelogs"])
+        self.assertEqual(compact_data["changelogs"]["app_changelog"]["outgoing_categories"], {"Added": 1})
+
+        # 3. JSON full items with --changelog
+        buf_items = io.StringIO()
+        with patch("sys.stdout", buf_items):
+            ret_items = main(["--root", str(self.root), "status", "--no-fetch", "--changelog", "--json"])
+        self.assertEqual(ret_items, 0)
+        items_data = json.loads(buf_items.getvalue())
+        app_item = next(item for item in items_data["items"] if item["rel_path"] == "app_changelog")
+        self.assertIn("changelog", app_item)
+        self.assertEqual(len(app_item["changelog"]["outgoing"]), 1)
+        self.assertEqual(app_item["changelog"]["outgoing"][0]["type"], "feat")
+        self.assertEqual(app_item["changelog"]["outgoing"][0]["scope"], "ui")
+
+    def test_dashboard_changelog_action(self):
+        """Verify InteractiveDashboard action_inspect_changelog renders changelog details."""
+        repo_dict = {
+            "name": "mock-repo",
+            "rel_path": "mock-repo",
+            "path": str(self.root),
+            "branch": "main",
+            "status": "PUSH_PENDING",
+            "ahead": 1,
+            "behind": 0,
+            "upstream": "origin/main",
+            "changelog": {
+                "incoming": [],
+                "outgoing": [
+                    {
+                        "hash": "1a2b3c4",
+                        "subject": "feat(core)!: major breaking redesign",
+                        "type": "feat",
+                        "scope": "core",
+                        "description": "major breaking redesign",
+                        "is_breaking": True,
+                        "category": "Breaking",
+                    }
+                ],
+                "incoming_categories": {},
+                "outgoing_categories": {"Breaking": 1},
+                "incoming_breaking": 0,
+                "outgoing_breaking": 1,
+                "has_breaking": True,
+            },
+        }
+        buf = io.StringIO()
+        dashboard = InteractiveDashboard(
+            root=str(self.root),
+            repos=[repo_dict],
+            stream=buf,
+            key_reader=lambda: "q",
+        )
+        report = dashboard.action_inspect_changelog()
+        self.assertIn("Changelog: mock-repo", report)
+        self.assertIn("major breaking redesign", report)
+        self.assertIn("[BREAKING]", report)
+        self.assertIn("Changelog de 'mock-repo' inspecionado", dashboard.last_message)
 
 
 if __name__ == "__main__":

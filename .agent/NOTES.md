@@ -13,8 +13,8 @@
 
 | Subcommand | Flag Options | Primary Output | Use Case |
 |---|---|---|---|
-| `git-sync status` | `--fetch`/`--no-fetch`, `--pending`, `--compact`/`--summary`, `--dashboard`/`--tui`, `-i`/`--interactive`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json` | Table / Dashboard / JSON | Inspection of sync states across all repos in root |
-| `git-sync dashboard` / `tui` | `--fetch`/`--no-fetch`, `--pending`, `--group <dir>` | Interactive Dashboard | High-density terminal dashboard with single-key action loop (`Enter`, `p`, `r`, `d`, `j`/`k`, `q`) |
+| `git-sync status` | `--fetch`/`--no-fetch`, `--pending`, `--compact`/`--summary`, `--changelog`, `--dashboard`/`--tui`, `-i`/`--interactive`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json` | Table / Dashboard / JSON | Inspection of sync states across all repos in root |
+| `git-sync dashboard` / `tui` | `--fetch`/`--no-fetch`, `--pending`, `--changelog`, `--group <dir>` | Interactive Dashboard | High-density terminal dashboard with single-key action loop (`Enter`, `p`, `r`, `c`, `d`, `j`/`k`, `q`) |
 | `git-sync doctor` | `--ssh`, `--group <dir>`, `--json` | Diagnostics table / JSON | Proactive credential sanity check (SSH agent, keys, credential helper, SSH multiplexing, remote reachability, locked repos) |
 | `git-sync pull` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--ff-only`/`--no-ff-only`, `--autostash`/`--no-autostash`, `--sync-branches`/`--no-sync-branches`, `--strategy <abort\|rebase\|merge>`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--recover-locks`, `-i`/`--interactive`, `--group <dir>`, `--json` | Progress logs / JSON | Fast-forward update of current branch + auxiliary branches with dirty tree autostash, divergence resolution & stale lock recovery |
 | `git-sync resolve` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--strategy <abort\|rebase\|merge\|stash>`, `--diff`, `--max-tokens <n>`, `-i`/`--interactive`, `--group <dir>`, `--fetch`/`--no-fetch`, `--compact`/`--summary`, `--json` | Interactive prompt / JSON | Guided diagnostics, diff inspection, and resolution for diverged branches |
@@ -26,7 +26,7 @@
 | `git-sync completion` | `[bash\|zsh]`, `--install`, `--target-dir <dir>`, `--json` | Script / JSON | Generate or install shell autocompletion definitions with dynamic repo lookup |
 
 Global options (usable before or after subcommands):
-`-v`, `--version`, `--config <path>`, `--profile <name>`, `--root <dir>`, `--workers <n|auto>`, `--auto-tune` / `--adaptive`, `--timeout <sec>`, `--retries <n>`, `--preflight`, `--exclude <patterns...>`, `--compact`, `--summary`, `--max-tokens <n>`, `--benchmark`, `--telemetry`, `--no-cache`, `--remote <name>`, `--dry-run`, `--no-dry-run`, `--json`.
+`-v`, `--version`, `--config <path>`, `--profile <name>`, `--root <dir>`, `--workers <n|auto>`, `--auto-tune` / `--adaptive`, `--timeout <sec>`, `--retries <n>`, `--preflight`, `--exclude <patterns...>`, `--compact`, `--summary`, `--changelog`, `--max-tokens <n>`, `--benchmark`, `--telemetry`, `--no-cache`, `--remote <name>`, `--dry-run`, `--no-dry-run`, `--json`.
 
 ### 2. Agent JSON Schema (`--json`)
 
@@ -59,13 +59,6 @@ Omit the heavy `items` list and output only high-level operational triage arrays
     }
   ]
 }
-```
-
-#### 2.4 Token-Budget Aware Diff Inspection Schema (`resolve --diff`)
-When inspecting divergent branch diffs with `git-sync resolve --diff` (either directly or with `--json`), token budgets can be enforced via `--max-tokens <n>` (defaulting to 1000 tokens / ~4000 chars when `--compact` or `--summary` is active). The deterministic chunker (`truncate_diff`) preserves complete file boundaries (`diff --git `) up to the budget, partially truncates oversized single-file diffs at line boundaries, and appends an explicit truncation marker:
-
-```
-[... truncated X more file(s), ~Y chars ...]
 ```
 
 #### 2.2 Full Detail Mode (Default `--json`)
@@ -121,13 +114,6 @@ Outputs the top-level summary plus the complete array of repository metadata:
     }
   ]
 }
-```
-
-#### 2.4 Token-Budget Aware Diff Inspection Schema (`resolve --diff`)
-When inspecting divergent branch diffs with `git-sync resolve --diff` (either directly or with `--json`), token budgets can be enforced via `--max-tokens <n>` (defaulting to 1000 tokens / ~4000 chars when `--compact` or `--summary` is active). The deterministic chunker (`truncate_diff`) preserves complete file boundaries (`diff --git `) up to the budget, partially truncates oversized single-file diffs at line boundaries, and appends an explicit truncation marker:
-
-```
-[... truncated X more file(s), ~Y chars ...]
 ```
 
 #### 2.3 Telemetry Benchmark Schema (`--benchmark` or `--telemetry`)
@@ -187,6 +173,51 @@ When inspecting divergent branch diffs with `git-sync resolve --diff` (either di
 
 ```
 [... truncated X more file(s), ~Y chars ...]
+```
+
+#### 2.5 Conventional Commit Classifier & Changelog Schema (`status --changelog`)
+When inspecting pending repositories with `git-sync status --changelog`, pending commits (`HEAD..@{u}` incoming and `@{u}..HEAD` outgoing) are parsed using `%h%x00%s%x00%b%x1f` (unit-separator delimited) and classified into Keep-a-Changelog buckets (`Breaking`, `Security`, `Added`, `Fixed`, `Changed`, `Removed`) without external dependencies or LLM overhead. Breaking changes are flagged deterministically via `!` prefix (`feat!:`, `fix(auth)!:`) or `BREAKING[- ]CHANGE:` footers.
+
+In compact JSON mode (`--compact` / `--summary`):
+```json
+{
+  "changelogs": {
+    "org/repo": {
+      "incoming_categories": {"Added": 2, "Fixed": 1},
+      "outgoing_categories": {"Changed": 1},
+      "incoming_breaking": 0,
+      "outgoing_breaking": 0,
+      "has_breaking": false
+    }
+  }
+}
+```
+
+In detailed mode (`items[...]`):
+```json
+{
+  "changelog": {
+    "incoming": [
+      {
+        "hash": "a1b2c3d",
+        "subject": "feat(api): add v2 endpoint",
+        "body": "",
+        "type": "feat",
+        "scope": "api",
+        "description": "add v2 endpoint",
+        "is_breaking": false,
+        "category": "Added",
+        "breaking_note": null
+      }
+    ],
+    "outgoing": [],
+    "incoming_categories": {"Added": 1},
+    "outgoing_categories": {},
+    "incoming_breaking": 0,
+    "outgoing_breaking": 0,
+    "has_breaking": false
+  }
+}
 ```
 
 ### 3. Workspace Profiles, Hierarchical Config Merging, and `.git-sync.json` Schema
@@ -280,6 +311,7 @@ Configuration layers:
 - **GitHub CLI (`gh`) Integration & Transient Offline State Segregation:** In environments using GitHub CLI and HTTPS remotes, credential validity is governed by `gh auth status` rather than SSH keys. The `doctor` command inspects `gh` installation, login state, and token scopes. During status checks, transient network drops (`NETWORK_DNS_FAILURE`, `NETWORK_TIMEOUT`, `NETWORK_UNREACHABLE`) are differentiated from permanently unconfigured remotes (`NO_REMOTE`) and missing tracking branches (`NO_UPSTREAM`), attaching structured actionable remediation commands (e.g. `git-sync status --no-fetch`, `gh auth login`, `git remote add`) in both table and JSON outputs.
 - **ANSI `NO_COLOR` Compliance & Interactive Dashboard Raw TTY Handling:** Terminal styling (`AnsiStyler`, `format_diff_stat`) strictly honors the `NO_COLOR` specification (any non-empty `NO_COLOR` disables ANSI codes) and `sys.stdout.isatty()`. The interactive dashboard (`InteractiveDashboard`) uses `termios`/`tty.setraw` on interactive TTYs with `finally` attribute restoration and line-based fallback on non-TTYs, returning exit code `130` on `SIGINT` (`Ctrl+C`) or `EOF` (`Ctrl+D`).
 - **Token-Budget Aware Diff Truncation & File-Boundary Preservation:** Naive character slicing of Git diffs splits across patch headers or file hunks, producing broken diffs that fail LLM parsing or syntax highlighting. `truncate_diff` parses unified diffs by chunking on `diff --git ` boundaries. Whole file chunks are preserved up to `max_tokens * 4` characters. If a single file chunk exceeds the budget, it is partially truncated at the closest newline boundary, and an explicit `[... truncated X more file(s), ~Y chars ...]` marker is appended.
+- **Deterministic Conventional Commit Classification & Unit Separator Log Framing:** Parsing Git commit logs with standard newlines breaks on multi-line commit bodies or embedded markdown lists. Using ASCII unit separator formatting (`%h%x00%s%x00%b%x1f`) unambiguously delimits commit records (`0x1F`) and field boundaries (`0x00`). Conventional Commit headers are deterministically parsed and mapped into Keep-a-Changelog buckets (`Breaking`, `Security`, `Added`, `Fixed`, `Changed`, `Removed`) with breaking changes flagged via `!` or `BREAKING[- ]CHANGE:` footers without LLM latency or external dependencies.
 
 ---
 

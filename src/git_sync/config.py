@@ -58,6 +58,7 @@ DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
     "status": {
         "compact": False,
         "no_fetch": False,
+        "changelog": False,
     },
     "profiles": {
         "work": {
@@ -154,6 +155,7 @@ class GitSyncConfig:
     status_pending: bool = False
     status_compact: bool = False
     status_prune: bool = False
+    status_changelog: bool = False
     hygiene: bool = False
     prune: bool = False
     benchmark: bool = False
@@ -203,6 +205,7 @@ class GitSyncConfig:
                 "pending": self.status_pending,
                 "compact": self.status_compact,
                 "prune": self.status_prune,
+                "changelog": self.status_changelog,
                 "hygiene": self.hygiene,
             },
             "prune": self.prune,
@@ -418,6 +421,7 @@ def resolve_config(
     status_pending = bool(status_cfg.get("pending", combined.get("pending", False)))
     status_compact = bool(status_cfg.get("compact", combined.get("compact", False)))
     status_prune = bool(status_cfg.get("prune", combined.get("status_prune", global_prune)))
+    status_changelog = bool(status_cfg.get("changelog", combined.get("changelog", False)))
     global_hygiene = bool(combined.get("hygiene", False))
     hygiene = bool(status_cfg.get("hygiene", combined.get("hygiene", global_hygiene)))
     if "group" in status_cfg and isinstance(status_cfg["group"], str) and not groups:
@@ -468,6 +472,7 @@ def resolve_config(
         status_pending=status_pending,
         status_compact=status_compact,
         status_prune=status_prune,
+        status_changelog=status_changelog,
         hygiene=hygiene,
         prune=global_prune,
         benchmark=benchmark,

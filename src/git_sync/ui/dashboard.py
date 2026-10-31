@@ -18,7 +18,9 @@ from git_sync.engine import (
     DEFAULT_WORKERS,
     AdaptiveConcurrencyController,
     discover_repos,
+    format_changelog_summary,
     get_divergence_diff,
+    get_repo_pending_changelog,
     inspect_repo,
     pull_repo,
     run_git,
@@ -261,6 +263,16 @@ class InteractiveDashboard:
             details.append(self.styler.cyan(f"↓{repo['behind']}"))
         if repo.get("ahead", 0) > 0:
             details.append(self.styler.magenta(f"↑{repo['ahead']}"))
+        if repo.get("changelog"):
+            cl = repo["changelog"]
+            if cl.get("has_breaking"):
+                details.append(self.styler.red("!BREAKING"))
+            if cl.get("incoming_categories"):
+                inc_s = format_changelog_summary(cl["incoming_categories"])
+                details.append(self.styler.cyan(f"inc[{inc_s}]"))
+            if cl.get("outgoing_categories"):
+                out_s = format_changelog_summary(cl["outgoing_categories"])
+                details.append(self.styler.magenta(f"out[{out_s}]"))
         if repo.get("aux_branches_behind"):
             aux_cnt = len(repo["aux_branches_behind"])
             details.append(self.styler.cyan(f"aux↓{aux_cnt}"))
@@ -312,7 +324,7 @@ class InteractiveDashboard:
 
         controls = (
             "[Enter] Pull pendentes  [p] Pull selecionado  [r] Atualizar  "
-            "[d] Dirty/Diff  [j/k] Navegar  [q] Sair"
+            "[c] Changelog  [d] Dirty/Diff  [j/k] Navegar  [q] Sair"
         )
         lines.append(self.styler.bold(controls))
         output = "\n".join(lines)
@@ -419,6 +431,57 @@ class InteractiveDashboard:
         self.last_message = f"🔍 Inspecionado(s) {len(targets)} repositório(s)."
         return report
 
+    def action_inspect_changelog(self) -> str:
+        """Inspect and summarize Conventional Commit changelog for selected repository."""
+        if not self.repos:
+            msg = "⚠️ Nenhum repositório disponível para inspeção."
+            self.last_message = self.styler.yellow(msg)
+            return msg
+
+        selected = self.repos[self.selected_idx]
+        rel = selected.get("rel_path", selected.get("name", ""))
+        upstream = selected.get("upstream")
+        ahead = selected.get("ahead", 0)
+        behind = selected.get("behind", 0)
+
+        cl = selected.get("changelog")
+        if not cl or (not cl.get("incoming") and not cl.get("outgoing") and (ahead > 0 or behind > 0)):
+            cl = get_repo_pending_changelog(
+                selected["path"],
+                upstream=upstream,
+                ahead=ahead,
+                behind=behind,
+                timeout=self.timeout,
+            )
+            selected["changelog"] = cl
+
+        lines: List[str] = []
+        header = self.styler.bold(f"📋 Changelog: {rel} ({selected.get('branch', '-')})")
+        lines.append(header)
+
+        if not cl.get("incoming") and not cl.get("outgoing"):
+            lines.append("   (Sem commits pendentes entre HEAD e upstream)")
+        else:
+            if cl.get("incoming"):
+                inc_hdr = self.styler.cyan(f"⬇️ Commits Recebidos (Incoming - {len(cl['incoming'])}):")
+                lines.append(f"   {inc_hdr}")
+                for c in cl["incoming"]:
+                    cat_badge = self.styler.style(f"[{c['category']}]", "yellow" if c.get("is_breaking") else "green")
+                    brk = self.styler.red(" [BREAKING]") if c.get("is_breaking") else ""
+                    lines.append(f"     • {cat_badge}{brk} {c['subject']} ({c['hash']})")
+            if cl.get("outgoing"):
+                out_hdr = self.styler.magenta(f"⬆️ Commits Locais (Outgoing - {len(cl['outgoing'])}):")
+                lines.append(f"   {out_hdr}")
+                for c in cl["outgoing"]:
+                    cat_badge = self.styler.style(f"[{c['category']}]", "yellow" if c.get("is_breaking") else "cyan")
+                    brk = self.styler.red(" [BREAKING]") if c.get("is_breaking") else ""
+                    lines.append(f"     • {cat_badge}{brk} {c['subject']} ({c['hash']})")
+
+        report = "\n".join(lines)
+        self._write("\n" + report + "\n")
+        self.last_message = f"📋 Changelog de '{rel}' inspecionado."
+        return report
+
     def run(self) -> int:
         """
         Execute the interactive single-key command loop.
@@ -444,6 +507,8 @@ class InteractiveDashboard:
                 elif norm_key in ("r", "R"):
                     self.refresh_repos(do_fetch=self.do_fetch)
                     self.last_message = self.styler.cyan("🔄 Status dos repositórios atualizado.")
+                elif norm_key in ("c", "C"):
+                    self.action_inspect_changelog()
                 elif norm_key in ("d", "D"):
                     self.action_inspect_dirty_diff()
                 elif norm_key in ("j", "J", "DOWN", "+"):
@@ -463,7 +528,7 @@ class InteractiveDashboard:
                         self.last_message = self.styler.yellow(f"⚠️ Índice fora do intervalo (1-{len(self.repos)}).")
                 else:
                     self.last_message = self.styler.yellow(
-                        f"⚠️ Tecla '{norm_key}' não reconhecida. Use Enter, p, r, d, j/k ou q."
+                        f"⚠️ Tecla '{norm_key}' não reconhecida. Use Enter, p, r, c, d, j/k ou q."
                     )
         except (KeyboardInterrupt, EOFError):
             self._write("\n⚠️ Dashboard encerrado (SIGINT/EOF).")
