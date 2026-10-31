@@ -7,18 +7,17 @@
 
 ## Active Task
 
-### 📌 Task [00.7]: Native `git sync` Subcommand Autocompletion and SVG Terminal Demo
+### 📌 Task [00.8]: Remote Health Check Telemetry and Latency Grading in Doctor
 
-- **Description:** Extend Bash and Zsh completion scripts so native `git sync <TAB>` invocation resolves subcommands and dynamic repository names alongside `git-sync <TAB>`, and add a lightweight vector terminal showcase (`docs/demo.svg`) with text fallback in `README.md` and `README.pt-br.md`.
-- **Systems Involved:** `src/git_sync/installer.py`, `docs/demo.svg`, `README.md`, `README.pt-br.md`, `tests/test_install_and_completion.py`
+- **Description:** Extend `git-sync doctor` with concurrent ping/handshake latency grading (A/B/C/F) across configured remotes, identifying degraded DNS or slow SSH multiplexing sockets.
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
 - **Action Type:**
   - [x] Read-only / Documentation
   - [x] Source code changes
 - **Status:** PLANNING
 
 ### Acceptance Criteria
-- [ ] Bash (`_git_sync`) and Zsh (`#compdef git-sync git-sync=git`) completions support both `git-sync` and `git sync`.
-- [ ] `docs/demo.svg` (<10 KB pure SVG) embedded in `README.md` and `README.pt-br.md` with `<details>` text fallback.
+- [ ] Latency grading measures and formats RTT per remote in doctor table and JSON.
 - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -34,16 +33,17 @@
 | [00.4] | Hierarchical Config Merging, Source Provenance Tracking, and Interactive Config Bootstrap | [eee95d3] | 2026-10-31 |
 | [00.5] | Token-Budget Aware Diff Truncation for Agent and CLI Inspection | [09fd287] | 2026-10-31 |
 | [00.6] | Deterministic Conventional Commit Classifier for Pending Upstream & Local Commits | [dfc876a] | 2026-10-31 |
+| [00.7] | Native `git sync` Subcommand Autocompletion and SVG Terminal Demo | [d0d64cd] | 2026-10-31 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-### 📌 Task [00.8]: Remote Health Check Telemetry and Latency Grading in Doctor
-- **Description:** Extend `git-sync doctor` with concurrent ping/handshake latency grading (A/B/C/F) across configured remotes, identifying degraded DNS or slow SSH multiplexing sockets.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
+### 📌 Task [00.9]: Automated Git Submodule Drift Detection and Optional Recursive Update
+- **Description:** Extend `git-sync status` and `git-sync pull` with `--submodules` support to surface detached/out-of-sync submodule commits and optionally update submodules recursively (`git submodule update --init --recursive`) with `GIT_TERMINAL_PROMPT=0`.
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/core.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Acceptance Criteria:**
-  - [ ] Latency grading measures and formats RTT per remote in doctor table and JSON.
+  - [ ] `git-sync pull --submodules` updates initialized submodules cleanly and reports submodule status in text and JSON.
   - [ ] Canonical test suite passes with exit code 0.
 
 ---
