@@ -7,9 +7,9 @@
 
 ## Active Task
 
-### 📌 Task [00.11]: Shallow Submodule Deepening and Unshallow Fetch Recovery
+### 📌 Task [00.12]: Sparse-Checkout Cone Pattern Detection and Synchronization Diagnostic
 
-- **Description:** Extend `git-sync` with automated detection of truncated shallow submodule trees (`.git/shallow`) and guided unshallow fetching (`--unshallow`) during branch synchronization.
+- **Description:** Extend `git-sync` with detection and safe synchronization handling for repositories configured with `git sparse-checkout` cone patterns.
 - **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Action Type:**
   - [x] Read-only / Documentation
@@ -17,7 +17,7 @@
 - **Status:** PLANNING
 
 ### Acceptance Criteria
-- [ ] Shallow submodule clones are safely detected and unshallowed without corrupting history.
+- [ ] Sparse-checkout repositories are identified in status and protected from unbounded checkout conflicts.
 - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -37,16 +37,17 @@
 | [00.8] | Remote Health Check Telemetry and Latency Grading in Doctor | [9e584da] | 2026-10-31 |
 | [00.9] | Automated Git Submodule Drift Detection and Optional Recursive Update | [bcba8cb] | 2026-10-31 |
 | [00.10] | Worktree Stale Pruning and Orphaned Worktree Cleanup Command | [6834019] | 2026-10-31 |
+| [00.11] | Shallow Submodule Deepening and Unshallow Fetch Recovery | [2d52d52] | 2026-10-31 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-### 📌 Task [00.12]: Sparse-Checkout Cone Pattern Detection and Synchronization Diagnostic
-- **Description:** Extend `git-sync` with detection and safe synchronization handling for repositories configured with `git sparse-checkout` cone patterns.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
+### 📌 Task [00.13]: Multi-Profile Dynamic Workspace Switching and Profile Scoped Defaults
+- **Description:** Enhance CLI and interactive dashboard with runtime workspace profile switching (`--profile <name>`) and scoped configuration presets.
+- **Systems Involved:** `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/test_config.py`
 - **Acceptance Criteria:**
-  - [ ] Sparse-checkout repositories are identified in status and protected from unbounded checkout conflicts.
+  - [ ] Named profiles can be selected dynamically and apply scoped root and worker options without restart.
   - [ ] Canonical test suite passes with exit code 0.
 
 ---
