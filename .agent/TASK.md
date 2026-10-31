@@ -7,17 +7,17 @@
 
 ## Active Task
 
-### 📌 Task [00.13]: Multi-Profile Dynamic Workspace Switching and Profile Scoped Defaults
+### 📌 Task [00.14]: Direct Push Pre-Flight Telemetry and Protected Branch Force-Push Defense
 
-- **Description:** Enhance CLI and interactive dashboard with runtime workspace profile switching (`--profile <name>`) and scoped configuration presets.
-- **Systems Involved:** `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/test_config.py`
+- **Description:** Provide proactive pre-flight checks and branch protection safeguards during push execution across workspaces.
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Action Type:**
   - [x] Read-only / Documentation
   - [x] Source code changes
 - **Status:** PLANNING
 
 ### Acceptance Criteria
-- [ ] Named profiles can be selected dynamically and apply scoped root and worker options without restart.
+- [ ] Pushing to protected branch configurations flags safety diagnostics and prevents accidental remote overrides.
 - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -39,16 +39,17 @@
 | [00.10] | Worktree Stale Pruning and Orphaned Worktree Cleanup Command | [6834019] | 2026-10-31 |
 | [00.11] | Shallow Submodule Deepening and Unshallow Fetch Recovery | [2d52d52] | 2026-10-31 |
 | [00.12] | Sparse-Checkout Cone Pattern Detection and Synchronization Diagnostic | [c7b4f13] | 2026-10-31 |
+| [00.13] | Multi-Profile Dynamic Workspace Switching and Profile Scoped Defaults | [71f9962] | 2026-10-31 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-### 📌 Task [00.14]: Direct Push Pre-Flight Telemetry and Protected Branch Force-Push Defense
-- **Description:** Provide proactive pre-flight checks and branch protection safeguards during push execution across workspaces.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
+### 📌 Task [00.15]: Dry-Run Interactive Confirmation and Bulk Action Preview Mode
+- **Description:** Provide interactive preview confirmation prompts with safety summaries before mutating repositories in non-interactive batch commands.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/progress.py`, `tests/test_progress_telemetry_dryrun.py`
 - **Acceptance Criteria:**
-  - [ ] Pushing to protected branch configurations flags safety diagnostics and prevents accidental remote overrides.
+  - [ ] Interactive prompts provide formatted visual confirmation and preview before multi-repo mutations.
   - [ ] Canonical test suite passes with exit code 0.
 
 ---
