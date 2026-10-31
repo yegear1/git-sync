@@ -7,6 +7,7 @@ import argparse
 import concurrent.futures
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -16,6 +17,8 @@ from git_sync import __version__
 from git_sync.config import (
     CONFIG_FILENAME,
     GitSyncConfig,
+    get_default_config_path,
+    init_config_file,
     load_config,
 )
 from git_sync.engine import (
@@ -1175,7 +1178,69 @@ def cmd_dirty(args: argparse.Namespace) -> int:
 
 
 def cmd_config(args: argparse.Namespace, config: GitSyncConfig) -> int:
-    """Display active workspace profile and resolved runtime configuration."""
+    """
+    Display active workspace profile and resolved runtime configuration,
+    or initialize/edit configuration templates.
+    # INVARIANT: --init creates templates without clobbering; --edit opens $EDITOR on TTY or prints path on non-TTY.
+    """
+    if getattr(args, "init", False):
+        res = init_config_file(
+            target_path=getattr(args, "config", None),
+            global_config=getattr(args, "global_config", False),
+            root=getattr(args, "root", None),
+        )
+        if getattr(args, "json", False):
+            print(json.dumps(res, indent=2))
+            return 0 if res.get("ok") else 1
+        if res.get("action") == "already_exists":
+            print(f"ℹ️  {res.get('message')}")
+        elif res.get("action") == "created":
+            print(f"✨ {res.get('message')}")
+        else:
+            print(f"❌ {res.get('message')}", file=sys.stderr)
+            return 1
+        if not getattr(args, "edit", False):
+            return 0
+
+    if getattr(args, "edit", False):
+        target_path_str = get_default_config_path(
+            global_config=getattr(args, "global_config", False),
+            custom_path=getattr(args, "config", None) or config.config_path,
+        )
+        target_path = Path(target_path_str)
+        if not target_path.is_file():
+            res = init_config_file(
+                target_path=str(target_path),
+                global_config=getattr(args, "global_config", False),
+                root=getattr(args, "root", None),
+            )
+            if not res.get("ok"):
+                if getattr(args, "json", False):
+                    print(json.dumps(res, indent=2))
+                else:
+                    print(f"❌ {res.get('message')}", file=sys.stderr)
+                return 1
+
+        is_tty = sys.stdin.isatty() and sys.stdout.isatty()
+        if not is_tty:
+            if getattr(args, "json", False):
+                print(json.dumps({"ok": True, "path": str(target_path), "is_tty": False}, indent=2))
+            else:
+                print(str(target_path))
+            return 0
+
+        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or "nano"
+        try:
+            p = subprocess.run([editor, str(target_path)])
+            return p.returncode
+        except FileNotFoundError:
+            try:
+                p = subprocess.run(["vi", str(target_path)])
+                return p.returncode
+            except FileNotFoundError:
+                print(f"⚠️  Editor '{editor}' not found. Configuration file path: {target_path}", file=sys.stderr)
+                return 1
+
     if getattr(args, "json", False):
         print(json.dumps(config.to_dict(), indent=2))
         return 0
@@ -1183,6 +1248,7 @@ def cmd_config(args: argparse.Namespace, config: GitSyncConfig) -> int:
     print("\n⚙️  Configuração ativa do git-sync:")
     print("=" * 60)
     print(f"  Arquivo de config:   {config.config_path or '(nenhum / padrões em uso)'}")
+    print(f"  Fontes (sources):    {', '.join(config.sources) if config.sources else 'defaults'}")
     print(f"  Perfil ativo:        {config.active_profile or '(padrão / raiz)'}")
     print(f"  Perfis disponíveis:  {', '.join(config.available_profiles) if config.available_profiles else '(nenhum)'}")
     print(f"  Diretório raiz:      {args.root}")
@@ -1416,7 +1482,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             cfg = load_config(config_path=pre_args.config, profile_name=pre_args.profile)
         except Exception:
-            from git_sync.config import GitSyncConfig
             cfg = GitSyncConfig()
         repos = discover_repos(cfg.root, exclude=cfg.exclude)
         for repo_path in repos:
@@ -1432,9 +1497,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         config = load_config(config_path=pre_args.config, profile_name=pre_args.profile)
-    except (FileNotFoundError, ValueError, OSError) as exc:
+    except FileNotFoundError as exc:
+        if "config" in argv and ("--init" in argv or "--edit" in argv):
+            config = GitSyncConfig()
+            if pre_args.config:
+                config.config_path = str(Path(pre_args.config).expanduser().resolve())
+        else:
+            print(f"❌ Configuration error: {exc}", file=sys.stderr)
+            return 1
+    except (ValueError, OSError) as exc:
         print(f"❌ Configuration error: {exc}", file=sys.stderr)
         return 1
+
+    if "cli" not in config.sources:
+        config.sources.append("cli")
 
     # 2. Setup common parser options with SUPPRESS to allow arguments before or after subcommands
     common = argparse.ArgumentParser(add_help=False)
@@ -1535,6 +1611,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # config
     p_config = subparsers.add_parser("config", parents=[common], help="Display active workspace profile and configuration")
+    p_config.add_argument("--init", action="store_true", default=False, help="Initialize default .git-sync.json configuration template if missing")
+    p_config.add_argument("--edit", action="store_true", default=False, help="Open configuration file in $EDITOR or print path if non-TTY")
+    p_config.add_argument("--global", dest="global_config", action="store_true", default=False, help="Target global user configuration (~/.git-sync.json or XDG) instead of workspace")
 
     # install
     p_install = subparsers.add_parser("install", parents=[common], help="Install or update global symlink in ~/.local/bin")

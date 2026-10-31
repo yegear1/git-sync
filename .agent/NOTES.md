@@ -21,7 +21,7 @@
 | `git-sync push` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--branch <name>`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json` | Progress logs / JSON | Push committed branches to upstream remote tracking targets |
 | `git-sync dirty` | `--group <dir>`, `--json` | List of modified files | Quick audit of uncommitted work |
 | `git-sync unlock` | `[repos...]`, `--all`, `--force`, `--group <dir>`, `--json` | Progress logs / JSON | Safely inspect and recover active or stale Git lock files (.git/*.lock) |
-| `git-sync config` | `--json` | Table / JSON | Inspection of active workspace profile and resolved flags |
+| `git-sync config` | `--init`, `--edit`, `--global`, `--json` | Table / JSON / Interactive Editor | Inspect resolved configuration, trace provenance sources, or bootstrap/edit templates |
 | `git-sync install` | `--target-dir <dir>`, `--force`, `--uninstall`, `--json` | Progress logs / JSON | Safe idempotent global deployment of launcher symlink to `~/.local/bin/git-sync` |
 | `git-sync completion` | `[bash\|zsh]`, `--install`, `--target-dir <dir>`, `--json` | Script / JSON | Generate or install shell autocompletion definitions with dynamic repo lookup |
 
@@ -168,13 +168,19 @@ When `--benchmark` is combined with `--json`, a `telemetry` block is included in
 }
 ```
 
-### 3. Workspace Profiles & `.git-sync.json` Schema
+### 3. Workspace Profiles, Hierarchical Config Merging, and `.git-sync.json` Schema
 
-Configuration can be located in:
-1. Custom `--config <path>` file.
-2. `GIT_SYNC_CONFIG` environment variable path.
-3. Current working directory `./.git-sync.json`.
-4. User home directory `~/.git-sync.json`.
+Configuration is deep-merged across seven precedence layers (`defaults < XDG config < ~/.git-sync.json < ./.git-sync.json < env < profile < CLI`).
+Override provenance is tracked in `GitSyncConfig.sources: List[str]` in ascending order of precedence.
+
+Configuration layers:
+1. Built-in defaults (`defaults`)
+2. XDG Base Directory specification (`$XDG_CONFIG_HOME/git-sync/config.json` or `~/.config/git-sync/config.json`)
+3. User home directory (`~/.git-sync.json`)
+4. Workspace directory (`./.git-sync.json` or custom `--config <path>` / `GIT_SYNC_CONFIG`)
+5. Environment variables (`GIT_SYNC_ROOT`, `GIT_SYNC_WORKERS`, `GIT_SYNC_TIMEOUT`, `GIT_SYNC_AUTO_TUNE`, `GIT_SYNC_REMOTE`, `GIT_SYNC_RETRIES`, `GIT_SYNC_PREFLIGHT`, `GIT_SYNC_BENCHMARK`)
+6. Workspace profile (`--profile <name>` or `default_profile`)
+7. Explicit CLI arguments (`CLI`)
 
 ```json
 {
@@ -183,6 +189,13 @@ Configuration can be located in:
   "timeout": 20,
   "exclude": ["legacy", "third-party/*"],
   "groups": ["dev", "sandbox"],
+  "sources": [
+    "defaults",
+    "/home/user/.config/git-sync/config.json",
+    "/workspace/repos/.git-sync.json",
+    "profile:work",
+    "cli"
+  ],
   "pull": {
     "ff_only": true,
     "sync_branches": true,
@@ -211,13 +224,9 @@ Configuration can be located in:
 }
 ```
 
-**Precedence Hierarchy (highest to lowest):**
-1. Explicit CLI arguments (e.g. `--root /custom`, `--no-ff-only`, `--dry-run`, `--group dev`)
-2. Selected Workspace Profile (`--profile <name>` or `default_profile`)
-3. Top-level `.git-sync.json` or XDG `~/.config/git-sync/config.json` configuration
-4. Environment variables (`GIT_SYNC_ROOT`, etc.)
-5. Dynamic user home discovery (`~/github` -> `~/Github` -> `~/src` -> `~/projects`)
-6. Current working directory fallback (`Path.cwd()`)
+#### Interactive Config Bootstrap (`--init` / `--edit`)
+- `git-sync config --init`: Creates default configuration template at `./.git-sync.json` (or `--global` for XDG config `~/.config/git-sync/config.json`) if missing without clobbering existing configuration.
+- `git-sync config --edit`: If run on interactive TTY, opens the configuration file in `$VISUAL` or `$EDITOR` (fallback `nano` / `vi`). If run in non-TTY or piped mode, outputs the resolved configuration file path directly. Automatically bootstraps template if missing.
 
 ---
 

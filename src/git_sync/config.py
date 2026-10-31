@@ -22,6 +22,112 @@ from git_sync.core import (
 CONFIG_FILENAME = ".git-sync.json"
 
 
+def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Recursively deep-merge two configuration dictionaries.
+    # INVARIANT: Child dictionaries are merged recursively; scalar values and lists at higher precedence override base.
+    """
+    merged: Dict[str, Any] = dict(base)
+    for k, v in override.items():
+        if k in merged and isinstance(merged[k], dict) and isinstance(v, dict):
+            merged[k] = deep_merge(merged[k], v)
+        elif isinstance(v, dict):
+            merged[k] = deep_merge({}, v)
+        elif isinstance(v, list):
+            merged[k] = list(v)
+        else:
+            merged[k] = v
+    return merged
+
+
+DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
+    "workers": "auto",
+    "auto_tune": True,
+    "timeout": DEFAULT_TIMEOUT,
+    "exclude": [],
+    "groups": [],
+    "pull": {
+        "ff_only": True,
+        "sync_branches": True,
+        "autostash": True,
+        "strategy": "abort",
+    },
+    "push": {
+        "dry_run": False,
+    },
+    "status": {
+        "compact": False,
+        "no_fetch": False,
+    },
+    "profiles": {
+        "work": {
+            "groups": ["work"],
+        },
+        "oss": {
+            "groups": ["oss"],
+        },
+    },
+}
+
+
+def get_default_config_path(global_config: bool = False, custom_path: Optional[str] = None) -> str:
+    """Determine target configuration file path for init or edit operations."""
+    if custom_path:
+        return str(Path(custom_path).expanduser().resolve())
+    if global_config:
+        xdg_env = os.environ.get("XDG_CONFIG_HOME")
+        xdg_base = Path(xdg_env).expanduser().resolve() if (xdg_env and xdg_env.strip()) else (Path.home() / ".config")
+        return str((xdg_base / "git-sync" / "config.json").resolve())
+    return str((Path.cwd() / CONFIG_FILENAME).resolve())
+
+
+def init_config_file(
+    target_path: Optional[str] = None,
+    global_config: bool = False,
+    root: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Initialize a configuration template file if missing without clobbering existing configuration.
+    # INVARIANT: Preserves existing files idempotently and generates valid zero-dependency JSON templates.
+    """
+    path_str = get_default_config_path(global_config=global_config, custom_path=target_path)
+    p = Path(path_str)
+
+    if p.is_file():
+        return {
+            "ok": True,
+            "action": "already_exists",
+            "path": str(p),
+            "message": f"Configuration file already exists: {p}",
+        }
+
+    p.parent.mkdir(parents=True, exist_ok=True)
+    template = {
+        "root": root or resolve_default_root(),
+        **DEFAULT_CONFIG_TEMPLATE,
+    }
+
+    try:
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(template, f, indent=2)
+            f.write("\n")
+    except OSError as exc:
+        return {
+            "ok": False,
+            "action": "error",
+            "path": str(p),
+            "error": str(exc),
+            "message": f"Failed to create configuration file '{p}': {exc}",
+        }
+
+    return {
+        "ok": True,
+        "action": "created",
+        "path": str(p),
+        "message": f"Created configuration template at {p}",
+    }
+
+
 @dataclass
 class GitSyncConfig:
     """Strongly-typed workspace configuration container."""
@@ -33,6 +139,7 @@ class GitSyncConfig:
     network_latency_threshold: float = DEFAULT_NETWORK_LATENCY_THRESHOLD
     exclude: List[str] = field(default_factory=list)
     groups: List[str] = field(default_factory=list)
+    sources: List[str] = field(default_factory=lambda: ["defaults"])
     pull_ff_only: bool = True
     pull_sync_branches: bool = True
     pull_all: bool = False
@@ -73,6 +180,7 @@ class GitSyncConfig:
             "preflight": self.preflight,
             "exclude": list(self.exclude),
             "groups": list(self.groups),
+            "sources": list(self.sources),
             "pull": {
                 "ff_only": self.pull_ff_only,
                 "sync_branches": self.pull_sync_branches,
@@ -170,6 +278,7 @@ def resolve_config(
     data: Optional[Dict[str, Any]] = None,
     profile_name: Optional[str] = None,
     config_path: Optional[str] = None,
+    sources: Optional[List[str]] = None,
 ) -> GitSyncConfig:
     """
     Merge raw configuration dictionary, apply workspace profile inheritance, and validate types.
@@ -178,6 +287,10 @@ def resolve_config(
     cfg_data = data or {}
     if not isinstance(cfg_data, dict):
         raise ValueError(f"Configuration data must be a dictionary, got {type(cfg_data).__name__}")
+
+    effective_sources: List[str] = list(sources) if sources is not None else ["defaults"]
+    if config_path and config_path not in effective_sources:
+        effective_sources.append(config_path)
 
     # Extract available profiles
     profiles_raw = cfg_data.get("profiles")
@@ -201,7 +314,7 @@ def resolve_config(
     elif profiles_raw and "default" in profiles_raw:
         target_profile = "default"
 
-    # Merge base configuration with profile overrides
+    # Merge base configuration with profile overrides using deep_merge
     combined: Dict[str, Any] = {}
     for k, v in cfg_data.items():
         if k not in ("profiles", "default_profile"):
@@ -211,11 +324,10 @@ def resolve_config(
         prof_overrides = profiles_raw[target_profile]
         if not isinstance(prof_overrides, dict):
             raise ValueError(f"Profile '{target_profile}' definition must be a JSON object")
-        for k, v in prof_overrides.items():
-            if isinstance(v, dict) and isinstance(combined.get(k), dict):
-                combined[k] = {**combined[k], **v}
-            else:
-                combined[k] = v
+        combined = deep_merge(combined, prof_overrides)
+        profile_source_tag = f"profile:{target_profile}"
+        if profile_source_tag not in effective_sources:
+            effective_sources.append(profile_source_tag)
 
     # Parse and validate root directory
     root = str(combined.get("root") or resolve_default_root())
@@ -358,6 +470,7 @@ def resolve_config(
         active_profile=target_profile,
         config_path=config_path,
         available_profiles=available_profiles,
+        sources=effective_sources,
     )
 
 
@@ -366,14 +479,119 @@ def load_config(
     profile_name: Optional[str] = None,
 ) -> GitSyncConfig:
     """
-    Discover, load, and resolve git-sync configuration from disk.
-    If no config file exists, returns default GitSyncConfig.
+    Discover, load, and hierarchically deep-merge configuration across precedence layers:
+    defaults < XDG config < ~/.git-sync.json < ./.git-sync.json < env < profile < CLI
+    # INVARIANT: Tracks override provenance in GitSyncConfig.sources in ascending order of precedence.
     """
-    resolved_path = find_config_file(config_path)
-    if not resolved_path:
+    sources: List[str] = ["defaults"]
+    accumulated: Dict[str, Any] = {}
+    last_file_path: Optional[str] = None
+    files_loaded = 0
+
+    # Layer 1: XDG Base Directory specification ($XDG_CONFIG_HOME/git-sync/config.json or ~/.config/git-sync/config.json)
+    xdg_env = os.environ.get("XDG_CONFIG_HOME")
+    xdg_base = Path(xdg_env).expanduser().resolve() if (xdg_env and xdg_env.strip()) else (Path.home() / ".config")
+    xdg_cfg = xdg_base / "git-sync" / "config.json"
+    if xdg_cfg.is_file():
+        p_str = str(xdg_cfg.resolve())
+        xdg_data = load_config_file(p_str)
+        accumulated = deep_merge(accumulated, xdg_data)
+        if p_str not in sources:
+            sources.append(p_str)
+        last_file_path = p_str
+        files_loaded += 1
+
+    # Layer 2: User Home Directory (~/.git-sync.json)
+    home_cfg = Path.home() / CONFIG_FILENAME
+    if home_cfg.is_file():
+        p_str = str(home_cfg.resolve())
+        if p_str not in sources:
+            home_data = load_config_file(p_str)
+            accumulated = deep_merge(accumulated, home_data)
+            sources.append(p_str)
+            last_file_path = p_str
+            files_loaded += 1
+
+    # Layer 3: Workspace Directory (.git-sync.json), GIT_SYNC_CONFIG, or explicit custom --config
+    if config_path:
+        custom_p = Path(config_path).expanduser().resolve()
+        if not custom_p.is_file():
+            raise FileNotFoundError(f"Configuration file not found: {config_path}")
+        p_str = str(custom_p)
+        custom_data = load_config_file(p_str)
+        accumulated = deep_merge(accumulated, custom_data)
+        if p_str not in sources:
+            sources.append(p_str)
+        last_file_path = p_str
+        files_loaded += 1
+    else:
+        env_cfg = os.environ.get("GIT_SYNC_CONFIG")
+        if env_cfg and env_cfg.strip():
+            env_p = Path(env_cfg).expanduser().resolve()
+            if env_p.is_file():
+                p_str = str(env_p)
+                if p_str not in sources:
+                    env_data = load_config_file(p_str)
+                    accumulated = deep_merge(accumulated, env_data)
+                    sources.append(p_str)
+                    last_file_path = p_str
+                    files_loaded += 1
+        else:
+            cwd_cfg = Path.cwd() / CONFIG_FILENAME
+            if cwd_cfg.is_file():
+                p_str = str(cwd_cfg.resolve())
+                if p_str not in sources:
+                    cwd_data = load_config_file(p_str)
+                    accumulated = deep_merge(accumulated, cwd_data)
+                    sources.append(p_str)
+                    last_file_path = p_str
+                    files_loaded += 1
+
+    # Layer 4: Environment Variables (GIT_SYNC_*)
+    env_overrides: Dict[str, Any] = {}
+    if "GIT_SYNC_ROOT" in os.environ and os.environ["GIT_SYNC_ROOT"].strip():
+        env_overrides["root"] = os.environ["GIT_SYNC_ROOT"].strip()
+    if "GIT_SYNC_WORKERS" in os.environ and os.environ["GIT_SYNC_WORKERS"].strip():
+        w_val = os.environ["GIT_SYNC_WORKERS"].strip()
+        if w_val.lower() == "auto":
+            env_overrides["workers"] = "auto"
+            env_overrides["auto_tune"] = True
+        else:
+            try:
+                env_overrides["workers"] = int(w_val)
+            except ValueError:
+                pass
+    if "GIT_SYNC_TIMEOUT" in os.environ and os.environ["GIT_SYNC_TIMEOUT"].strip():
+        try:
+            env_overrides["timeout"] = int(os.environ["GIT_SYNC_TIMEOUT"].strip())
+        except ValueError:
+            pass
+    if "GIT_SYNC_AUTO_TUNE" in os.environ:
+        env_overrides["auto_tune"] = os.environ["GIT_SYNC_AUTO_TUNE"].strip().lower() in ("1", "true", "yes")
+    if "GIT_SYNC_REMOTE" in os.environ and os.environ["GIT_SYNC_REMOTE"].strip():
+        env_overrides["remote"] = os.environ["GIT_SYNC_REMOTE"].strip()
+    if "GIT_SYNC_RETRIES" in os.environ and os.environ["GIT_SYNC_RETRIES"].strip():
+        try:
+            env_overrides["retries"] = int(os.environ["GIT_SYNC_RETRIES"].strip())
+        except ValueError:
+            pass
+    if "GIT_SYNC_PREFLIGHT" in os.environ:
+        env_overrides["preflight"] = os.environ["GIT_SYNC_PREFLIGHT"].strip().lower() in ("1", "true", "yes")
+    if "GIT_SYNC_BENCHMARK" in os.environ:
+        env_overrides["benchmark"] = os.environ["GIT_SYNC_BENCHMARK"].strip().lower() in ("1", "true", "yes")
+
+    if env_overrides:
+        accumulated = deep_merge(accumulated, env_overrides)
+        sources.append("env")
+
+    # If no configuration files were located and profile was explicitly requested
+    if files_loaded == 0 and not accumulated.get("profiles"):
         if profile_name:
             raise ValueError(f"Profile '{profile_name}' not found: no configuration file located")
-        return resolve_config(data=None, profile_name=None, config_path=None)
 
-    data = load_config_file(resolved_path)
-    return resolve_config(data=data, profile_name=profile_name, config_path=resolved_path)
+    return resolve_config(
+        data=accumulated if (files_loaded > 0 or env_overrides) else None,
+        profile_name=profile_name,
+        config_path=last_file_path,
+        sources=sources,
+    )

@@ -17,8 +17,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from git_sync.cli import main
 from git_sync.config import (
     CONFIG_FILENAME,
+    DEFAULT_CONFIG_TEMPLATE,
     GitSyncConfig,
+    deep_merge,
     find_config_file,
+    get_default_config_path,
+    init_config_file,
     load_config,
     load_config_file,
     resolve_config,
@@ -457,6 +461,310 @@ class TestCliConfigurationPrecedence(unittest.TestCase):
             exit_code = main(["config"])
         self.assertEqual(exit_code, 0)
         self.assertIn("Status (compact):", stdout_capture.getvalue())
+
+
+class TestHierarchicalConfigMergingAndInteractiveBootstrap(unittest.TestCase):
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_deep_merge_primitives_lists_and_dicts(self):
+        base = {
+            "root": "/base/root",
+            "workers": 4,
+            "exclude": ["base-ignore"],
+            "pull": {
+                "ff_only": True,
+                "sync_branches": True,
+                "strategy": "abort",
+            },
+            "profiles": {
+                "work": {
+                    "workers": 8,
+                    "groups": ["backend"],
+                }
+            }
+        }
+        override = {
+            "workers": 12,
+            "exclude": ["new-ignore"],
+            "pull": {
+                "ff_only": False,
+                "autostash": True,
+            },
+            "profiles": {
+                "work": {
+                    "groups": ["infra"],
+                    "timeout": 30,
+                },
+                "oss": {
+                    "groups": ["public"],
+                }
+            }
+        }
+
+        merged = deep_merge(base, override)
+
+        self.assertEqual(merged["root"], "/base/root")
+        self.assertEqual(merged["workers"], 12)
+        self.assertEqual(merged["exclude"], ["new-ignore"])
+        # Nested pull dict deep-merged
+        self.assertFalse(merged["pull"]["ff_only"])
+        self.assertTrue(merged["pull"]["sync_branches"])
+        self.assertEqual(merged["pull"]["strategy"], "abort")
+        self.assertTrue(merged["pull"]["autostash"])
+        # Nested profiles dict deep-merged
+        self.assertEqual(merged["profiles"]["work"]["workers"], 8)
+        self.assertEqual(merged["profiles"]["work"]["groups"], ["infra"])
+        self.assertEqual(merged["profiles"]["work"]["timeout"], 30)
+        self.assertEqual(merged["profiles"]["oss"]["groups"], ["public"])
+
+    def test_hierarchical_merging_xdg_home_workspace(self):
+        # 1. Setup XDG config
+        xdg_dir = self.root / "xdg" / "git-sync"
+        xdg_dir.mkdir(parents=True)
+        xdg_file = xdg_dir / "config.json"
+        xdg_file.write_text(json.dumps({
+            "workers": 4,
+            "timeout": 10,
+            "pull": {
+                "ff_only": True,
+                "autostash": True,
+            }
+        }), encoding="utf-8")
+
+        # 2. Setup Home config
+        home_dir = self.root / "home"
+        home_dir.mkdir(parents=True)
+        home_file = home_dir / CONFIG_FILENAME
+        home_file.write_text(json.dumps({
+            "workers": 6,
+            "pull": {
+                "ff_only": False,
+            }
+        }), encoding="utf-8")
+
+        # 3. Setup Workspace config in CWD
+        cwd_dir = self.root / "workspace"
+        cwd_dir.mkdir(parents=True)
+        cwd_file = cwd_dir / CONFIG_FILENAME
+        cwd_file.write_text(json.dumps({
+            "timeout": 25,
+            "pull": {
+                "strategy": "rebase",
+            }
+        }), encoding="utf-8")
+
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(self.root / "xdg")}, clear=True):
+            with patch("pathlib.Path.home", return_value=home_dir):
+                with patch("pathlib.Path.cwd", return_value=cwd_dir):
+                    cfg = load_config()
+
+        self.assertEqual(cfg.workers, 6)  # Home overrode XDG (6 > 4)
+        self.assertEqual(cfg.timeout, 25)  # Workspace overrode XDG (25 > 10)
+        self.assertFalse(cfg.pull_ff_only)  # Home overrode XDG
+        self.assertTrue(cfg.pull_autostash)  # Preserved from XDG
+        self.assertEqual(cfg.pull_strategy, "rebase")  # Set in workspace
+
+        # Check ordered provenance sources
+        expected_sources = [
+            "defaults",
+            str(xdg_file.resolve()),
+            str(home_file.resolve()),
+            str(cwd_file.resolve()),
+        ]
+        self.assertEqual(cfg.sources, expected_sources)
+        self.assertEqual(cfg.config_path, str(cwd_file.resolve()))
+
+    def test_env_layer_overrides_files(self):
+        home_dir = self.root / "home"
+        home_dir.mkdir(parents=True)
+        home_file = home_dir / CONFIG_FILENAME
+        home_file.write_text(json.dumps({
+            "workers": 4,
+            "timeout": 15,
+        }), encoding="utf-8")
+
+        env_vars = {
+            "GIT_SYNC_WORKERS": "12",
+            "GIT_SYNC_TIMEOUT": "45",
+            "GIT_SYNC_REMOTE": "upstream",
+        }
+
+        with patch.dict(os.environ, env_vars, clear=True):
+            with patch("pathlib.Path.home", return_value=home_dir):
+                with patch("pathlib.Path.cwd", return_value=self.root / "empty_cwd"):
+                    cfg = load_config()
+
+        self.assertEqual(cfg.workers, 12)
+        self.assertEqual(cfg.timeout, 45)
+        self.assertEqual(cfg.remote, "upstream")
+        self.assertIn("env", cfg.sources)
+        self.assertEqual(cfg.sources[-1], "env")
+
+    def test_profile_and_cli_provenance_tracking(self):
+        cfg_file = self.root / ".git-sync.json"
+        cfg_file.write_text(json.dumps({
+            "workers": 4,
+            "profiles": {
+                "fast": {
+                    "workers": 16,
+                }
+            }
+        }), encoding="utf-8")
+
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = main(["--config", str(cfg_file), "--profile", "fast", "config", "--json"])
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout_capture.getvalue())
+        self.assertEqual(payload["workers"], 16)
+        self.assertEqual(payload["active_profile"], "fast")
+        self.assertIn("profile:fast", payload["sources"])
+        self.assertIn("cli", payload["sources"])
+        # Ordered precedence: defaults < file < profile < cli
+        self.assertEqual(payload["sources"][0], "defaults")
+        self.assertEqual(payload["sources"][-1], "cli")
+
+    def test_cli_config_table_displays_sources(self):
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = main(["config"])
+        self.assertEqual(exit_code, 0)
+        output = stdout_capture.getvalue()
+        self.assertIn("Fontes (sources):", output)
+        self.assertIn("defaults", output)
+        self.assertIn("cli", output)
+
+    def test_config_init_creates_template_idempotently(self):
+        workspace = self.root / "init_workspace"
+        workspace.mkdir()
+        target_cfg = workspace / CONFIG_FILENAME
+
+        with patch("pathlib.Path.cwd", return_value=workspace):
+            # 1. First run creates template
+            stdout_create = io.StringIO()
+            with patch("sys.stdout", stdout_create):
+                code_1 = main(["config", "--init"])
+            self.assertEqual(code_1, 0)
+            self.assertIn("Created configuration template", stdout_create.getvalue())
+            self.assertTrue(target_cfg.is_file())
+
+            # Verify contents is valid JSON
+            content = json.loads(target_cfg.read_text(encoding="utf-8"))
+            self.assertEqual(content["workers"], "auto")
+            self.assertTrue(content["auto_tune"])
+            self.assertIn("profiles", content)
+
+            # 2. Second run without clobbering
+            stdout_exists = io.StringIO()
+            with patch("sys.stdout", stdout_exists):
+                code_2 = main(["config", "--init"])
+            self.assertEqual(code_2, 0)
+            self.assertIn("already exists", stdout_exists.getvalue())
+
+    def test_config_init_json_output(self):
+        workspace = self.root / "json_workspace"
+        workspace.mkdir()
+
+        with patch("pathlib.Path.cwd", return_value=workspace):
+            stdout_capture = io.StringIO()
+            with patch("sys.stdout", stdout_capture):
+                exit_code = main(["config", "--init", "--json"])
+
+        self.assertEqual(exit_code, 0)
+        res = json.loads(stdout_capture.getvalue())
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["action"], "created")
+        self.assertTrue(Path(res["path"]).is_file())
+
+    def test_config_init_global_flag(self):
+        xdg_base = self.root / "global_xdg"
+        with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg_base)}):
+            stdout_capture = io.StringIO()
+            with patch("sys.stdout", stdout_capture):
+                exit_code = main(["config", "--global", "--init", "--json"])
+
+        self.assertEqual(exit_code, 0)
+        res = json.loads(stdout_capture.getvalue())
+        self.assertTrue(res["ok"])
+        expected_path = (xdg_base / "git-sync" / "config.json").resolve()
+        self.assertEqual(res["path"], str(expected_path))
+        self.assertTrue(expected_path.is_file())
+
+    def test_config_init_custom_path_pre_parser_safe(self):
+        custom_file = self.root / "new_custom" / "custom.json"
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = main(["--config", str(custom_file), "config", "--init", "--json"])
+
+        self.assertEqual(exit_code, 0)
+        res = json.loads(stdout_capture.getvalue())
+        self.assertTrue(res["ok"])
+        self.assertTrue(custom_file.is_file())
+
+    def test_config_edit_non_tty_outputs_path(self):
+        workspace = self.root / "edit_workspace"
+        workspace.mkdir()
+        cfg_file = workspace / CONFIG_FILENAME
+        cfg_file.write_text("{}", encoding="utf-8")
+
+        with patch("pathlib.Path.cwd", return_value=workspace):
+            # Text mode
+            stdout_text = io.StringIO()
+            with patch("sys.stdout", stdout_text):
+                code_text = main(["config", "--edit"])
+            self.assertEqual(code_text, 0)
+            self.assertEqual(stdout_text.getvalue().strip(), str(cfg_file.resolve()))
+
+            # JSON mode
+            stdout_json = io.StringIO()
+            with patch("sys.stdout", stdout_json):
+                code_json = main(["config", "--edit", "--json"])
+            self.assertEqual(code_json, 0)
+            res = json.loads(stdout_json.getvalue())
+            self.assertTrue(res["ok"])
+            self.assertEqual(res["path"], str(cfg_file.resolve()))
+            self.assertFalse(res["is_tty"])
+
+    def test_config_edit_tty_invokes_editor(self):
+        workspace = self.root / "edit_tty_workspace"
+        workspace.mkdir()
+        cfg_file = workspace / CONFIG_FILENAME
+        cfg_file.write_text("{}", encoding="utf-8")
+
+        import subprocess
+        fake_proc = subprocess.CompletedProcess(args=[], returncode=0)
+
+        with patch("pathlib.Path.cwd", return_value=workspace):
+            with patch("sys.stdin.isatty", return_value=True):
+                with patch("sys.stdout.isatty", return_value=True):
+                    with patch.dict(os.environ, {"EDITOR": "dummy-editor"}):
+                        with patch("subprocess.run", return_value=fake_proc) as mock_run:
+                            exit_code = main(["config", "--edit"])
+
+        self.assertEqual(exit_code, 0)
+        mock_run.assert_called_once_with(["dummy-editor", str(cfg_file.resolve())])
+
+    def test_config_edit_auto_initializes_if_missing(self):
+        workspace = self.root / "edit_auto_init"
+        workspace.mkdir()
+        target_cfg = workspace / CONFIG_FILENAME
+
+        self.assertFalse(target_cfg.exists())
+        with patch("pathlib.Path.cwd", return_value=workspace):
+            stdout_capture = io.StringIO()
+            with patch("sys.stdout", stdout_capture):
+                exit_code = main(["config", "--edit"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(target_cfg.is_file())
+        self.assertEqual(stdout_capture.getvalue().strip(), str(target_cfg.resolve()))
 
 
 if __name__ == "__main__":
