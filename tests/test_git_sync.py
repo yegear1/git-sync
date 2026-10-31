@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from git_sync.cli import main
 from git_sync.core import (
+    DEFAULT_PROTECTED_BRANCHES,
     ClassifiedCommit,
     classify_commit,
     discover_repos,
@@ -27,9 +28,11 @@ from git_sync.core import (
     get_submodules_status,
     get_worktree_info,
     inspect_repo,
+    is_branch_protected,
     is_shallow_repository,
     match_repo,
     parse_commit_log,
+    preflight_push_check,
     prune_repo_worktrees,
     pull_repo,
     push_repo,
@@ -1496,6 +1499,227 @@ class TestSparseCheckoutSupport(unittest.TestCase):
         self.assertEqual(code_text, 0)
         self.assertIn("sparse(cone:1)", buf_text.getvalue())
         self.assertIn("📐 sparse-checkout: cone mode (1 pattern(s): modules)", buf_text.getvalue())
+
+
+class TestProtectedBranchAndPushPreflight(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.test_dir.name)
+
+    def tearDown(self):
+        self.test_dir.cleanup()
+
+    def _init_repo(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        run_git(str(path), ["init", "-b", "main"])
+        run_git(str(path), ["config", "user.email", "test@example.com"])
+        run_git(str(path), ["config", "user.name", "Test User"])
+        return path
+
+    def _init_bare_remote(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        run_git(str(path), ["init", "--bare", "-b", "main"])
+        return path
+
+    def test_is_branch_protected(self):
+        # Default protected patterns: main, master, release/*, production, prod
+        self.assertTrue(is_branch_protected("main"))
+        self.assertTrue(is_branch_protected("master"))
+        self.assertTrue(is_branch_protected("release/1.0.0"))
+        self.assertTrue(is_branch_protected("release/v2"))
+        self.assertTrue(is_branch_protected("production"))
+        self.assertTrue(is_branch_protected("prod"))
+
+        # Unprotected branch names
+        self.assertFalse(is_branch_protected("feature/login"))
+        self.assertFalse(is_branch_protected("fix/crash"))
+        self.assertFalse(is_branch_protected("dev"))
+        self.assertFalse(is_branch_protected("staging"))
+        self.assertFalse(is_branch_protected(""))
+
+        # Custom patterns
+        custom = ["develop", "stage-*", "stable/*"]
+        self.assertTrue(is_branch_protected("develop", custom))
+        self.assertTrue(is_branch_protected("stage-alpha", custom))
+        self.assertTrue(is_branch_protected("stable/2026", custom))
+        self.assertFalse(is_branch_protected("main", custom))
+
+    def test_preflight_push_check_telemetry(self):
+        bare_remote = self._init_bare_remote(self.root / "preflight_remote.git")
+        local_repo = self._init_repo(self.root / "preflight_repo")
+
+        # Initial commit & push
+        (local_repo / "file.txt").write_text("Hello\n")
+        run_git(str(local_repo), ["add", "file.txt"])
+        run_git(str(local_repo), ["commit", "-m", "init"])
+        run_git(str(local_repo), ["remote", "add", "origin", str(bare_remote)])
+        run_git(str(local_repo), ["push", "-u", "origin", "main"])
+
+        # Second unpushed commit
+        (local_repo / "file.txt").write_text("Hello v2\n")
+        run_git(str(local_repo), ["add", "file.txt"])
+        run_git(str(local_repo), ["commit", "-m", "second"])
+
+        # Preflight check on main branch
+        pre = preflight_push_check(str(local_repo))
+        self.assertTrue(pre["passed"])
+        self.assertTrue(pre["is_protected"])
+        self.assertEqual(pre["ahead"], 1)
+        self.assertEqual(pre["behind"], 0)
+        self.assertFalse(pre["diverged"])
+        self.assertTrue(pre["upstream_configured"])
+        self.assertGreaterEqual(pre["latency_seconds"], 0.0)
+        self.assertEqual(pre["safety_checks"]["protected_branch_guard"], "PASS")
+        self.assertEqual(pre["safety_checks"]["force_push_guard"], "PASS")
+
+        # Check detached HEAD state handling
+        head_commit = run_git(str(local_repo), ["rev-parse", "HEAD"]).stdout.strip()
+        run_git(str(local_repo), ["checkout", head_commit])
+        pre_detached = preflight_push_check(str(local_repo))
+        self.assertFalse(pre_detached["passed"])
+        self.assertEqual(pre_detached["safety_checks"]["branch_state"], "FAIL")
+        self.assertEqual(pre_detached["diagnostic"]["category"], "DETACHED_HEAD")
+
+        # Restore branch
+        run_git(str(local_repo), ["checkout", "main"])
+
+    def test_push_repo_force_push_defense_on_protected_branch(self):
+        bare_remote = self._init_bare_remote(self.root / "force_defense_remote.git")
+        local_repo = self._init_repo(self.root / "force_defense_repo")
+
+        (local_repo / "init.txt").write_text("v1\n")
+        run_git(str(local_repo), ["add", "init.txt"])
+        run_git(str(local_repo), ["commit", "-m", "Initial commit on main"])
+        run_git(str(local_repo), ["remote", "add", "origin", str(bare_remote)])
+        run_git(str(local_repo), ["push", "-u", "origin", "main"])
+
+        # Local makes another commit
+        (local_repo / "init.txt").write_text("v2 local\n")
+        run_git(str(local_repo), ["add", "init.txt"])
+        run_git(str(local_repo), ["commit", "-m", "Local override"])
+
+        # Attempt force-push to protected branch 'main' -> MUST BE BLOCKED
+        res = push_repo(str(local_repo), force=True)
+        self.assertFalse(res["success"])
+        self.assertIn("strictly prohibited", res["stderr"])
+        self.assertEqual(res["diagnostic"]["category"], "PROTECTED_BRANCH_FORCE_PUSH")
+        self.assertTrue(res["preflight"]["force_defended"])
+        self.assertEqual(res["preflight"]["safety_checks"]["force_push_guard"], "BLOCKED")
+
+    def test_push_repo_force_push_allowed_on_feature_branch(self):
+        bare_remote = self._init_bare_remote(self.root / "feat_remote.git")
+        local_repo = self._init_repo(self.root / "feat_repo")
+
+        (local_repo / "main.txt").write_text("main\n")
+        run_git(str(local_repo), ["add", "main.txt"])
+        run_git(str(local_repo), ["commit", "-m", "main commit"])
+        run_git(str(local_repo), ["remote", "add", "origin", str(bare_remote)])
+        run_git(str(local_repo), ["push", "-u", "origin", "main"])
+
+        # Create feature branch
+        run_git(str(local_repo), ["checkout", "-b", "feature/my-work"])
+        (local_repo / "feat.txt").write_text("feature content\n")
+        run_git(str(local_repo), ["add", "feat.txt"])
+        run_git(str(local_repo), ["commit", "-m", "feature commit"])
+        run_git(str(local_repo), ["push", "-u", "origin", "feature/my-work"])
+
+        # Add another commit and push with force=True on feature branch
+        (local_repo / "feat.txt").write_text("feature content updated\n")
+        run_git(str(local_repo), ["add", "feat.txt"])
+        run_git(str(local_repo), ["commit", "--amend", "-m", "feature amended"])
+
+        res = push_repo(str(local_repo), force=True)
+        self.assertTrue(res["success"])
+        self.assertFalse(res["preflight"]["is_protected"])
+        self.assertFalse(res["preflight"]["force_defended"])
+
+    def test_push_repo_block_protected_safeguard(self):
+        bare_remote = self._init_bare_remote(self.root / "block_prot_remote.git")
+        local_repo = self._init_repo(self.root / "block_prot_repo")
+
+        (local_repo / "data.txt").write_text("v1\n")
+        run_git(str(local_repo), ["add", "data.txt"])
+        run_git(str(local_repo), ["commit", "-m", "initial"])
+        run_git(str(local_repo), ["remote", "add", "origin", str(bare_remote)])
+        run_git(str(local_repo), ["push", "-u", "origin", "main"])
+
+        # Second commit
+        (local_repo / "data.txt").write_text("v2\n")
+        run_git(str(local_repo), ["add", "data.txt"])
+        run_git(str(local_repo), ["commit", "-m", "second commit"])
+
+        # Direct push blocked by configuration safeguard
+        res_blocked = push_repo(str(local_repo), block_protected=True, allow_protected=False)
+        self.assertFalse(res_blocked["success"])
+        self.assertIn("blocked by workspace safety policy", res_blocked["stderr"])
+        self.assertEqual(res_blocked["diagnostic"]["category"], "PROTECTED_BRANCH_DIRECT_PUSH")
+
+        # Direct push permitted with allow_protected=True
+        res_allowed = push_repo(str(local_repo), block_protected=True, allow_protected=True)
+        self.assertTrue(res_allowed["success"])
+
+    def test_cli_push_protected_branch_defense_and_flags(self):
+        bare_remote = self._init_bare_remote(self.root / "cli_prot_remote.git")
+        local_repo = self._init_repo(self.root / "cli_prot_repo")
+
+        (local_repo / "code.txt").write_text("1\n")
+        run_git(str(local_repo), ["add", "code.txt"])
+        run_git(str(local_repo), ["commit", "-m", "c1"])
+        run_git(str(local_repo), ["remote", "add", "origin", str(bare_remote)])
+        run_git(str(local_repo), ["push", "-u", "origin", "main"])
+
+        # New unpushed commit
+        (local_repo / "code.txt").write_text("2\n")
+        run_git(str(local_repo), ["add", "code.txt"])
+        run_git(str(local_repo), ["commit", "-m", "c2"])
+
+        # 1. Test CLI push --force on protected branch
+        buf_force = io.StringIO()
+        with patch("sys.stdout", buf_force):
+            code_force = main([
+                "push",
+                "--root", str(self.root),
+                "cli_prot_repo",
+                "--force",
+                "--json",
+            ])
+        self.assertEqual(code_force, 1)
+        res_force = json.loads(buf_force.getvalue())
+        self.assertFalse(res_force[0]["success"])
+        self.assertEqual(res_force[0]["diagnostic"]["category"], "PROTECTED_BRANCH_FORCE_PUSH")
+
+        # 2. Test CLI push --block-protected
+        buf_block = io.StringIO()
+        with patch("sys.stdout", buf_block):
+            code_block = main([
+                "push",
+                "--root", str(self.root),
+                "cli_prot_repo",
+                "--block-protected",
+                "--json",
+            ])
+        self.assertEqual(code_block, 1)
+        res_block = json.loads(buf_block.getvalue())
+        self.assertFalse(res_block[0]["success"])
+        self.assertEqual(res_block[0]["diagnostic"]["category"], "PROTECTED_BRANCH_DIRECT_PUSH")
+
+        # 3. Test CLI push --block-protected with --allow-protected (dry-run)
+        buf_allow = io.StringIO()
+        with patch("sys.stdout", buf_allow):
+            code_allow = main([
+                "push",
+                "--root", str(self.root),
+                "cli_prot_repo",
+                "--block-protected",
+                "--allow-protected",
+                "--dry-run",
+                "--json",
+            ])
+        self.assertEqual(code_allow, 0)
+        res_allow = json.loads(buf_allow.getvalue())
+        self.assertTrue(res_allow[0]["success"])
+        self.assertTrue(res_allow[0]["dry_run"])
+
 
 
 if __name__ == "__main__":

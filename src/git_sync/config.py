@@ -54,6 +54,8 @@ DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
     },
     "push": {
         "dry_run": False,
+        "protected_branches": ["main", "master", "release/*", "production"],
+        "block_protected": False,
     },
     "status": {
         "compact": False,
@@ -154,6 +156,10 @@ class GitSyncConfig:
     push_dry_run: bool = False
     push_all: bool = False
     push_branch: Optional[str] = None
+    push_protected_branches: List[str] = field(default_factory=lambda: ["main", "master", "release/*", "production", "prod"])
+    push_block_protected: bool = False
+    push_allow_protected: bool = False
+    push_force: bool = False
     status_no_fetch: bool = False
     status_pending: bool = False
     status_compact: bool = False
@@ -208,6 +214,10 @@ class GitSyncConfig:
                 "all": self.push_all,
                 "branch": self.push_branch,
                 "remote": self.push_remote,
+                "protected_branches": list(self.push_protected_branches),
+                "block_protected": self.push_block_protected,
+                "allow_protected": self.push_allow_protected,
+                "force": self.push_force,
             },
             "status": {
                 "no_fetch": self.status_no_fetch,
@@ -440,6 +450,19 @@ def resolve_config(
     push_branch = str(push_branch_raw) if push_branch_raw is not None else None
     push_remote_raw = push_cfg.get("remote", combined.get("push_remote", None))
     push_remote = str(push_remote_raw) if push_remote_raw is not None else None
+    push_block_protected = bool(push_cfg.get("block_protected", combined.get("push_block_protected", False)))
+    push_allow_protected = bool(push_cfg.get("allow_protected", combined.get("push_allow_protected", False)))
+    push_force = bool(push_cfg.get("force", combined.get("push_force", False)))
+
+    prot_branches_val = push_cfg.get("protected_branches", combined.get("protected_branches", None))
+    if prot_branches_val is None:
+        push_protected_branches = ["main", "master", "release/*", "production", "prod"]
+    elif isinstance(prot_branches_val, list):
+        push_protected_branches = [str(x) for x in prot_branches_val]
+    elif isinstance(prot_branches_val, str):
+        push_protected_branches = [p.strip() for p in prot_branches_val.split(",") if p.strip()]
+    else:
+        push_protected_branches = ["main", "master", "release/*", "production", "prod"]
 
     # Parse status section & flags
     status_cfg = combined.get("status") if isinstance(combined.get("status"), dict) else {}
@@ -498,6 +521,10 @@ def resolve_config(
         push_dry_run=push_dry_run,
         push_all=push_all,
         push_branch=push_branch,
+        push_protected_branches=push_protected_branches,
+        push_block_protected=push_block_protected,
+        push_allow_protected=push_allow_protected,
+        push_force=push_force,
         status_no_fetch=status_no_fetch,
         status_pending=status_pending,
         status_compact=status_compact,
@@ -633,6 +660,12 @@ def load_config(
         env_overrides["preflight"] = os.environ["GIT_SYNC_PREFLIGHT"].strip().lower() in ("1", "true", "yes")
     if "GIT_SYNC_BENCHMARK" in os.environ:
         env_overrides["benchmark"] = os.environ["GIT_SYNC_BENCHMARK"].strip().lower() in ("1", "true", "yes")
+    if "GIT_SYNC_PUSH_BLOCK_PROTECTED" in os.environ:
+        env_overrides["push_block_protected"] = os.environ["GIT_SYNC_PUSH_BLOCK_PROTECTED"].strip().lower() in ("1", "true", "yes")
+    if "GIT_SYNC_PUSH_PROTECTED_BRANCHES" in os.environ:
+        env_overrides["protected_branches"] = [
+            b.strip() for b in os.environ["GIT_SYNC_PUSH_PROTECTED_BRANCHES"].split(",") if b.strip()
+        ]
 
     if env_overrides:
         accumulated = deep_merge(accumulated, env_overrides)

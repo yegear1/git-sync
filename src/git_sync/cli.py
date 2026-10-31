@@ -23,6 +23,7 @@ from git_sync.config import (
 )
 from git_sync.engine import (
     DEFAULT_COMPACT_DIFF_TOKENS,
+    DEFAULT_PROTECTED_BRANCHES,
     DEFAULT_RETRIES,
     DEFAULT_ROOT,
     DEFAULT_TIMEOUT,
@@ -44,7 +45,9 @@ from git_sync.engine import (
     inspect_github_cli,
     inspect_repo,
     inspect_ssh_config,
+    is_branch_protected,
     match_repo,
+    preflight_push_check,
     prune_repo_worktrees,
     pull_repo,
     push_repo,
@@ -1292,6 +1295,12 @@ def cmd_push(args: argparse.Namespace) -> int:
     t2 = time.perf_counter()
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
     msg_prog = "Simulando push..." if args.dry_run else "Enviando commits..."
+
+    force = getattr(args, "force", False)
+    block_prot = getattr(args, "block_protected", False)
+    allow_prot = getattr(args, "allow_protected", False)
+    prot_branches = getattr(args, "effective_protected_branches", DEFAULT_PROTECTED_BRANCHES)
+
     with ProgressIndicator(msg_prog, total=len(targets), enabled=show_progress) as progress:
         for r in targets:
             rel = os.path.relpath(r, root)
@@ -1300,6 +1309,10 @@ def cmd_push(args: argparse.Namespace) -> int:
                 branch=args.branch,
                 remote=remote,
                 dry_run=args.dry_run,
+                force=force,
+                protected_branches=prot_branches,
+                block_protected=block_prot,
+                allow_protected=allow_prot,
                 timeout=args.timeout,
                 cache=cache,
                 benchmark=benchmark,
@@ -1312,7 +1325,13 @@ def cmd_push(args: argparse.Namespace) -> int:
 
             if not args.json:
                 mode_str = "[DRY-RUN] " if res["dry_run"] else ""
-                icon = "✅" if res["success"] else "❌"
+                diag_cat = res.get("diagnostic", {}).get("category") if res.get("diagnostic") else ""
+                if res["success"]:
+                    icon = "✅"
+                elif diag_cat in ("PROTECTED_BRANCH_FORCE_PUSH", "PROTECTED_BRANCH_DIRECT_PUSH"):
+                    icon = "🛡️"
+                else:
+                    icon = "❌"
                 status_detail = "OK" if res["success"] else (res["stderr"] or res["stdout"])
                 if not res["success"] and res.get("diagnostic"):
                     status_detail += f" (💡 {res['diagnostic']['suggestion']})"
@@ -1476,6 +1495,8 @@ def cmd_config(args: argparse.Namespace, config: GitSyncConfig) -> int:
     print(f"  Pull (autostash):    {getattr(args, 'autostash', config.pull_autostash)}")
     print(f"  Pull (dry-run):      {args.dry_run if getattr(args, 'dry_run', None) is not None else config.pull_dry_run}")
     print(f"  Push (dry-run):      {args.dry_run if getattr(args, 'dry_run', None) is not None else config.push_dry_run}")
+    print(f"  Push (protected):    {', '.join(getattr(config, 'push_protected_branches', DEFAULT_PROTECTED_BRANCHES))}")
+    print(f"  Push (block-prot):   {getattr(config, 'push_block_protected', False)}")
     print(f"  Status (compact):    {getattr(args, 'compact', config.status_compact)}")
     print(f"  Benchmark:           {getattr(args, 'benchmark', config.benchmark)}")
     print(f"  Bulk Cache:          {not getattr(args, 'no_cache', not config.use_cache)}")
@@ -1986,6 +2007,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_push.add_argument("--fetch", dest="fetch", action="store_true", default=None, help="Fetch remotes before push inspection")
     p_push.add_argument("--no-fetch", dest="fetch", action="store_false", default=None, help="Skip remote fetch before push inspection")
     p_push.add_argument("--group", default=None, help="Filter target repositories by group")
+    p_push.add_argument("--force", action="store_true", default=None, help="Force push with lease (strictly prohibited on protected branches)")
+    p_push.add_argument("--block-protected", dest="block_protected", action="store_true", default=None, help="Block direct push to protected branches")
+    p_push.add_argument("--allow-protected", dest="allow_protected", action="store_true", default=None, help="Allow direct push to protected branches when blocked by policy")
+    p_push.add_argument("--protected-branches", default=None, help="Comma-separated patterns of protected branches (default: main,master,release/*,production,prod)")
 
     # dirty
     p_dirty = subparsers.add_parser("dirty", parents=[common], help="Show repositories with uncommitted or untracked changes")
@@ -2142,6 +2167,21 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     branch_flag = getattr(args, "branch", None)
     args.branch = branch_flag if branch_flag is not None else config.push_branch
+
+    force_flag = getattr(args, "force", None)
+    args.force = force_flag if force_flag is not None else getattr(config, "push_force", False)
+
+    block_prot_flag = getattr(args, "block_protected", None)
+    args.block_protected = block_prot_flag if block_prot_flag is not None else getattr(config, "push_block_protected", False)
+
+    allow_prot_flag = getattr(args, "allow_protected", None)
+    args.allow_protected = allow_prot_flag if allow_prot_flag is not None else getattr(config, "push_allow_protected", False)
+
+    prot_branches_flag = getattr(args, "protected_branches", None)
+    if prot_branches_flag:
+        args.effective_protected_branches = [b.strip() for b in prot_branches_flag.split(",") if b.strip()]
+    else:
+        args.effective_protected_branches = getattr(config, "push_protected_branches", DEFAULT_PROTECTED_BRANCHES)
 
     max_tokens_flag = getattr(args, "max_tokens", None)
     args.max_tokens = max_tokens_flag if max_tokens_flag is not None else getattr(config, "max_tokens", None)

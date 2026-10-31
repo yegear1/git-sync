@@ -827,6 +827,35 @@ class TestHierarchicalConfigMergingAndInteractiveBootstrap(unittest.TestCase):
         self.assertFalse(cfg.root.startswith("~"))
         self.assertTrue(cfg.root.endswith("/repos/custom"))
 
+    def test_push_protected_branches_config(self):
+        # Default push protection settings
+        cfg_def = resolve_config({})
+        self.assertEqual(cfg_def.push_protected_branches, ["main", "master", "release/*", "production", "prod"])
+        self.assertFalse(cfg_def.push_block_protected)
+        self.assertFalse(cfg_def.push_allow_protected)
+        self.assertFalse(cfg_def.push_force)
+
+        # Custom push settings
+        data = {
+            "push": {
+                "protected_branches": ["main", "prod/*"],
+                "block_protected": True,
+                "allow_protected": False,
+                "force": False,
+            }
+        }
+        cfg_custom = resolve_config(data)
+        self.assertEqual(cfg_custom.push_protected_branches, ["main", "prod/*"])
+        self.assertTrue(cfg_custom.push_block_protected)
+        self.assertFalse(cfg_custom.push_allow_protected)
+
+        # to_dict roundtrip
+        d = cfg_custom.to_dict()
+        self.assertIn("push", d)
+        self.assertEqual(d["push"]["protected_branches"], ["main", "prod/*"])
+        self.assertTrue(d["push"]["block_protected"])
+
+
 
 if __name__ == "__main__":
     unittest.main()

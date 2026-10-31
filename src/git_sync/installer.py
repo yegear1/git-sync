@@ -583,7 +583,7 @@ _git_sync_completions() {
             ;;
         push)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=($(compgen -W "$common_opts --all --branch --fetch --no-fetch --group" -- "$cur"))
+                COMPREPLY=($(compgen -W "$common_opts --all --branch --fetch --no-fetch --group --force --block-protected --allow-protected --protected-branches" -- "$cur"))
             else
                 local repos
                 repos=$(git-sync --complete-repos 2>/dev/null)
@@ -771,6 +771,10 @@ _git_sync() {
                         '--fetch[Fetch remotes before push inspection]' \\
                         '--no-fetch[Skip remote fetch before push inspection]' \\
                         '--group[Filter target repositories by group]:group:' \\
+                        '--force[Force push with lease (strictly prohibited on protected branches)]' \\
+                        '--block-protected[Block direct push to protected branches]' \\
+                        '--allow-protected[Allow direct push to protected branches when blocked by policy]' \\
+                        '--protected-branches[Comma-separated patterns of protected branches]:branches:' \\
                         '*:repository:->repos'
                     ;;
                 resolve)

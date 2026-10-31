@@ -78,6 +78,7 @@ DEFAULT_MAX_WORKERS = 32
 DEFAULT_MIN_WORKERS = 1
 DEFAULT_COMPACT_DIFF_TOKENS = 1000
 DEFAULT_CHARS_PER_TOKEN = 4
+DEFAULT_PROTECTED_BRANCHES: List[str] = ["main", "master", "release/*", "production", "prod"]
 GRADE_A_THRESHOLD_SECONDS = 0.50
 GRADE_B_THRESHOLD_SECONDS = 1.50
 GRADE_C_THRESHOLD_SECONDS = 3.00
@@ -275,6 +276,22 @@ def diagnose_git_error(error_text: str, remote_url: Optional[str] = None) -> Opt
             "message": "Untracked or uncommitted local files would be overwritten by pull/checkout.",
             "suggestion": "Move, commit, or stash conflicting untracked files, or run 'git-sync pull --autostash' / 'git sparse-checkout reapply'.",
             "action_required": "resolve_checkout_conflict",
+        }
+
+    # 7. Push protection & remote hook rejections
+    if "protected branch" in txt or "gh006" in txt or "pre-receive hook declined" in txt or "branch is protected" in txt:
+        return {
+            "category": "PROTECTED_BRANCH_REJECTED",
+            "message": "Remote repository rejected push due to protected branch policies.",
+            "suggestion": "Push is restricted by branch protection rules on remote. Submit a pull request instead of pushing directly.",
+            "action_required": "create_pull_request",
+        }
+    if "non-fast-forward" in txt or "fetch first" in txt or "updates were rejected because the remote contains work" in txt:
+        return {
+            "category": "NON_FAST_FORWARD_REJECTED",
+            "message": "Remote rejected push because remote contains commits not present locally.",
+            "suggestion": "Run 'git-sync pull' to fetch and fast-forward remote commits before pushing.",
+            "action_required": "pull_remote_first",
         }
 
     return None
@@ -3764,134 +3781,478 @@ def pull_repo(
     return result_dict
 
 
-def push_repo(
+def is_branch_protected(branch: str, patterns: Optional[List[str]] = None) -> bool:
+    """
+    Determine if a branch name matches protected branch configuration patterns.
+    # INVARIANT: Standard protected branch patterns default to main, master, release/*, production, and prod.
+    """
+    if not branch:
+        return False
+    effective_patterns = DEFAULT_PROTECTED_BRANCHES if patterns is None else patterns
+    for pat in effective_patterns:
+        if fnmatch.fnmatch(branch, pat):
+            return True
+    return False
+
+
+def preflight_push_check(
     repo_path: str,
     branch: Optional[str] = None,
     remote: Optional[str] = None,
-    dry_run: bool = False,
-    timeout: int = DEFAULT_TIMEOUT,
+    force: bool = False,
+    protected_branches: Optional[List[str]] = None,
+    block_protected: bool = False,
+    allow_protected: bool = False,
     cache: Optional[BulkCache] = None,
-    benchmark: Optional[TelemetryBenchmark] = None,
-    retries: int = DEFAULT_RETRIES,
+    timeout: int = 5,
 ) -> Dict[str, Any]:
     """
-    Push committed changes for a repository.
-    # INVARIANT: Force push is strictly prohibited to prevent data loss across satellite repositories.
-    # INVARIANT: Diverged branches (ahead > 0 and behind > 0) are blocked from pushing to prevent remote rejection.
-    # INVARIANT: GIT_TERMINAL_PROMPT=0 guarantees git never blocks on interactive auth/passphrase prompts.
+    Proactive pre-flight telemetry and safety analysis prior to executing Git push.
+    # INVARIANT: Evaluates branch protection, force-push defense, divergence, and uncommitted tree status.
+    # INVARIANT: Force push to protected branches is unconditionally rejected to safeguard remote history.
     """
-    curr_branch = run_git(repo_path, ["branch", "--show-current"]).stdout.strip()
+    t_start = time.perf_counter()
+
+    curr_branch = run_git(repo_path, ["branch", "--show-current"], timeout=timeout).stdout.strip()
     target_branch = branch if branch else curr_branch
 
-    wt_info = cache.get_worktree_info(repo_path, timeout=5) if cache else get_worktree_info(repo_path, timeout=5)
+    wt_info = cache.get_worktree_info(repo_path, timeout=timeout) if cache else get_worktree_info(repo_path, timeout=timeout)
     is_worktree = wt_info.get("is_worktree", False)
     worktree_main_path = wt_info.get("main_worktree")
 
+    patterns = list(DEFAULT_PROTECTED_BRANCHES if protected_branches is None else protected_branches)
+    is_protected = is_branch_protected(target_branch, patterns) if target_branch else False
+
+    # Check remotes
+    remotes_map = cache.get_remotes(repo_path, timeout=timeout) if cache else get_repo_remotes(repo_path, timeout=timeout)
+    if not remotes_map and is_worktree and worktree_main_path:
+        remotes_map = cache.get_remotes(worktree_main_path, timeout=timeout) if cache else get_repo_remotes(worktree_main_path, timeout=timeout)
+
+    target_remote: Optional[str] = None
+    if remotes_map:
+        if remote:
+            target_remote = remote if remote in remotes_map else None
+        else:
+            target_remote = "origin" if "origin" in remotes_map else next(iter(remotes_map.keys()))
+
+    # Check working tree dirty status
+    is_dirty = check_repo_dirty(repo_path, timeout=timeout)
+
+    # Detached HEAD check
     if not target_branch:
-        if benchmark:
-            benchmark.record_failure("detached_head")
+        latency = round(time.perf_counter() - t_start, 4)
+        diagnostic = {
+            "category": "DETACHED_HEAD",
+            "message": "Cannot push in detached HEAD state.",
+            "suggestion": "Checkout a named branch before pushing.",
+            "action_required": "checkout_branch",
+        }
         return {
             "repo": repo_path,
             "branch": "HEAD (detached)",
-            "remote": remote,
-            "success": False,
-            "stdout": "",
-            "stderr": "Cannot push in detached HEAD state.",
-            "dry_run": dry_run,
+            "remote": target_remote,
+            "is_protected": False,
+            "protected_patterns": patterns,
+            "force_requested": force,
+            "force_defended": False,
+            "block_protected": block_protected,
+            "allow_protected": allow_protected,
+            "upstream": None,
+            "upstream_configured": False,
             "ahead": 0,
+            "behind": 0,
+            "diverged": False,
+            "is_dirty": is_dirty,
+            "passed": False,
+            "diagnostic": diagnostic,
+            "safety_checks": {
+                "branch_state": "FAIL",
+                "protected_branch_guard": "PASS",
+                "force_push_guard": "PASS",
+                "divergence_guard": "PASS",
+            },
+            "latency_seconds": latency,
             "is_worktree": is_worktree,
             "worktree_main_path": worktree_main_path,
         }
 
-    # Verify remotes exist (with worktree fallback to main worktree)
-    remotes_map = cache.get_remotes(repo_path, timeout=5) if cache else get_repo_remotes(repo_path, timeout=5)
-    if not remotes_map and is_worktree and worktree_main_path:
-        remotes_map = cache.get_remotes(worktree_main_path, timeout=5) if cache else get_repo_remotes(worktree_main_path, timeout=5)
+    # No remote check
     if not remotes_map:
-        if benchmark:
-            benchmark.record_failure("no_remote")
+        latency = round(time.perf_counter() - t_start, 4)
+        diagnostic = {
+            "category": "NO_REMOTE",
+            "message": "No remote configured for repository.",
+            "suggestion": "Add a remote repository via 'git remote add origin <url>'.",
+            "action_required": "configure_remote",
+        }
+        return {
+            "repo": repo_path,
+            "branch": target_branch,
+            "remote": None,
+            "is_protected": is_protected,
+            "protected_patterns": patterns,
+            "force_requested": force,
+            "force_defended": False,
+            "block_protected": block_protected,
+            "allow_protected": allow_protected,
+            "upstream": None,
+            "upstream_configured": False,
+            "ahead": 0,
+            "behind": 0,
+            "diverged": False,
+            "is_dirty": is_dirty,
+            "passed": False,
+            "diagnostic": diagnostic,
+            "safety_checks": {
+                "branch_state": "PASS",
+                "protected_branch_guard": "PASS",
+                "force_push_guard": "PASS",
+                "divergence_guard": "PASS",
+            },
+            "latency_seconds": latency,
+            "is_worktree": is_worktree,
+            "worktree_main_path": worktree_main_path,
+        }
+
+    # Invalid remote requested
+    if remote and target_remote is None:
+        latency = round(time.perf_counter() - t_start, 4)
+        diagnostic = {
+            "category": "INVALID_REMOTE",
+            "message": f"Remote '{remote}' not configured for repository. Available remotes: {', '.join(sorted(remotes_map.keys()))}.",
+            "suggestion": f"Specify a valid remote name or add '{remote}' with 'git remote add {remote} <url>'.",
+            "action_required": "configure_remote",
+        }
         return {
             "repo": repo_path,
             "branch": target_branch,
             "remote": remote,
-            "success": False,
-            "stdout": "",
-            "stderr": "No remote configured for repository.",
-            "dry_run": dry_run,
+            "is_protected": is_protected,
+            "protected_patterns": patterns,
+            "force_requested": force,
+            "force_defended": False,
+            "block_protected": block_protected,
+            "allow_protected": allow_protected,
+            "upstream": None,
+            "upstream_configured": False,
             "ahead": 0,
+            "behind": 0,
+            "diverged": False,
+            "is_dirty": is_dirty,
+            "passed": False,
+            "diagnostic": diagnostic,
+            "safety_checks": {
+                "branch_state": "PASS",
+                "protected_branch_guard": "PASS",
+                "force_push_guard": "PASS",
+                "divergence_guard": "PASS",
+            },
+            "latency_seconds": latency,
             "is_worktree": is_worktree,
             "worktree_main_path": worktree_main_path,
         }
 
-    if remote:
-        if remote not in remotes_map:
-            if benchmark:
-                benchmark.record_failure("no_remote")
-            return {
-                "repo": repo_path,
-                "branch": target_branch,
-                "remote": remote,
-                "success": False,
-                "stdout": "",
-                "stderr": f"Remote '{remote}' not configured for repository. Available remotes: {', '.join(sorted(remotes_map.keys()))}.",
-                "dry_run": dry_run,
-                "ahead": 0,
-                "is_worktree": is_worktree,
-                "worktree_main_path": worktree_main_path,
-            }
-        target_remote = remote
-    else:
-        target_remote = "origin" if "origin" in remotes_map else next(iter(remotes_map.keys()))
+    # Safety Guard 1: Protected Branch Force-Push Defense
+    # Force pushing to any protected branch is strictly prohibited to prevent accidental remote override
+    if is_protected and force:
+        latency = round(time.perf_counter() - t_start, 4)
+        diagnostic = {
+            "category": "PROTECTED_BRANCH_FORCE_PUSH",
+            "message": f"Force-push to protected branch '{target_branch}' is strictly prohibited to prevent accidental remote override.",
+            "suggestion": "Protected branches cannot be overwritten with force-push. Push with standard fast-forward or use a dedicated feature branch.",
+            "action_required": "avoid_force_push",
+        }
+        return {
+            "repo": repo_path,
+            "branch": target_branch,
+            "remote": target_remote,
+            "is_protected": True,
+            "protected_patterns": patterns,
+            "force_requested": True,
+            "force_defended": True,
+            "block_protected": block_protected,
+            "allow_protected": allow_protected,
+            "upstream": None,
+            "upstream_configured": False,
+            "ahead": 0,
+            "behind": 0,
+            "diverged": False,
+            "is_dirty": is_dirty,
+            "passed": False,
+            "diagnostic": diagnostic,
+            "safety_checks": {
+                "branch_state": "PASS",
+                "protected_branch_guard": "BLOCKED",
+                "force_push_guard": "BLOCKED",
+                "divergence_guard": "PASS",
+            },
+            "latency_seconds": latency,
+            "is_worktree": is_worktree,
+            "worktree_main_path": worktree_main_path,
+        }
 
-    # Check upstream divergence if target is current branch
+    # Safety Guard 2: Protected Branch Direct Push Safeguard
+    # If direct push to protected branch is blocked by policy and not explicitly allowed
+    if is_protected and block_protected and not allow_protected:
+        latency = round(time.perf_counter() - t_start, 4)
+        diagnostic = {
+            "category": "PROTECTED_BRANCH_DIRECT_PUSH",
+            "message": f"Direct push to protected branch '{target_branch}' is blocked by workspace safety policy.",
+            "suggestion": "Submit a pull request or re-run with --allow-protected to override.",
+            "action_required": "allow_protected_or_pr",
+        }
+        return {
+            "repo": repo_path,
+            "branch": target_branch,
+            "remote": target_remote,
+            "is_protected": True,
+            "protected_patterns": patterns,
+            "force_requested": force,
+            "force_defended": False,
+            "block_protected": True,
+            "allow_protected": False,
+            "upstream": None,
+            "upstream_configured": False,
+            "ahead": 0,
+            "behind": 0,
+            "diverged": False,
+            "is_dirty": is_dirty,
+            "passed": False,
+            "diagnostic": diagnostic,
+            "safety_checks": {
+                "branch_state": "PASS",
+                "protected_branch_guard": "BLOCKED",
+                "force_push_guard": "PASS",
+                "divergence_guard": "PASS",
+            },
+            "latency_seconds": latency,
+            "is_worktree": is_worktree,
+            "worktree_main_path": worktree_main_path,
+        }
+
+    # Upstream and divergence inspection
     ahead_count = 0
-    if target_branch == curr_branch:
-        p_up = run_git(repo_path, ["rev-parse", "--abbrev-ref", "@{u}"], timeout=5)
+    behind_count = 0
+    upstream: Optional[str] = None
+    upstream_configured = False
+
+    p_up = run_git(repo_path, ["rev-parse", "--abbrev-ref", f"{target_branch}@{{u}}"], timeout=timeout)
+    if p_up.returncode != 0 and target_branch == curr_branch:
+        p_up = run_git(repo_path, ["rev-parse", "--abbrev-ref", "@{u}"], timeout=timeout)
+
+    if p_up.returncode == 0 and p_up.stdout.strip() and "fatal:" not in p_up.stdout:
         upstream = p_up.stdout.strip()
-        if p_up.returncode == 0 and upstream and "fatal:" not in upstream:
-            p_ahead = run_git(repo_path, ["rev-list", "--count", f"{upstream}..HEAD"], timeout=5)
-            p_behind = run_git(repo_path, ["rev-list", "--count", f"HEAD..{upstream}"], timeout=5)
+        upstream_configured = True
+        p_ahead = run_git(repo_path, ["rev-list", "--count", f"{upstream}..{target_branch}"], timeout=timeout)
+        p_behind = run_git(repo_path, ["rev-list", "--count", f"{target_branch}..{upstream}"], timeout=timeout)
+        try:
+            ahead_count = int(p_ahead.stdout.strip() or 0)
+            behind_count = int(p_behind.stdout.strip() or 0)
+        except ValueError:
+            ahead_count = 0
+            behind_count = 0
+    else:
+        # No upstream configured: check remote tracking branch existence
+        p_remote_ref = run_git(repo_path, ["rev-parse", "--verify", f"refs/remotes/{target_remote}/{target_branch}"], timeout=timeout)
+        if p_remote_ref.returncode == 0:
+            p_ahead = run_git(repo_path, ["rev-list", "--count", f"{target_remote}/{target_branch}..{target_branch}"], timeout=timeout)
+            p_behind = run_git(repo_path, ["rev-list", "--count", f"{target_branch}..{target_remote}/{target_branch}"], timeout=timeout)
             try:
                 ahead_count = int(p_ahead.stdout.strip() or 0)
                 behind_count = int(p_behind.stdout.strip() or 0)
             except ValueError:
                 ahead_count = 0
                 behind_count = 0
+        else:
+            p_ahead = run_git(repo_path, ["rev-list", "--count", target_branch], timeout=timeout)
+            try:
+                ahead_count = int(p_ahead.stdout.strip() or 0)
+            except ValueError:
+                ahead_count = 0
+            behind_count = 0
 
-            if ahead_count > 0 and behind_count > 0:
-                if benchmark:
-                    benchmark.record_failure("diverged")
-                return {
+    diverged = (ahead_count > 0 and behind_count > 0)
+
+    # Safety Guard 3: Divergence Guard (non-force push cannot overwrite divergent upstream)
+    if diverged and not force:
+        latency = round(time.perf_counter() - t_start, 4)
+        diagnostic = {
+            "category": "DIVERGED",
+            "message": f"Branch '{target_branch}' has diverged from upstream '{upstream}' ({ahead_count} ahead, {behind_count} behind). Rebase or merge before pushing.",
+            "suggestion": "Rebase or merge before pushing.",
+            "action_required": "rebase_or_merge",
+        }
+        return {
+            "repo": repo_path,
+            "branch": target_branch,
+            "remote": target_remote,
+            "is_protected": is_protected,
+            "protected_patterns": patterns,
+            "force_requested": force,
+            "force_defended": False,
+            "block_protected": block_protected,
+            "allow_protected": allow_protected,
+            "upstream": upstream,
+            "upstream_configured": upstream_configured,
+            "ahead": ahead_count,
+            "behind": behind_count,
+            "diverged": True,
+            "is_dirty": is_dirty,
+            "passed": False,
+            "diagnostic": diagnostic,
+            "safety_checks": {
+                "branch_state": "PASS",
+                "protected_branch_guard": "PASS",
+                "force_push_guard": "PASS",
+                "divergence_guard": "FAIL",
+            },
+            "latency_seconds": latency,
+            "is_worktree": is_worktree,
+            "worktree_main_path": worktree_main_path,
+        }
+
+    # Safety Guard 4: Behind Upstream Guard
+    if behind_count > 0 and ahead_count == 0 and not force:
+        latency = round(time.perf_counter() - t_start, 4)
+        diagnostic = {
+            "category": "BEHIND_UPSTREAM",
+            "message": f"Branch '{target_branch}' is behind upstream '{upstream}' by {behind_count} commit(s). Pull changes before pushing.",
+            "suggestion": "Pull changes before pushing.",
+            "action_required": "pull_before_push",
+        }
+        return {
+            "repo": repo_path,
+            "branch": target_branch,
+            "remote": target_remote,
+            "is_protected": is_protected,
+            "protected_patterns": patterns,
+            "force_requested": force,
+            "force_defended": False,
+            "block_protected": block_protected,
+            "allow_protected": allow_protected,
+            "upstream": upstream,
+            "upstream_configured": upstream_configured,
+            "ahead": 0,
+            "behind": behind_count,
+            "diverged": False,
+            "is_dirty": is_dirty,
+            "passed": False,
+            "diagnostic": diagnostic,
+            "safety_checks": {
+                "branch_state": "PASS",
+                "protected_branch_guard": "PASS",
+                "force_push_guard": "PASS",
+                "divergence_guard": "FAIL",
+            },
+            "latency_seconds": latency,
+            "is_worktree": is_worktree,
+            "worktree_main_path": worktree_main_path,
+        }
+
+    latency = round(time.perf_counter() - t_start, 4)
+    return {
+        "repo": repo_path,
+        "branch": target_branch,
+        "remote": target_remote,
+        "is_protected": is_protected,
+        "protected_patterns": patterns,
+        "force_requested": force,
+        "force_defended": False,
+        "block_protected": block_protected,
+        "allow_protected": allow_protected,
+        "upstream": upstream,
+        "upstream_configured": upstream_configured,
+        "ahead": ahead_count,
+        "behind": behind_count,
+        "diverged": diverged,
+        "is_dirty": is_dirty,
+        "passed": True,
+        "diagnostic": None,
+        "safety_checks": {
+            "branch_state": "PASS",
+            "protected_branch_guard": "PASS",
+            "force_push_guard": "PASS",
+            "divergence_guard": "PASS",
+        },
+        "latency_seconds": latency,
+        "is_worktree": is_worktree,
+        "worktree_main_path": worktree_main_path,
+    }
+
+
+def push_repo(
+    repo_path: str,
+    branch: Optional[str] = None,
+    remote: Optional[str] = None,
+    dry_run: bool = False,
+    force: bool = False,
+    protected_branches: Optional[List[str]] = None,
+    block_protected: bool = False,
+    allow_protected: bool = False,
+    timeout: int = DEFAULT_TIMEOUT,
+    cache: Optional[BulkCache] = None,
+    benchmark: Optional[TelemetryBenchmark] = None,
+    retries: int = DEFAULT_RETRIES,
+) -> Dict[str, Any]:
+    """
+    Push committed changes for a repository with pre-flight telemetry and branch protection safeguards.
+    # INVARIANT: Force push to protected branches is strictly prohibited to prevent data loss across satellite repositories.
+    # INVARIANT: Diverged branches (ahead > 0 and behind > 0) are blocked from pushing to prevent remote rejection.
+    # INVARIANT: GIT_TERMINAL_PROMPT=0 guarantees git never blocks on interactive auth/passphrase prompts.
+    """
+    preflight = preflight_push_check(
+        repo_path,
+        branch=branch,
+        remote=remote,
+        force=force,
+        protected_branches=protected_branches,
+        block_protected=block_protected,
+        allow_protected=allow_protected,
+        cache=cache,
+        timeout=min(timeout, 5),
+    )
+
+    if benchmark:
+        benchmark.record_disk_latency(preflight["latency_seconds"])
+        benchmark.record_stage("push_preflight", preflight["latency_seconds"])
+
+    target_branch = preflight["branch"]
+    target_remote = preflight["remote"]
+    is_worktree = preflight["is_worktree"]
+    worktree_main_path = preflight["worktree_main_path"]
+
+    if not preflight["passed"]:
+        diag = preflight.get("diagnostic") or {}
+        cat = diag.get("category", "PUSH_PREFLIGHT_FAILED")
+        if benchmark:
+            benchmark.record_failure(cat.lower())
+            if cat in ("PROTECTED_BRANCH_FORCE_PUSH", "PROTECTED_BRANCH_DIRECT_PUSH"):
+                benchmark.alerts.append({
+                    "category": cat,
                     "repo": repo_path,
                     "branch": target_branch,
-                    "remote": target_remote,
-                    "success": False,
-                    "stdout": "",
-                    "stderr": f"Branch '{target_branch}' has diverged from upstream '{upstream}' ({ahead_count} ahead, {behind_count} behind). Rebase or merge before pushing.",
-                    "dry_run": dry_run,
-                    "ahead": ahead_count,
-                    "is_worktree": is_worktree,
-                    "worktree_main_path": worktree_main_path,
-                }
-            if behind_count > 0 and ahead_count == 0:
-                if benchmark:
-                    benchmark.record_failure("behind_upstream")
-                return {
-                    "repo": repo_path,
-                    "branch": target_branch,
-                    "remote": target_remote,
-                    "success": False,
-                    "stdout": "",
-                    "stderr": f"Branch '{target_branch}' is behind upstream '{upstream}' by {behind_count} commit(s). Pull changes before pushing.",
-                    "dry_run": dry_run,
-                    "ahead": 0,
-                    "is_worktree": is_worktree,
-                    "worktree_main_path": worktree_main_path,
-                }
+                    "message": diag.get("message", "Push blocked by protected branch defense."),
+                })
+        return {
+            "repo": repo_path,
+            "branch": target_branch,
+            "remote": target_remote or remote,
+            "success": False,
+            "stdout": "",
+            "stderr": diag.get("message", "Pre-flight safety check failed."),
+            "dry_run": dry_run,
+            "ahead": preflight.get("ahead", 0),
+            "diagnostic": diag,
+            "preflight": preflight,
+            "is_worktree": is_worktree,
+            "worktree_main_path": worktree_main_path,
+        }
 
     cmd = ["push"]
     if dry_run:
         cmd.append("--dry-run")
+    if force:
+        cmd.append("--force-with-lease")
     cmd.extend([target_remote, target_branch])
 
     t_push = time.perf_counter()
@@ -3919,8 +4280,9 @@ def push_repo(
         "stdout": proc.stdout.strip(),
         "stderr": proc.stderr.strip(),
         "dry_run": dry_run,
-        "ahead": ahead_count,
+        "ahead": preflight.get("ahead", 0),
         "diagnostic": diagnostic,
+        "preflight": preflight,
         "is_worktree": is_worktree,
         "worktree_main_path": worktree_main_path,
     }
@@ -4379,6 +4741,7 @@ __all__ = [
     "DEFAULT_MAX_WORKERS",
     "DEFAULT_MIN_WORKERS",
     "DEFAULT_NETWORK_LATENCY_THRESHOLD",
+    "DEFAULT_PROTECTED_BRANCHES",
     "DEFAULT_RETRIES",
     "DEFAULT_ROOT",
     "DEFAULT_TIMEOUT",
@@ -4410,9 +4773,11 @@ __all__ = [
     "inspect_github_cli",
     "inspect_repo",
     "inspect_ssh_config",
+    "is_branch_protected",
     "is_shallow_repository",
     "is_transient_network_error",
     "match_repo",
+    "preflight_push_check",
     "probe_remote_reachability",
     "prune_repo_remotes",
     "prune_repo_worktrees",
