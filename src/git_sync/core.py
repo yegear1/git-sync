@@ -19,6 +19,8 @@ from git_sync.engine.concurrency import (
 )
 from git_sync.engine.git import (
     DEFAULT_BACKOFF_FACTOR,
+    DEFAULT_CHARS_PER_TOKEN,
+    DEFAULT_COMPACT_DIFF_TOKENS,
     DEFAULT_IGNORE_DIRS,
     DEFAULT_MAX_BACKOFF,
     DEFAULT_RETRIES,
@@ -59,7 +61,9 @@ from git_sync.engine.git import (
     restore_stash,
     run_git,
     run_git_with_retry,
+    split_diff_files,
     stash_changes,
+    truncate_diff,
 )
 from git_sync.telemetry import (
     BulkCache,
@@ -86,6 +90,8 @@ __all__ = [
     "AnsiStyler",
     "BulkCache",
     "DEFAULT_BACKOFF_FACTOR",
+    "DEFAULT_CHARS_PER_TOKEN",
+    "DEFAULT_COMPACT_DIFF_TOKENS",
     "DEFAULT_DISK_LATENCY_THRESHOLD",
     "DEFAULT_IGNORE_DIRS",
     "DEFAULT_MAX_BACKOFF",
@@ -140,6 +146,8 @@ __all__ = [
     "run_git",
     "run_git_with_retry",
     "should_use_color",
+    "split_diff_files",
     "stash_changes",
     "style_text",
+    "truncate_diff",
 ]

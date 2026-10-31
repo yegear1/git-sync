@@ -76,6 +76,8 @@ DEFAULT_DISK_LATENCY_THRESHOLD = 0.20
 DEFAULT_NETWORK_LATENCY_THRESHOLD = 2.0
 DEFAULT_MAX_WORKERS = 32
 DEFAULT_MIN_WORKERS = 1
+DEFAULT_COMPACT_DIFF_TOKENS = 1000
+DEFAULT_CHARS_PER_TOKEN = 4
 
 DEFAULT_IGNORE_DIRS = {
     "node_modules",
@@ -2968,15 +2970,104 @@ def get_divergence_details(
     }
 
 
+def split_diff_files(diff: str) -> List[str]:
+    """
+    Split a unified git diff into per-file diff chunks based on 'diff --git ' headers.
+    Preserves all lines and chunk content.
+    """
+    lines = diff.splitlines(keepends=True)
+    chunks: List[str] = []
+    current: List[str] = []
+
+    for line in lines:
+        if line.startswith("diff --git ") and any(c.startswith("diff --git ") for c in current):
+            chunks.append("".join(current))
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
+def truncate_diff(
+    diff: str,
+    max_tokens: Optional[int] = None,
+    chars_per_token: int = DEFAULT_CHARS_PER_TOKEN,
+) -> str:
+    """
+    Deterministically truncate git diff text based on a token budget (~4 chars/token).
+    Preserves whole file chunks up to max_tokens, partially truncates oversized single-file
+    diffs, and appends an explicit `[... truncated X more file(s), ~Y chars ...]` marker.
+
+    # INVARIANT: Preserves whole file boundaries wherever possible to avoid emitting
+    # broken syntactic chunks to agents or terminal consumers.
+    # INVARIANT: If diff length <= max_tokens * chars_per_token, returns unmodified diff.
+    """
+    if not diff or max_tokens is None or max_tokens <= 0:
+        return diff
+
+    max_chars = max_tokens * chars_per_token
+    if len(diff) <= max_chars:
+        return diff
+
+    chunks = split_diff_files(diff)
+    if not chunks:
+        return diff
+
+    kept_chunks: List[str] = []
+    current_len = 0
+    for chunk in chunks:
+        if current_len + len(chunk) <= max_chars:
+            kept_chunks.append(chunk)
+            current_len += len(chunk)
+        else:
+            break
+
+    if kept_chunks:
+        truncated_files = len(chunks) - len(kept_chunks)
+        truncated_chars = len(diff) - current_len
+        marker = f"[... truncated {truncated_files} more file(s), ~{truncated_chars} chars ...]"
+        res = f"{''.join(kept_chunks).rstrip()}\n{marker}"
+    else:
+        # Oversized single-file diff or first chunk exceeds budget: partially truncate first chunk
+        truncated_files = max(0, len(chunks) - 1)
+        est_marker = f"\n[... truncated {truncated_files} more file(s), ~{len(diff)} chars ...]"
+        target_len = max(0, max_chars - len(est_marker))
+        chunk_0 = chunks[0]
+        if target_len <= 0:
+            partial = ""
+        else:
+            last_nl = chunk_0.rfind("\n", 0, target_len)
+            if last_nl > 0:
+                partial = chunk_0[:last_nl]
+            else:
+                partial = chunk_0[:target_len]
+
+        truncated_chars = len(diff) - len(partial)
+        marker = f"[... truncated {truncated_files} more file(s), ~{truncated_chars} chars ...]"
+        if partial.strip():
+            res = f"{partial.rstrip()}\n{marker}"
+        else:
+            res = marker
+
+    if diff.endswith("\n"):
+        res += "\n"
+    return res
+
+
 def get_divergence_diff(
     repo_path: str,
     branch: Optional[str] = None,
     stat_only: bool = False,
     timeout: int = DEFAULT_TIMEOUT,
+    max_tokens: Optional[int] = None,
 ) -> str:
     """
     Generate diff text between local branch and remote upstream tracking branch.
     # INVARIANT: Uses symmetric three-dot diff HEAD...upstream to inspect changes introduced on remote since divergence.
+    # INVARIANT: When max_tokens is provided and stat_only is False, applies deterministic
+    # file-boundary aware diff truncation to protect LLM context windows and CLI outputs.
     """
     curr_branch = branch or run_git(repo_path, ["branch", "--show-current"], timeout=5).stdout.strip()
     if not curr_branch:
@@ -2993,7 +3084,10 @@ def get_divergence_diff(
     cmd.append(f"{curr_branch}...{upstream}")
 
     p_diff = run_git(repo_path, cmd, timeout=timeout)
-    return p_diff.stdout.strip()
+    diff_text = p_diff.stdout.strip()
+    if max_tokens is not None and not stat_only and diff_text:
+        diff_text = truncate_diff(diff_text, max_tokens=max_tokens)
+    return diff_text
 
 
 def resolve_divergence(
@@ -3176,6 +3270,8 @@ def resolve_divergence(
 
 __all__ = [
     "DEFAULT_BACKOFF_FACTOR",
+    "DEFAULT_CHARS_PER_TOKEN",
+    "DEFAULT_COMPACT_DIFF_TOKENS",
     "DEFAULT_DISK_LATENCY_THRESHOLD",
     "DEFAULT_IGNORE_DIRS",
     "DEFAULT_MAX_BACKOFF",
@@ -3221,5 +3317,7 @@ __all__ = [
     "restore_stash",
     "run_git",
     "run_git_with_retry",
+    "split_diff_files",
     "stash_changes",
+    "truncate_diff",
 ]

@@ -22,6 +22,7 @@ from git_sync.config import (
     load_config,
 )
 from git_sync.engine import (
+    DEFAULT_COMPACT_DIFF_TOKENS,
     DEFAULT_RETRIES,
     DEFAULT_ROOT,
     DEFAULT_TIMEOUT,
@@ -48,6 +49,7 @@ from git_sync.engine import (
     recover_repo_locks,
     resolve_divergence,
     run_git_with_retry,
+    truncate_diff,
 )
 from git_sync.telemetry import BulkCache, TelemetryBenchmark
 from git_sync.ui import (
@@ -587,6 +589,7 @@ def _prompt_resolution_choice(
     details: Dict[str, Any],
     timeout: int = DEFAULT_TIMEOUT,
     input_func: Any = input,
+    max_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Prompt user interactively to choose a conflict or divergence resolution strategy.
@@ -631,12 +634,15 @@ def _prompt_resolution_choice(
             return resolve_divergence(repo_path, strategy="abort", branch=details.get("branch"), timeout=timeout)
 
         if choice in ("1", "diff"):
-            diff_text = get_divergence_diff(repo_path, branch=details.get("branch"), timeout=timeout)
+            diff_text = get_divergence_diff(
+                repo_path,
+                branch=details.get("branch"),
+                timeout=timeout,
+                max_tokens=max_tokens or DEFAULT_COMPACT_DIFF_TOKENS,
+            )
             if diff_text:
                 print("\n--- DIFF INÍCIO ---")
-                print(format_diff_stat(diff_text[:3000]))
-                if len(diff_text) > 3000:
-                    print(f"\n... (diff truncado em 3000 caracteres, total: {len(diff_text)})")
+                print(format_diff_stat(diff_text))
                 print("--- DIFF FIM ---\n")
             else:
                 print("\n(Nenhuma diferença textual encontrada ou sem upstream)")
@@ -938,7 +944,15 @@ def cmd_resolve(args: argparse.Namespace) -> int:
             details = get_divergence_details(r, timeout=args.timeout)
 
             if show_diff_only:
-                diff_text = get_divergence_diff(r, branch=details.get("branch"), timeout=args.timeout)
+                max_tokens = getattr(args, "max_tokens", None)
+                if max_tokens is None and (getattr(args, "compact", False) or getattr(args, "summary", False)):
+                    max_tokens = DEFAULT_COMPACT_DIFF_TOKENS
+                diff_text = get_divergence_diff(
+                    r,
+                    branch=details.get("branch"),
+                    timeout=args.timeout,
+                    max_tokens=max_tokens,
+                )
                 if args.json:
                     results.append({"repo": r, "repo_rel": rel, "details": details, "diff": diff_text, "dry_run": dry_run})
                 else:
@@ -960,7 +974,8 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                     status_msg = res.get("message") or res.get("stderr") or "OK"
                     print(f"{icon} {mode_str}[{rel}] ({details.get('branch')} -> {strategy}): {status_msg}")
             elif is_interactive:
-                res = _prompt_resolution_choice(r, rel, details, timeout=args.timeout)
+                max_tokens = getattr(args, "max_tokens", None) or getattr(config, "max_tokens", None)
+                res = _prompt_resolution_choice(r, rel, details, timeout=args.timeout, max_tokens=max_tokens)
                 res["repo_rel"] = rel
                 res["details"] = details
                 results.append(res)
@@ -1533,6 +1548,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     common.add_argument("--dry-run", dest="dry_run", action="store_true", default=argparse.SUPPRESS, help="Simulate execution without modifying repositories")
     common.add_argument("--no-dry-run", dest="dry_run", action="store_false", default=argparse.SUPPRESS, help="Disable dry-run simulation mode")
     common.add_argument("--dashboard", "--tui", dest="dashboard", action="store_true", default=argparse.SUPPRESS, help="Launch interactive terminal dashboard")
+    common.add_argument("--max-tokens", type=int, default=argparse.SUPPRESS, help="Maximum token budget for diff inspection (~4 chars/token)")
 
     parser = argparse.ArgumentParser(
         prog="git-sync",
@@ -1740,6 +1756,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     branch_flag = getattr(args, "branch", None)
     args.branch = branch_flag if branch_flag is not None else config.push_branch
+
+    max_tokens_flag = getattr(args, "max_tokens", None)
+    args.max_tokens = max_tokens_flag if max_tokens_flag is not None else getattr(config, "max_tokens", None)
 
     if args.command == "doctor":
         return cmd_doctor(args)

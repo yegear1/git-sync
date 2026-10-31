@@ -17,12 +17,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from git_sync.cli import _prompt_resolution_choice, main
 from git_sync.core import (
+    DEFAULT_COMPACT_DIFF_TOKENS,
     find_diverged_repos,
     get_divergence_details,
     get_divergence_diff,
     pull_repo,
     resolve_divergence,
     run_git,
+    split_diff_files,
+    truncate_diff,
 )
 
 
@@ -338,6 +341,166 @@ class TestDivergenceAndResolution(unittest.TestCase):
             )
         self.assertTrue(res["success"])
         self.assertEqual(res["strategy"], "abort")
+
+    def test_split_diff_files(self):
+        diff = (
+            "diff --git a/file1.py b/file1.py\n"
+            "index 111..222 100644\n"
+            "--- a/file1.py\n"
+            "+++ b/file1.py\n"
+            "@@ -1 +1 @@\n"
+            "+hello\n"
+            "diff --git a/file2.py b/file2.py\n"
+            "index 333..444 100644\n"
+            "--- a/file2.py\n"
+            "+++ b/file2.py\n"
+            "@@ -1 +1 @@\n"
+            "+world\n"
+        )
+        chunks = split_diff_files(diff)
+        self.assertEqual(len(chunks), 2)
+        self.assertIn("file1.py", chunks[0])
+        self.assertNotIn("file2.py", chunks[0])
+        self.assertIn("file2.py", chunks[1])
+        self.assertEqual("".join(chunks), diff)
+
+    def test_truncate_diff_no_truncation_under_budget(self):
+        diff = "diff --git a/a.txt b/a.txt\n+line\n"
+        # 34 chars <= 10 tokens * 4 = 40 chars
+        truncated = truncate_diff(diff, max_tokens=10)
+        self.assertEqual(truncated, diff)
+        self.assertNotIn("truncated", truncated)
+
+    def test_truncate_diff_none_or_empty(self):
+        self.assertEqual(truncate_diff("", max_tokens=100), "")
+        self.assertEqual(truncate_diff("diff --git a/a b/a", max_tokens=None), "diff --git a/a b/a")
+        self.assertEqual(truncate_diff("diff --git a/a b/a", max_tokens=0), "diff --git a/a b/a")
+
+    def test_truncate_diff_preserves_whole_files(self):
+        file1 = (
+            "diff --git a/file1.py b/file1.py\n"
+            "--- a/file1.py\n"
+            "+++ b/file1.py\n"
+            "@@ -1 +1 @@\n"
+            "+change1\n"
+        )
+        file2 = (
+            "diff --git a/file2.py b/file2.py\n"
+            "--- a/file2.py\n"
+            "+++ b/file2.py\n"
+            "@@ -1 +1 @@\n"
+            "+change2\n"
+        )
+        file3 = (
+            "diff --git a/file3.py b/file3.py\n"
+            "--- a/file3.py\n"
+            "+++ b/file3.py\n"
+            "@@ -1 +1 @@\n"
+            "+change3\n"
+        )
+        full_diff = file1 + file2 + file3
+        # len(file1) ~ 75 chars, len(file2) ~ 75 chars, len(file3) ~ 75 chars. Total ~ 225 chars.
+        # Budget for 2 files: ~38 tokens * 4 = 152 chars (fits file1 + file2, but not file3).
+        budget_tokens = (len(file1) + len(file2) + 5) // 4
+        result = truncate_diff(full_diff, max_tokens=budget_tokens)
+
+        # File1 and File2 must be preserved entirely
+        self.assertIn("file1.py", result)
+        self.assertIn("+change1", result)
+        self.assertIn("file2.py", result)
+        self.assertIn("+change2", result)
+        # File3 must be omitted
+        self.assertNotIn("file3.py", result)
+        self.assertNotIn("+change3", result)
+        # Explicit marker must specify 1 more file and character count
+        self.assertIn("[... truncated 1 more file(s), ~", result)
+
+    def test_truncate_diff_oversized_single_file(self):
+        # 1 file with 100 lines of diff
+        lines = ["diff --git a/huge.py b/huge.py\n", "--- a/huge.py\n", "+++ b/huge.py\n"]
+        for i in range(50):
+            lines.append(f"+line number {i:03d} content here\n")
+        diff = "".join(lines)
+        # Budget: 20 tokens * 4 = 80 chars (first file is >1000 chars)
+        result = truncate_diff(diff, max_tokens=20)
+
+        self.assertIn("huge.py", result)
+        self.assertIn("[... truncated 0 more file(s), ~", result)
+        # Output length must respect token budget or line boundary
+        self.assertLess(len(result), len(diff))
+
+    def test_truncate_diff_oversized_first_file_with_multiple_files(self):
+        file1 = "diff --git a/huge.py b/huge.py\n" + ("+change\n" * 100)
+        file2 = "diff --git a/small.py b/small.py\n+tiny\n"
+        full_diff = file1 + file2
+        result = truncate_diff(full_diff, max_tokens=20)
+        # First file is partially truncated, 1 more file omitted
+        self.assertIn("[... truncated 1 more file(s), ~", result)
+
+    def test_truncate_diff_custom_chars_per_token(self):
+        diff = "diff --git a/a.txt b/a.txt\n" + ("+line\n" * 20)
+        # 10 tokens at 2 chars/token = 20 chars max
+        result = truncate_diff(diff, max_tokens=10, chars_per_token=2)
+        self.assertIn("truncated", result)
+
+    def test_get_divergence_diff_with_token_budget(self):
+        local_repo = self._create_diverged_repo_pair("diff-budget-repo")
+        # Unbounded diff
+        full_diff = get_divergence_diff(str(local_repo))
+        self.assertIn("remote_file.txt", full_diff)
+
+        # Truncated diff with very tight token budget
+        truncated_diff = get_divergence_diff(str(local_repo), max_tokens=5)
+        self.assertIn("[... truncated", truncated_diff)
+
+    def test_cli_resolve_diff_with_max_tokens(self):
+        local_repo = self._create_diverged_repo_pair("cli-diff-tokens")
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = main([
+                "--root", str(self.root),
+                "resolve", "cli-diff-tokens",
+                "--diff",
+                "--max-tokens", "5",
+                "--no-fetch",
+            ])
+        self.assertEqual(exit_code, 0)
+        output = stdout_capture.getvalue()
+        self.assertIn("Diff de divergência", output)
+        self.assertIn("truncated", output)
+
+    def test_cli_resolve_diff_compact_default(self):
+        local_repo = self._create_diverged_repo_pair("cli-diff-compact")
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = main([
+                "--root", str(self.root),
+                "--compact",
+                "resolve", "cli-diff-compact",
+                "--diff",
+                "--no-fetch",
+            ])
+        self.assertEqual(exit_code, 0)
+        output = stdout_capture.getvalue()
+        self.assertIn("Diff de divergência", output)
+
+    def test_cli_resolve_diff_json_with_max_tokens(self):
+        local_repo = self._create_diverged_repo_pair("cli-diff-json-tokens")
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = main([
+                "--root", str(self.root),
+                "--json",
+                "resolve", "cli-diff-json-tokens",
+                "--diff",
+                "--max-tokens", "5",
+                "--no-fetch",
+            ])
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout_capture.getvalue())
+        self.assertIsInstance(payload, list)
+        self.assertIn("diff", payload[0])
+        self.assertIn("[... truncated", payload[0]["diff"])
 
 
 if __name__ == "__main__":

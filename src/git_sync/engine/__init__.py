@@ -15,6 +15,8 @@ from git_sync.engine.concurrency import (
 )
 from git_sync.engine.git import (
     DEFAULT_BACKOFF_FACTOR,
+    DEFAULT_CHARS_PER_TOKEN,
+    DEFAULT_COMPACT_DIFF_TOKENS,
     DEFAULT_IGNORE_DIRS,
     DEFAULT_MAX_BACKOFF,
     DEFAULT_RETRIES,
@@ -55,12 +57,16 @@ from git_sync.engine.git import (
     restore_stash,
     run_git,
     run_git_with_retry,
+    split_diff_files,
     stash_changes,
+    truncate_diff,
 )
 
 __all__ = [
     "AdaptiveConcurrencyController",
     "DEFAULT_BACKOFF_FACTOR",
+    "DEFAULT_CHARS_PER_TOKEN",
+    "DEFAULT_COMPACT_DIFF_TOKENS",
     "DEFAULT_DISK_LATENCY_THRESHOLD",
     "DEFAULT_IGNORE_DIRS",
     "DEFAULT_MAX_BACKOFF",
@@ -107,5 +113,7 @@ __all__ = [
     "restore_stash",
     "run_git",
     "run_git_with_retry",
+    "split_diff_files",
     "stash_changes",
+    "truncate_diff",
 ]

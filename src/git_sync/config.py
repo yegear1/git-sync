@@ -163,6 +163,7 @@ class GitSyncConfig:
     remote: Optional[str] = None
     pull_remote: Optional[str] = None
     push_remote: Optional[str] = None
+    max_tokens: Optional[int] = None
     active_profile: Optional[str] = None
     config_path: Optional[str] = None
     available_profiles: List[str] = field(default_factory=list)
@@ -209,6 +210,7 @@ class GitSyncConfig:
             "benchmark": self.benchmark,
             "use_cache": self.use_cache,
             "remote": self.remote,
+            "max_tokens": self.max_tokens,
             "active_profile": self.active_profile,
             "config_path": self.config_path,
             "available_profiles": list(self.available_profiles),
@@ -435,6 +437,14 @@ def resolve_config(
     remote_raw = combined.get("remote")
     remote = str(remote_raw) if remote_raw is not None else None
 
+    max_tokens_raw = combined.get("max_tokens")
+    if max_tokens_raw is None and isinstance(combined.get("resolve"), dict):
+        max_tokens_raw = combined.get("resolve", {}).get("max_tokens")
+    try:
+        max_tokens = int(max_tokens_raw) if max_tokens_raw is not None else None
+    except (TypeError, ValueError):
+        max_tokens = None
+
     return GitSyncConfig(
         root=root,
         workers=workers,
@@ -467,6 +477,7 @@ def resolve_config(
         remote=remote,
         pull_remote=pull_remote,
         push_remote=push_remote,
+        max_tokens=max_tokens,
         active_profile=target_profile,
         config_path=config_path,
         available_profiles=available_profiles,

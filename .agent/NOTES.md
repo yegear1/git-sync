@@ -17,7 +17,7 @@
 | `git-sync dashboard` / `tui` | `--fetch`/`--no-fetch`, `--pending`, `--group <dir>` | Interactive Dashboard | High-density terminal dashboard with single-key action loop (`Enter`, `p`, `r`, `d`, `j`/`k`, `q`) |
 | `git-sync doctor` | `--ssh`, `--group <dir>`, `--json` | Diagnostics table / JSON | Proactive credential sanity check (SSH agent, keys, credential helper, SSH multiplexing, remote reachability, locked repos) |
 | `git-sync pull` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--ff-only`/`--no-ff-only`, `--autostash`/`--no-autostash`, `--sync-branches`/`--no-sync-branches`, `--strategy <abort\|rebase\|merge>`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--recover-locks`, `-i`/`--interactive`, `--group <dir>`, `--json` | Progress logs / JSON | Fast-forward update of current branch + auxiliary branches with dirty tree autostash, divergence resolution & stale lock recovery |
-| `git-sync resolve` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--strategy <abort\|rebase\|merge\|stash>`, `--diff`, `-i`/`--interactive`, `--group <dir>`, `--fetch`/`--no-fetch`, `--json` | Interactive prompt / JSON | Guided diagnostics, diff inspection, and resolution for diverged branches |
+| `git-sync resolve` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--strategy <abort\|rebase\|merge\|stash>`, `--diff`, `--max-tokens <n>`, `-i`/`--interactive`, `--group <dir>`, `--fetch`/`--no-fetch`, `--compact`/`--summary`, `--json` | Interactive prompt / JSON | Guided diagnostics, diff inspection, and resolution for diverged branches |
 | `git-sync push` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--branch <name>`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json` | Progress logs / JSON | Push committed branches to upstream remote tracking targets |
 | `git-sync dirty` | `--group <dir>`, `--json` | List of modified files | Quick audit of uncommitted work |
 | `git-sync unlock` | `[repos...]`, `--all`, `--force`, `--group <dir>`, `--json` | Progress logs / JSON | Safely inspect and recover active or stale Git lock files (.git/*.lock) |
@@ -26,7 +26,7 @@
 | `git-sync completion` | `[bash\|zsh]`, `--install`, `--target-dir <dir>`, `--json` | Script / JSON | Generate or install shell autocompletion definitions with dynamic repo lookup |
 
 Global options (usable before or after subcommands):
-`-v`, `--version`, `--config <path>`, `--profile <name>`, `--root <dir>`, `--workers <n|auto>`, `--auto-tune` / `--adaptive`, `--timeout <sec>`, `--retries <n>`, `--preflight`, `--exclude <patterns...>`, `--compact`, `--summary`, `--benchmark`, `--telemetry`, `--no-cache`, `--remote <name>`, `--dry-run`, `--no-dry-run`, `--json`.
+`-v`, `--version`, `--config <path>`, `--profile <name>`, `--root <dir>`, `--workers <n|auto>`, `--auto-tune` / `--adaptive`, `--timeout <sec>`, `--retries <n>`, `--preflight`, `--exclude <patterns...>`, `--compact`, `--summary`, `--max-tokens <n>`, `--benchmark`, `--telemetry`, `--no-cache`, `--remote <name>`, `--dry-run`, `--no-dry-run`, `--json`.
 
 ### 2. Agent JSON Schema (`--json`)
 
@@ -59,6 +59,13 @@ Omit the heavy `items` list and output only high-level operational triage arrays
     }
   ]
 }
+```
+
+#### 2.4 Token-Budget Aware Diff Inspection Schema (`resolve --diff`)
+When inspecting divergent branch diffs with `git-sync resolve --diff` (either directly or with `--json`), token budgets can be enforced via `--max-tokens <n>` (defaulting to 1000 tokens / ~4000 chars when `--compact` or `--summary` is active). The deterministic chunker (`truncate_diff`) preserves complete file boundaries (`diff --git `) up to the budget, partially truncates oversized single-file diffs at line boundaries, and appends an explicit truncation marker:
+
+```
+[... truncated X more file(s), ~Y chars ...]
 ```
 
 #### 2.2 Full Detail Mode (Default `--json`)
@@ -116,6 +123,13 @@ Outputs the top-level summary plus the complete array of repository metadata:
 }
 ```
 
+#### 2.4 Token-Budget Aware Diff Inspection Schema (`resolve --diff`)
+When inspecting divergent branch diffs with `git-sync resolve --diff` (either directly or with `--json`), token budgets can be enforced via `--max-tokens <n>` (defaulting to 1000 tokens / ~4000 chars when `--compact` or `--summary` is active). The deterministic chunker (`truncate_diff`) preserves complete file boundaries (`diff --git `) up to the budget, partially truncates oversized single-file diffs at line boundaries, and appends an explicit truncation marker:
+
+```
+[... truncated X more file(s), ~Y chars ...]
+```
+
 #### 2.3 Telemetry Benchmark Schema (`--benchmark` or `--telemetry`)
 When `--benchmark` is combined with `--json`, a `telemetry` block is included in the output summary with stage, latency, concurrency, alerts, and failure breakdowns:
 
@@ -166,6 +180,13 @@ When `--benchmark` is combined with `--json`, a `telemetry` block is included in
     }
   ]
 }
+```
+
+#### 2.4 Token-Budget Aware Diff Inspection Schema (`resolve --diff`)
+When inspecting divergent branch diffs with `git-sync resolve --diff` (either directly or with `--json`), token budgets can be enforced via `--max-tokens <n>` (defaulting to 1000 tokens / ~4000 chars when `--compact` or `--summary` is active). The deterministic chunker (`truncate_diff`) preserves complete file boundaries (`diff --git `) up to the budget, partially truncates oversized single-file diffs at line boundaries, and appends an explicit truncation marker:
+
+```
+[... truncated X more file(s), ~Y chars ...]
 ```
 
 ### 3. Workspace Profiles, Hierarchical Config Merging, and `.git-sync.json` Schema
@@ -258,6 +279,7 @@ Configuration layers:
 - **SSH Multiplexing (ControlMaster) & Socket Directory Validation:** When configuring SSH connection reuse via `ControlMaster auto` and `ControlPath`, OpenSSH does not automatically create parent directories for socket paths (e.g. `~/.ssh/sockets/`). If the parent directory does not exist, all SSH operations fail immediately with `ControlPath: no such file or directory`. The `git-sync doctor --ssh` diagnostic validates directory existence and benchmarks handshake overhead with and without multiplexing using isolated temporary sockets, terminating spawned master processes via `ssh -O exit` to prevent orphaned sockets.
 - **GitHub CLI (`gh`) Integration & Transient Offline State Segregation:** In environments using GitHub CLI and HTTPS remotes, credential validity is governed by `gh auth status` rather than SSH keys. The `doctor` command inspects `gh` installation, login state, and token scopes. During status checks, transient network drops (`NETWORK_DNS_FAILURE`, `NETWORK_TIMEOUT`, `NETWORK_UNREACHABLE`) are differentiated from permanently unconfigured remotes (`NO_REMOTE`) and missing tracking branches (`NO_UPSTREAM`), attaching structured actionable remediation commands (e.g. `git-sync status --no-fetch`, `gh auth login`, `git remote add`) in both table and JSON outputs.
 - **ANSI `NO_COLOR` Compliance & Interactive Dashboard Raw TTY Handling:** Terminal styling (`AnsiStyler`, `format_diff_stat`) strictly honors the `NO_COLOR` specification (any non-empty `NO_COLOR` disables ANSI codes) and `sys.stdout.isatty()`. The interactive dashboard (`InteractiveDashboard`) uses `termios`/`tty.setraw` on interactive TTYs with `finally` attribute restoration and line-based fallback on non-TTYs, returning exit code `130` on `SIGINT` (`Ctrl+C`) or `EOF` (`Ctrl+D`).
+- **Token-Budget Aware Diff Truncation & File-Boundary Preservation:** Naive character slicing of Git diffs splits across patch headers or file hunks, producing broken diffs that fail LLM parsing or syntax highlighting. `truncate_diff` parses unified diffs by chunking on `diff --git ` boundaries. Whole file chunks are preserved up to `max_tokens * 4` characters. If a single file chunk exceeds the budget, it is partially truncated at the closest newline boundary, and an explicit `[... truncated X more file(s), ~Y chars ...]` marker is appended.
 
 ---
 
