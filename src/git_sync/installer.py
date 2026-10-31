@@ -531,7 +531,7 @@ _git_sync_completions() {
         cword=$COMP_CWORD
     fi
 
-    local commands="doctor status dashboard tui pull push resolve dirty unlock config install completion"
+    local commands="doctor status dashboard tui pull push resolve dirty unlock config install completion worktree"
     local common_opts="--config --profile --root --workers --auto-tune --adaptive --timeout --retries --preflight --exclude --compact --summary --changelog --max-tokens --json --benchmark --telemetry --no-cache --remote --dry-run --no-dry-run --help -h"
 
     # Identify active subcommand (ignoring leading `git` and `sync` tokens when invoked as `git sync`)
@@ -539,7 +539,7 @@ _git_sync_completions() {
     local i=1
     while [ $i -lt $cword ]; do
         case "${words[i]}" in
-            doctor|status|dashboard|tui|pull|push|resolve|dirty|unlock|config|install|completion)
+            doctor|status|dashboard|tui|pull|push|resolve|dirty|unlock|config|install|completion|worktree)
                 cmd="${words[i]}"
                 break
                 ;;
@@ -633,6 +633,18 @@ _git_sync_completions() {
             fi
             return 0
             ;;
+        worktree)
+            if [ "$prev" = "worktree" ]; then
+                COMPREPLY=($(compgen -W "prune list" -- "$cur"))
+            elif [[ "$cur" == -* ]]; then
+                COMPREPLY=($(compgen -W "$common_opts --all --expire --group" -- "$cur"))
+            else
+                local repos
+                repos=$(git-sync --complete-repos 2>/dev/null)
+                COMPREPLY=($(compgen -W "$repos" -- "$cur"))
+            fi
+            return 0
+            ;;
         *)
             COMPREPLY=($(compgen -W "$common_opts" -- "$cur"))
             return 0
@@ -708,6 +720,7 @@ _git_sync() {
                 'config:Display or bootstrap workspace profile and configuration'
                 'install:Install or update global symlink in ~/.local/bin'
                 'completion:Generate shell autocompletion script (bash or zsh)'
+                'worktree:Inspect or prune linked worktree metadata and orphaned directories'
             )
             _describe -t commands 'git-sync command' commands
             ;;
@@ -803,6 +816,15 @@ _git_sync() {
                         '--install[Install completion script to shell completions directory]' \\
                         '--target-dir[Target directory for completion script]:directory:_files -/' \\
                         '1:shell:(bash zsh)'
+                    ;;
+                worktree)
+                    _arguments \\
+                        $common_args \\
+                        '--all[Prune worktrees across all repositories]' \\
+                        '--expire[Expire worktrees older than time (default: now)]:time:' \\
+                        '--group[Filter target repositories by group]:group:' \\
+                        '1:action:(prune list)' \\
+                        '*:repository:->repos'
                     ;;
             esac
 

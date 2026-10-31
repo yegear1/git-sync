@@ -300,6 +300,7 @@ class BulkCache:
                         "main_worktree": main_path,
                         "worktrees": all_wts,
                         "checked_out_branches": info.get("checked_out_branches", {}),
+                        "stale_worktrees": info.get("stale_worktrees", []),
                     }
         return info
 

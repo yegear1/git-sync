@@ -1470,6 +1470,7 @@ def get_worktree_info(repo_path: str, timeout: int = 5) -> Dict[str, Any]:
             "main_worktree": None,
             "worktrees": [],
             "checked_out_branches": {},
+            "stale_worktrees": [],
         }
 
     worktrees: List[Dict[str, Any]] = []
@@ -1493,6 +1494,10 @@ def get_worktree_info(repo_path: str, timeout: int = 5) -> Dict[str, Any]:
                 "head": "",
                 "branch": "",
                 "is_main": (len(worktrees) == 0),
+                "is_prunable": False,
+                "prunable_reason": None,
+                "is_locked": False,
+                "lock_reason": None,
             }
         elif line.startswith("HEAD ") and current_entry:
             current_entry["head"] = line[len("HEAD "):].strip()
@@ -1501,13 +1506,83 @@ def get_worktree_info(repo_path: str, timeout: int = 5) -> Dict[str, Any]:
             current_entry["branch"] = ref.replace("refs/heads/", "")
         elif line == "detached" and current_entry:
             current_entry["branch"] = "HEAD (detached)"
+        elif line.startswith("prunable") and current_entry:
+            current_entry["is_prunable"] = True
+            r = line[len("prunable"):].strip()
+            current_entry["prunable_reason"] = r if r else "marked prunable"
+        elif line.startswith("locked") and current_entry:
+            current_entry["is_locked"] = True
+            r = line[len("locked"):].strip()
+            current_entry["lock_reason"] = r if r else "locked"
 
     if current_entry:
         worktrees.append(current_entry)
 
+    # Validate physical existence of worktrees on disk
+    for wt in worktrees:
+        if not os.path.exists(wt["path"]):
+            wt["is_prunable"] = True
+            if not wt.get("prunable_reason"):
+                wt["prunable_reason"] = "directory does not exist on disk"
+        elif not wt.get("is_main"):
+            git_file = os.path.join(wt["path"], ".git")
+            if not os.path.exists(git_file):
+                wt["is_prunable"] = True
+                if not wt.get("prunable_reason"):
+                    wt["prunable_reason"] = "missing .git file"
+
+    stale_worktrees: List[Dict[str, Any]] = [w for w in worktrees if w.get("is_prunable")]
+
     norm_repo = os.path.abspath(repo_path)
     main_wt = worktrees[0]["path"] if worktrees else None
     is_secondary = (main_wt is not None and norm_repo != main_wt)
+
+    # Check for orphaned worktree admin directories in primary .git/worktrees
+    primary_path = main_wt if main_wt else norm_repo
+    git_dir = get_repo_git_dir(primary_path)
+    admin_worktrees_dir = Path(git_dir) / "worktrees"
+    if admin_worktrees_dir.is_dir():
+        known_paths = {w["path"] for w in worktrees}
+        try:
+            for entry_name in os.listdir(admin_worktrees_dir):
+                admin_entry = admin_worktrees_dir / entry_name
+                if not admin_entry.is_dir():
+                    continue
+                gitdir_file = admin_entry / "gitdir"
+                if not gitdir_file.exists():
+                    orphaned = {
+                        "path": str(admin_entry),
+                        "head": "",
+                        "branch": entry_name,
+                        "is_main": False,
+                        "is_prunable": True,
+                        "prunable_reason": "orphaned worktree admin metadata (missing gitdir)",
+                        "is_locked": False,
+                        "lock_reason": None,
+                    }
+                    if not any(sw.get("branch") == entry_name for sw in stale_worktrees):
+                        stale_worktrees.append(orphaned)
+                else:
+                    try:
+                        target = gitdir_file.read_text(encoding="utf-8", errors="replace").strip()
+                        target_dir = os.path.dirname(target) if target.endswith(".git") else target
+                        if target_dir not in known_paths and not os.path.exists(target):
+                            orphaned = {
+                                "path": target_dir,
+                                "head": "",
+                                "branch": entry_name,
+                                "is_main": False,
+                                "is_prunable": True,
+                                "prunable_reason": "orphaned worktree admin metadata (target deleted)",
+                                "is_locked": False,
+                                "lock_reason": None,
+                            }
+                            if not any(sw.get("branch") == entry_name for sw in stale_worktrees):
+                                stale_worktrees.append(orphaned)
+                    except OSError:
+                        pass
+        except OSError:
+            pass
 
     checked_out: Dict[str, str] = {}
     for wt in worktrees:
@@ -1519,6 +1594,133 @@ def get_worktree_info(repo_path: str, timeout: int = 5) -> Dict[str, Any]:
         "main_worktree": main_wt if is_secondary else None,
         "worktrees": worktrees,
         "checked_out_branches": checked_out,
+        "stale_worktrees": stale_worktrees,
+    }
+
+
+def prune_repo_worktrees(
+    repo_path: str,
+    dry_run: bool = False,
+    expire: str = "now",
+    timeout: int = 10,
+    cache: Optional[BulkCache] = None,
+    root_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Prune stale and orphaned worktree administrative metadata and audit linked worktrees for dirty state.
+    # INVARIANT: Preserves active dirty linked worktrees and warns without deleting working files.
+    """
+    rel_path = os.path.relpath(repo_path, root_dir) if root_dir else os.path.basename(repo_path)
+
+    # 1. Audit worktree topology and warn on dirty linked worktrees
+    wt_info = get_worktree_info(repo_path, timeout=timeout)
+    worktrees = wt_info.get("worktrees", [])
+    dirty_linked: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+
+    for wt in worktrees:
+        if not wt.get("is_main") and os.path.exists(wt["path"]):
+            is_dirty, dirty_files = check_repo_dirty(wt["path"], timeout=timeout)
+            if is_dirty:
+                dirty_entry = {
+                    "path": wt["path"],
+                    "branch": wt.get("branch", ""),
+                    "dirty_files": dirty_files,
+                }
+                dirty_linked.append(dirty_entry)
+                warnings.append(
+                    f"Linked worktree '{wt['path']}' ({wt.get('branch', 'unknown')}) has uncommitted changes ({len(dirty_files)} dirty files)"
+                )
+
+    # 2. Execute git worktree prune
+    cmd = ["worktree", "prune", "-v"]
+    if expire:
+        cmd.extend(["--expire", expire])
+    if dry_run:
+        cmd.append("--dry-run")
+
+    proc = run_git(repo_path, cmd, timeout=timeout)
+    pruned_entries: List[Dict[str, Any]] = []
+
+    combined_output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+    for line in combined_output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.search(r"Removing (?:worktrees/)?([^:]+):\s*(.*)", line)
+        if m:
+            entry_name = m.group(1).strip()
+            reason = m.group(2).strip()
+            pruned_entries.append({
+                "name": entry_name,
+                "reason": reason,
+                "dry_run": dry_run,
+            })
+
+    # 3. Clean any orphaned admin directories that git worktree prune skipped
+    primary_wt = wt_info.get("main_worktree") or repo_path
+    git_dir = get_repo_git_dir(primary_wt)
+    admin_worktrees_dir = Path(git_dir) / "worktrees"
+    if admin_worktrees_dir.is_dir():
+        known_pruned = {p["name"] for p in pruned_entries}
+        try:
+            for entry_name in os.listdir(admin_worktrees_dir):
+                if entry_name in known_pruned:
+                    continue
+                admin_entry = admin_worktrees_dir / entry_name
+                if not admin_entry.is_dir():
+                    continue
+                gitdir_file = admin_entry / "gitdir"
+                orphaned = False
+                reason = ""
+                if not gitdir_file.exists():
+                    orphaned = True
+                    reason = "missing gitdir reference"
+                else:
+                    try:
+                        target = gitdir_file.read_text(encoding="utf-8", errors="replace").strip()
+                        if not os.path.exists(target):
+                            orphaned = True
+                            reason = f"target worktree missing ({target})"
+                    except OSError:
+                        orphaned = True
+                        reason = "unreadable gitdir file"
+
+                if orphaned:
+                    if not dry_run:
+                        try:
+                            shutil.rmtree(admin_entry, ignore_errors=True)
+                            pruned_entries.append({
+                                "name": entry_name,
+                                "reason": reason,
+                                "dry_run": False,
+                            })
+                        except OSError as e:
+                            warnings.append(f"Failed to remove orphaned admin directory {admin_entry}: {e}")
+                    else:
+                        pruned_entries.append({
+                            "name": entry_name,
+                            "reason": f"[dry-run] {reason}",
+                            "dry_run": True,
+                        })
+        except OSError:
+            pass
+
+    # 4. Invalidate cache if repo changed
+    if cache and (pruned_entries or not dry_run):
+        cache.invalidate(repo_path)
+        if primary_wt != repo_path:
+            cache.invalidate(primary_wt)
+
+    return {
+        "repo": repo_path,
+        "rel_path": rel_path,
+        "pruned": pruned_entries,
+        "warnings": warnings,
+        "dirty_worktrees": dirty_linked,
+        "dry_run": dry_run,
+        "success": proc.returncode == 0,
+        "error": proc.stderr if proc.returncode != 0 else None,
     }
 
 
@@ -2555,6 +2757,7 @@ def inspect_repo(
     worktree_main_path = wt_info["main_worktree"]
     worktrees = wt_info["worktrees"]
     checked_out_branches = wt_info["checked_out_branches"]
+    stale_worktrees = wt_info.get("stale_worktrees", [])
 
     submodules = cache.get_submodules_status(repo_path, timeout=5) if cache else get_submodules_status(repo_path, timeout=5)
 
@@ -2585,6 +2788,7 @@ def inspect_repo(
         "is_worktree": is_worktree,
         "worktree_main_path": worktree_main_path,
         "worktrees": worktrees,
+        "stale_worktrees": stale_worktrees,
         "submodules": submodules,
         "stale_refs": [],
         "pruned_refs": [],
@@ -3863,8 +4067,9 @@ __all__ = [
     "inspect_ssh_config",
     "is_transient_network_error",
     "match_repo",
-    "prune_repo_remotes",
     "probe_remote_reachability",
+    "prune_repo_remotes",
+    "prune_repo_worktrees",
     "pull_repo",
     "push_repo",
     "recover_index_lock",

@@ -281,6 +281,8 @@ class InteractiveDashboard:
             details.append(self.styler.yellow(f"dirty({dirty_cnt})"))
         if repo.get("is_worktree"):
             details.append(self.styler.dim("[worktree]"))
+        if repo.get("stale_worktrees"):
+            details.append(self.styler.yellow(f"wt_stale({len(repo['stale_worktrees'])})"))
         if not details:
             details.append(self.styler.dim("sincronizado"))
 

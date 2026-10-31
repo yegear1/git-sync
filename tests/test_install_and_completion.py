@@ -139,12 +139,14 @@ class TestInstallerAndCompletion(unittest.TestCase):
         self.assertIn("_git_sync()", bash_script)
         self.assertIn("--compact", bash_script)
         self.assertIn("--changelog", bash_script)
+        self.assertIn("worktree", bash_script)
         self.assertIn("--complete-repos", bash_script)
 
         zsh_script = generate_completion_script("zsh")
         self.assertIn("#compdef git-sync git-sync=git", zsh_script)
         self.assertIn("_git-sync()", zsh_script)
         self.assertIn("doctor:Run proactive credential", zsh_script)
+        self.assertIn("worktree:Inspect or prune linked worktree metadata", zsh_script)
         self.assertIn("--changelog", zsh_script)
         self.assertIn("--complete-repos", zsh_script)
 

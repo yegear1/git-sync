@@ -28,6 +28,7 @@ from git_sync.core import (
     inspect_repo,
     match_repo,
     parse_commit_log,
+    prune_repo_worktrees,
     pull_repo,
     push_repo,
     run_git,
@@ -1014,6 +1015,140 @@ class TestGitSyncCore(unittest.TestCase):
         self.assertIn("major breaking redesign", report)
         self.assertIn("[BREAKING]", report)
         self.assertIn("Changelog de 'mock-repo' inspecionado", dashboard.last_message)
+
+    def test_prune_repo_worktrees_cleans_missing_worktree_metadata(self):
+        """Verify prune_repo_worktrees cleans missing worktree metadata and updates topology."""
+        import shutil
+        repo = self._init_repo(self.root / "wt_main")
+        wt_dir = self.root / "wt_to_delete"
+        run_git(str(repo), ["worktree", "add", "-b", "feat-wt", str(wt_dir)])
+
+        # Verify worktree was added
+        info_before = get_worktree_info(str(repo))
+        self.assertEqual(len(info_before["worktrees"]), 2)
+
+        # Delete worktree directory from disk without git worktree remove
+        shutil.rmtree(wt_dir)
+
+        # Check that get_worktree_info identifies it as stale
+        info_stale = get_worktree_info(str(repo))
+        self.assertEqual(len(info_stale["stale_worktrees"]), 1)
+        self.assertTrue(info_stale["stale_worktrees"][0]["is_prunable"])
+
+        # Prune worktree
+        res = prune_repo_worktrees(str(repo), dry_run=False)
+        self.assertTrue(res["success"])
+        self.assertTrue(any("feat-wt" in str(p.get("name")) or "wt_to_delete" in str(p.get("name")) for p in res["pruned"]))
+
+        # Verify topology is clean
+        info_after = get_worktree_info(str(repo))
+        self.assertEqual(len(info_after["worktrees"]), 1)
+        self.assertEqual(len(info_after["stale_worktrees"]), 0)
+
+    def test_prune_repo_worktrees_warns_on_dirty_linked_worktree(self):
+        """Verify prune_repo_worktrees warns on dirty linked worktrees without destroying modifications."""
+        import shutil
+        repo = self._init_repo(self.root / "wt_warn_main")
+        wt_dirty = self.root / "wt_dirty"
+        wt_stale = self.root / "wt_stale"
+
+        run_git(str(repo), ["worktree", "add", "-b", "feat-dirty", str(wt_dirty)])
+        run_git(str(repo), ["worktree", "add", "-b", "feat-stale", str(wt_stale)])
+
+        # Make wt_dirty dirty
+        (wt_dirty / "uncommitted.txt").write_text("modified", encoding="utf-8")
+
+        # Delete wt_stale
+        shutil.rmtree(wt_stale)
+
+        res = prune_repo_worktrees(str(repo), dry_run=False)
+        self.assertTrue(res["success"])
+        # Should prune stale worktree
+        self.assertTrue(any("feat-stale" in str(p.get("name")) or "wt_stale" in str(p.get("name")) for p in res["pruned"]))
+        # Should report warning for dirty linked worktree
+        self.assertEqual(len(res["dirty_worktrees"]), 1)
+        self.assertEqual(res["dirty_worktrees"][0]["branch"], "feat-dirty")
+        self.assertTrue(any("uncommitted changes" in w for w in res["warnings"]))
+        # Dirty file must remain untouched
+        self.assertTrue((wt_dirty / "uncommitted.txt").exists())
+
+    def test_prune_repo_worktrees_dry_run_and_orphaned_admin(self):
+        """Verify dry-run prune mode and recovery of orphaned corrupt admin directories."""
+        import shutil
+        repo = self._init_repo(self.root / "wt_orphan_main")
+        wt_dir = self.root / "wt_dry"
+        run_git(str(repo), ["worktree", "add", "-b", "feat-dry", str(wt_dir)])
+        shutil.rmtree(wt_dir)
+
+        # Create orphaned admin directory in .git/worktrees/corrupt
+        corrupt_admin = repo / ".git" / "worktrees" / "corrupt_wt"
+        corrupt_admin.mkdir(parents=True, exist_ok=True)
+
+        # Dry run
+        res_dry = prune_repo_worktrees(str(repo), dry_run=True)
+        self.assertTrue(res_dry["success"])
+        self.assertTrue(res_dry["dry_run"])
+        self.assertGreaterEqual(len(res_dry["pruned"]), 1)
+        # Corrupt admin must still exist after dry run
+        self.assertTrue(corrupt_admin.exists())
+
+        # Live run
+        res_live = prune_repo_worktrees(str(repo), dry_run=False)
+        self.assertTrue(res_live["success"])
+        self.assertFalse(res_live["dry_run"])
+        # Corrupt admin should now be cleaned
+        self.assertFalse(corrupt_admin.exists())
+
+    def test_cli_worktree_commands_and_status_diagnostics(self):
+        """Verify CLI worktree prune, worktree list, and status diagnostic integration."""
+        import shutil
+        repo = self._init_repo(self.root / "wt_cli_main")
+        wt_dir = self.root / "wt_cli_del"
+        run_git(str(repo), ["worktree", "add", "-b", "feat-cli", str(wt_dir)])
+        shutil.rmtree(wt_dir)
+
+        # 1. Test status --json contains stale_worktrees and remediation
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            code = main(["status", "--root", str(self.root), "--no-fetch", "--json", "--compact"])
+        self.assertEqual(code, 0)
+        status_data = json.loads(buf.getvalue())
+        self.assertIn("stale_worktrees", status_data)
+        self.assertIn("wt_cli_main", status_data["stale_worktrees"])
+        remeds = [rem for rem in status_data.get("remediations", []) if rem.get("action_required") == "prune_worktrees"]
+        self.assertEqual(len(remeds), 1)
+        self.assertEqual(remeds[0]["status"], "STALE_WORKTREE")
+
+        # 2. Test worktree list command
+        buf_list = io.StringIO()
+        with patch("sys.stdout", buf_list):
+            code_list = main(["worktree", "list", "--root", str(self.root)])
+        self.assertEqual(code_list, 0)
+        self.assertIn("prunável", buf_list.getvalue())
+
+        # 3. Test worktree prune --dry-run CLI
+        buf_prune_dry = io.StringIO()
+        with patch("sys.stdout", buf_prune_dry):
+            code_dry = main(["worktree", "prune", "--root", str(self.root), "--dry-run", "--json"])
+        self.assertEqual(code_dry, 0)
+        prune_dry_data = json.loads(buf_prune_dry.getvalue())
+        self.assertTrue(prune_dry_data["dry_run"])
+        self.assertEqual(prune_dry_data["total_pruned"], 1)
+
+        # 4. Test worktree prune live CLI
+        buf_prune_live = io.StringIO()
+        with patch("sys.stdout", buf_prune_live):
+            code_live = main(["worktree", "prune", "--root", str(self.root)])
+        self.assertEqual(code_live, 0)
+        self.assertIn("Prunado worktree", buf_prune_live.getvalue())
+
+        # 5. Subsequent status should be clean
+        buf_after = io.StringIO()
+        with patch("sys.stdout", buf_after):
+            code_after = main(["status", "--root", str(self.root), "--no-fetch", "--json", "--compact"])
+        self.assertEqual(code_after, 0)
+        status_after_data = json.loads(buf_after.getvalue())
+        self.assertEqual(len(status_after_data["stale_worktrees"]), 0)
 
 
 if __name__ == "__main__":

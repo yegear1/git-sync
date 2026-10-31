@@ -9,7 +9,7 @@
 
 ### 1. CLI Commands & Invocation Protocols
 
-`git-sync` exposes ten core operations via subcommands:
+`git-sync` exposes eleven core operations via subcommands:
 
 | Subcommand | Flag Options | Primary Output | Use Case |
 |---|---|---|---|
@@ -24,6 +24,7 @@
 | `git-sync config` | `--init`, `--edit`, `--global`, `--json` | Table / JSON / Interactive Editor | Inspect resolved configuration, trace provenance sources, or bootstrap/edit templates |
 | `git-sync install` | `--target-dir <dir>`, `--force`, `--uninstall`, `--json` | Progress logs / JSON | Safe idempotent global deployment of launcher symlink to `~/.local/bin/git-sync` |
 | `git-sync completion` | `[bash\|zsh]`, `--install`, `--target-dir <dir>`, `--json` | Script / JSON | Generate or install shell autocompletion definitions with dynamic repo lookup |
+| `git-sync worktree` | `prune`/`list`, `[repos...]`, `--all`, `--expire <time>`, `--group <dir>`, `--dry-run`, `--json` | Table / Progress logs / JSON | Inspect linked worktree topology, clean missing worktree metadata/orphaned admin dirs, and warn on dirty linked worktrees |
 
 Global options (usable before or after subcommands):
 `-v`, `--version`, `--config <path>`, `--profile <name>`, `--root <dir>`, `--workers <n|auto>`, `--auto-tune` / `--adaptive`, `--timeout <sec>`, `--retries <n>`, `--preflight`, `--exclude <patterns...>`, `--compact`, `--summary`, `--changelog`, `--submodules` / `--no-submodules`, `--max-tokens <n>`, `--benchmark`, `--telemetry`, `--no-cache`, `--remote <name>`, `--dry-run`, `--no-dry-run`, `--json`.
@@ -44,6 +45,7 @@ Omit the heavy `items` list and output only high-level operational triage arrays
   "dirty": ["org/service-app"],
   "diverged": [],
   "worktrees": [],
+  "stale_worktrees": [],
   "has_submodules": [],
   "submodule_drift": [],
   "no_remote": [],
@@ -74,6 +76,7 @@ Outputs the top-level summary plus the complete array of repository metadata:
   "dirty": ["dev/zimbra-glpi"],
   "diverged": [],
   "worktrees": [],
+  "stale_worktrees": [],
   "has_submodules": [],
   "submodule_drift": [],
   "no_remote": [],

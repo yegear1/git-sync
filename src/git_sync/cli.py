@@ -40,10 +40,12 @@ from git_sync.engine import (
     format_changelog_summary,
     get_divergence_details,
     get_divergence_diff,
+    get_worktree_info,
     inspect_github_cli,
     inspect_repo,
     inspect_ssh_config,
     match_repo,
+    prune_repo_worktrees,
     pull_repo,
     push_repo,
     recover_index_lock,
@@ -482,6 +484,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             "dirty": [r["rel_path"] for r in results if r["is_dirty"]],
             "diverged": [r["rel_path"] for r in results if r["status"] == "DIVERGED"],
             "worktrees": [r["rel_path"] for r in results if r.get("is_worktree")],
+            "stale_worktrees": [r["rel_path"] for r in results if r.get("stale_worktrees")],
             "has_submodules": [r["rel_path"] for r in results if r.get("submodules")],
             "submodule_drift": [r["rel_path"] for r in results if any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", []))],
             "no_remote": [r["rel_path"] for r in results if r["status"] == "NO_REMOTE"],
@@ -512,6 +515,16 @@ def cmd_status(args: argparse.Namespace) -> int:
                         "remediation": f"git -C '{dr['path']}' submodule update --init --recursive",
                     })
                     existing_remed_pairs.add((dr["rel_path"], "update_submodules"))
+            if dr.get("stale_worktrees"):
+                if (dr["rel_path"], "prune_worktrees") not in existing_remed_pairs:
+                    summary["remediations"].append({
+                        "repo": dr["rel_path"],
+                        "status": "STALE_WORKTREE",
+                        "network_state": dr.get("network_state", "healthy"),
+                        "action_required": "prune_worktrees",
+                        "remediation": f"git-sync worktree prune '{dr['rel_path']}'",
+                    })
+                    existing_remed_pairs.add((dr["rel_path"], "prune_worktrees"))
         if changelog_enabled:
             summary["changelogs"] = {
                 r["rel_path"]: {
@@ -595,6 +608,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             linked_wts = [w for w in r["worktrees"] if not w.get("is_main")]
             if linked_wts:
                 details.append(f"{len(linked_wts)} worktree(s)")
+        if r.get("stale_worktrees"):
+            details.append(f"worktrees_stale({len(r['stale_worktrees'])})")
         if r.get("submodules"):
             dirty_subs = [s for s in r["submodules"] if s.get("status") != "UP_TO_DATE"]
             if dirty_subs:
@@ -1602,6 +1617,169 @@ def cmd_unlock(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_worktree(args: argparse.Namespace) -> int:
+    """
+    Inspect or prune linked worktrees across repository workspaces.
+    """
+    action = getattr(args, "worktree_action", None)
+    if action == "prune":
+        return cmd_worktree_prune(args)
+    return cmd_worktree_list(args)
+
+
+def cmd_worktree_prune(args: argparse.Namespace) -> int:
+    """
+    Clean missing worktree metadata and orphaned admin directories, and warn on dirty linked worktrees.
+    # INVARIANT: Preserves active dirty linked worktrees and warns without deleting working files.
+    """
+    root = args.root
+    all_repos = discover_repos(root, exclude=args.exclude)
+    filtered = _filter_by_group(
+        all_repos,
+        root,
+        group=getattr(args, "group", None),
+        groups=getattr(args, "groups", None),
+    )
+
+    targets: List[str] = []
+    if getattr(args, "prune_all", False):
+        targets = filtered
+    elif getattr(args, "repos", None):
+        for q in args.repos:
+            matched = match_repo(q, filtered, root)
+            if matched:
+                targets.append(matched)
+            else:
+                if not getattr(args, "json", False):
+                    print(f"⚠️  Repositório '{q}' não encontrado em {root}")
+    else:
+        targets = filtered
+
+    dry_run = getattr(args, "dry_run", False)
+    expire = getattr(args, "expire", "now")
+    cache = BulkCache(enabled=not getattr(args, "no_cache", False))
+
+    pruned_repos: List[Dict[str, Any]] = []
+    all_warnings: List[str] = []
+    total_pruned = 0
+
+    for repo_path in targets:
+        res = prune_repo_worktrees(
+            repo_path,
+            dry_run=dry_run,
+            expire=expire,
+            timeout=args.timeout,
+            cache=cache,
+            root_dir=root,
+        )
+        if res["pruned"] or res["dirty_worktrees"] or getattr(args, "repos", None):
+            pruned_repos.append(res)
+            total_pruned += len(res["pruned"])
+            all_warnings.extend(res["warnings"])
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "root": root,
+            "dry_run": dry_run,
+            "total_checked": len(targets),
+            "total_pruned": total_pruned,
+            "total_warnings": len(all_warnings),
+            "pruned_repos": pruned_repos,
+        }, indent=2))
+        return 0
+
+    mode_tag = "[DRY-RUN] " if dry_run else ""
+    print("=" * 80)
+    print(f"🧹 {mode_tag}LIMPEZA E PRUNING DE WORKTREES STALE / ÓRFÃOS")
+    print("=" * 80)
+
+    if not pruned_repos:
+        print(f"\n✅ Nenhum worktree stale ou órfão encontrado para prune em {root}.\n")
+        return 0
+
+    for pr in pruned_repos:
+        print(f"\n📦 {pr['rel_path']}:")
+        for p_item in pr["pruned"]:
+            act = "Seria prunado" if dry_run else "Prunado"
+            print(f"  🧹 {act} worktree '{p_item['name']}': {p_item['reason']}")
+        for w in pr["warnings"]:
+            print(f"  ⚠️  {w}")
+
+    print("=" * 80)
+    act_label = "seria(m) prunado(s)" if dry_run else "prunado(s)"
+    print(f"Concluído: {total_pruned} worktree(s) {act_label}. {len(all_warnings)} aviso(s).\n")
+    return 0
+
+
+def cmd_worktree_list(args: argparse.Namespace) -> int:
+    """
+    List linked worktrees across repositories.
+    """
+    root = args.root
+    all_repos = discover_repos(root, exclude=args.exclude)
+    filtered = _filter_by_group(
+        all_repos,
+        root,
+        group=getattr(args, "group", None),
+        groups=getattr(args, "groups", None),
+    )
+
+    targets: List[str] = []
+    if getattr(args, "repos", None):
+        for q in args.repos:
+            matched = match_repo(q, filtered, root)
+            if matched:
+                targets.append(matched)
+            else:
+                if not getattr(args, "json", False):
+                    print(f"⚠️  Repositório '{q}' não encontrado em {root}")
+    else:
+        targets = filtered
+
+    cache = BulkCache(enabled=not getattr(args, "no_cache", False))
+    entries: List[Dict[str, Any]] = []
+
+    for repo_path in targets:
+        wt_info = cache.get_worktree_info(repo_path, timeout=args.timeout) if cache else get_worktree_info(repo_path, timeout=args.timeout)
+        worktrees = wt_info.get("worktrees", [])
+        if len(worktrees) > 1 or any(w.get("is_prunable") for w in worktrees):
+            rel = os.path.relpath(repo_path, root)
+            entries.append({
+                "repo": repo_path,
+                "rel_path": rel,
+                "is_worktree": wt_info.get("is_worktree", False),
+                "main_worktree": wt_info.get("main_worktree"),
+                "worktrees": worktrees,
+                "stale_worktrees": wt_info.get("stale_worktrees", []),
+            })
+
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "root": root,
+            "total_repos_with_worktrees": len(entries),
+            "repositories": entries,
+        }, indent=2))
+        return 0
+
+    if not entries:
+        print(f"\n✅ Nenhum repositório com múltiplos worktrees encontrado em {root}.\n")
+        return 0
+
+    print(f"\n{'REPOSITÓRIO':<35} {'WORKTREE PATH':<40} {'BRANCH':<15} {'STATUS'}")
+    print("=" * 105)
+    for entry in entries:
+        for wt in entry["worktrees"]:
+            st = "main" if wt.get("is_main") else "linked"
+            if wt.get("is_prunable"):
+                st = f"prunável ({wt.get('prunable_reason', '')})"
+            elif wt.get("is_locked"):
+                st = f"locked ({wt.get('lock_reason', '')})"
+            print(f"{entry['rel_path']:<35} {wt['path']:<40} {wt.get('branch', 'detached'):<15} {st}")
+    print("=" * 105)
+    print()
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     """Main CLI entrypoint with support for workspace profiles and custom configurations."""
     if argv is None:
@@ -1772,6 +1950,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_unlock.add_argument("--force", action="store_true", default=False, help="Force remove locks even if recently active (<300s)")
     p_unlock.add_argument("--group", default=None, help="Filter target repositories by group")
 
+    # worktree
+    p_worktree = subparsers.add_parser("worktree", parents=[common], help="Inspect or prune linked worktree metadata")
+    wt_sub = p_worktree.add_subparsers(dest="worktree_action")
+
+    # worktree prune
+    p_wt_prune = wt_sub.add_parser("prune", parents=[common], help="Clean missing worktree metadata and orphaned admin directories")
+    p_wt_prune.add_argument("repos", nargs="*", help="Repository name(s) or patterns to prune")
+    p_wt_prune.add_argument("--all", dest="prune_all", action="store_true", default=None, help="Prune worktrees across all repositories")
+    p_wt_prune.add_argument("--expire", default="now", help="Only prune worktree administrative entries older than <expire> (default: now)")
+    p_wt_prune.add_argument("--group", default=None, help="Filter target repositories by group")
+
+    # worktree list
+    p_wt_list = wt_sub.add_parser("list", parents=[common], help="List linked worktrees across repositories")
+    p_wt_list.add_argument("repos", nargs="*", help="Repository name(s) or patterns to list")
+    p_wt_list.add_argument("--group", default=None, help="Filter target repositories by group")
+
     args = parser.parse_args(argv)
 
     if not args.command:
@@ -1913,6 +2107,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_completion(args)
     elif args.command == "unlock":
         return cmd_unlock(args)
+    elif args.command == "worktree":
+        return cmd_worktree(args)
     else:
         parser.print_help()
         return 1
