@@ -14,7 +14,7 @@
 | Subcommand | Flag Options | Primary Output | Use Case |
 |---|---|---|---|
 | `git-sync status` | `--fetch`/`--no-fetch`, `--pending`, `--compact`/`--summary`, `--changelog`, `--submodules`, `--dashboard`/`--tui`, `-i`/`--interactive`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json` | Table / Dashboard / JSON | Inspection of sync states across all repos in root |
-| `git-sync dashboard` / `tui` | `--fetch`/`--no-fetch`, `--pending`, `--changelog`, `--group <dir>` | Interactive Dashboard | High-density terminal dashboard with single-key action loop (`Enter`, `p`, `r`, `c`, `d`, `j`/`k`, `q`) |
+| `git-sync dashboard` / `tui` | `--fetch`/`--no-fetch`, `--pending`, `--changelog`, `--group <dir>` | Interactive Dashboard | High-density terminal dashboard with single-key action loop (`Enter`, `p`, `w`/`Tab`, `r`, `c`, `d`, `j`/`k`, `q`) |
 | `git-sync doctor` | `--ssh`, `--group <dir>`, `--json` | Diagnostics table / JSON | Proactive credential sanity check (SSH agent, keys, credential helper, SSH multiplexing, remote reachability, locked repos) |
 | `git-sync pull` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--ff-only`/`--no-ff-only`, `--autostash`/`--no-autostash`, `--sync-branches`/`--no-sync-branches`, `--submodules`/`--no-submodules`, `--unshallow`, `--strategy <abort\|rebase\|merge>`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--recover-locks`, `-i`/`--interactive`, `--group <dir>`, `--json` | Progress logs / JSON | Fast-forward update of current branch + auxiliary branches with dirty tree autostash, divergence resolution, stale lock recovery & shallow submodule deepening |
 | `git-sync resolve` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--strategy <abort\|rebase\|merge\|stash>`, `--diff`, `--max-tokens <n>`, `-i`/`--interactive`, `--group <dir>`, `--fetch`/`--no-fetch`, `--compact`/`--summary`, `--json` | Interactive prompt / JSON | Guided diagnostics, diff inspection, and resolution for diverged branches |
@@ -237,7 +237,7 @@ Configuration layers:
 2. XDG Base Directory specification (`$XDG_CONFIG_HOME/git-sync/config.json` or `~/.config/git-sync/config.json`)
 3. User home directory (`~/.git-sync.json`)
 4. Workspace directory (`./.git-sync.json` or custom `--config <path>` / `GIT_SYNC_CONFIG`)
-5. Environment variables (`GIT_SYNC_ROOT`, `GIT_SYNC_WORKERS`, `GIT_SYNC_TIMEOUT`, `GIT_SYNC_AUTO_TUNE`, `GIT_SYNC_REMOTE`, `GIT_SYNC_RETRIES`, `GIT_SYNC_PREFLIGHT`, `GIT_SYNC_BENCHMARK`)
+5. Environment variables (`GIT_SYNC_PROFILE`, `GIT_SYNC_ROOT`, `GIT_SYNC_WORKERS`, `GIT_SYNC_TIMEOUT`, `GIT_SYNC_AUTO_TUNE`, `GIT_SYNC_REMOTE`, `GIT_SYNC_RETRIES`, `GIT_SYNC_PREFLIGHT`, `GIT_SYNC_BENCHMARK`)
 6. Workspace profile (`--profile <name>` or `default_profile`)
 7. Explicit CLI arguments (`CLI`)
 

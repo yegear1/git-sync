@@ -389,6 +389,7 @@ def cmd_status(args: argparse.Namespace) -> int:
                 print(json.dumps(resp))
         else:
             if getattr(args, "dashboard", False) or getattr(args, "tui", False):
+                cfg_obj = getattr(args, "_config", None)
                 dashboard = InteractiveDashboard(
                     root=root,
                     repos=[],
@@ -404,6 +405,10 @@ def cmd_status(args: argparse.Namespace) -> int:
                     sync_branches=getattr(args, "sync_branches", True),
                     autostash=getattr(args, "autostash", True),
                     dry_run=getattr(args, "dry_run", False),
+                    config=cfg_obj,
+                    active_profile=getattr(cfg_obj, "active_profile", None) if cfg_obj else None,
+                    available_profiles=getattr(cfg_obj, "available_profiles", None) if cfg_obj else None,
+                    config_path=getattr(cfg_obj, "config_path", None) if cfg_obj else None,
                 )
                 return dashboard.run()
             print(f"Nenhum repositório encontrado em {root}")
@@ -588,6 +593,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         return 0
 
     if getattr(args, "dashboard", False) or getattr(args, "tui", False):
+        cfg_obj = getattr(args, "_config", None)
         dashboard = InteractiveDashboard(
             root=root,
             repos=results,
@@ -603,6 +609,10 @@ def cmd_status(args: argparse.Namespace) -> int:
             sync_branches=getattr(args, "sync_branches", True),
             autostash=getattr(args, "autostash", True),
             dry_run=getattr(args, "dry_run", False),
+            config=cfg_obj,
+            active_profile=getattr(cfg_obj, "active_profile", None) if cfg_obj else None,
+            available_profiles=getattr(cfg_obj, "available_profiles", None) if cfg_obj else None,
+            config_path=getattr(cfg_obj, "config_path", None) if cfg_obj else None,
         )
         return dashboard.run()
 
@@ -2023,6 +2033,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_wt_list.add_argument("--group", default=None, help="Filter target repositories by group")
 
     args = parser.parse_args(argv)
+    args._config = config
 
     if not args.command:
         args.command = "status"

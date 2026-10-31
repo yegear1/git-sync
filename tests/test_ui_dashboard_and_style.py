@@ -316,6 +316,126 @@ class TestInteractiveDashboard(unittest.TestCase):
             self.assertIn("demo-repo", cli_out)
             self.assertIn("hello.py", cli_out)
 
+    def test_dashboard_profile_switching_without_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base = Path(tmpdir)
+            root_work = base / "work"
+            root_oss = base / "oss"
+            root_work.mkdir()
+            root_oss.mkdir()
+
+            repo_w = root_work / "work-service"
+            repo_w.mkdir()
+            run_git(str(repo_w), ["init", "-b", "main"])
+            run_git(str(repo_w), ["config", "user.email", "work@example.com"])
+            run_git(str(repo_w), ["config", "user.name", "Work User"])
+            (repo_w / "main.py").write_text("print('work')\n", encoding="utf-8")
+            run_git(str(repo_w), ["add", "main.py"])
+            run_git(str(repo_w), ["commit", "-m", "work commit"])
+
+            repo_o = root_oss / "oss-library"
+            repo_o.mkdir()
+            run_git(str(repo_o), ["init", "-b", "main"])
+            run_git(str(repo_o), ["config", "user.email", "oss@example.com"])
+            run_git(str(repo_o), ["config", "user.name", "OSS User"])
+            (repo_o / "lib.py").write_text("print('oss')\n", encoding="utf-8")
+            run_git(str(repo_o), ["add", "lib.py"])
+            run_git(str(repo_o), ["commit", "-m", "oss commit"])
+
+            raw_cfg = {
+                "root": str(root_work),
+                "workers": 4,
+                "profiles": {
+                    "work": {
+                        "root": str(root_work),
+                        "workers": 8,
+                    },
+                    "oss": {
+                        "root": str(root_oss),
+                        "workers": 2,
+                    },
+                },
+            }
+
+            out = io.StringIO()
+            # Press 'w' to switch profile from work to oss, then 'q' to quit
+            keys = iter(["w", "q"])
+            dash = InteractiveDashboard(
+                root=str(root_work),
+                stream=out,
+                color_enabled=False,
+                key_reader=lambda: next(keys),
+                raw_config=raw_cfg,
+                active_profile="work",
+                available_profiles=["oss", "work"],
+            )
+
+            # Pre-check initial profile state
+            self.assertEqual(dash.active_profile, "work")
+            self.assertEqual(dash.root, str(root_work))
+
+            code = dash.run()
+            self.assertEqual(code, 0)
+
+            # Profile was switched to oss without restart
+            self.assertEqual(dash.active_profile, "oss")
+            self.assertEqual(dash.root, str(root_oss))
+            self.assertEqual(dash.workers, 2)
+            repo_names = [r.get("name") or r.get("rel_path") for r in dash.repos]
+            self.assertIn("oss-library", repo_names)
+
+            rendered = out.getvalue()
+            self.assertIn("perfil: oss", rendered)
+            self.assertIn("Perfil alterado para 'oss'", rendered)
+
+    def test_dashboard_profile_cycle_tab_and_direct_switch(self) -> None:
+        raw_cfg = {
+            "root": "/workspace/default",
+            "workers": 4,
+            "profiles": {
+                "alpha": {
+                    "root": "/workspace/alpha",
+                    "workers": 6,
+                },
+                "beta": {
+                    "root": "/workspace/beta",
+                    "workers": 10,
+                },
+            },
+        }
+
+        out = io.StringIO()
+        dash = InteractiveDashboard(
+            root="/workspace/alpha",
+            repos=[],
+            stream=out,
+            color_enabled=False,
+            raw_config=raw_cfg,
+            active_profile="alpha",
+            available_profiles=["alpha", "beta"],
+            inspect_fn=lambda _: [],
+        )
+
+        # 1. Switch using TAB keypress
+        dash.key_reader = iter(["TAB", "q"]).__next__
+        code = dash.run()
+        self.assertEqual(code, 0)
+        self.assertEqual(dash.active_profile, "beta")
+        self.assertEqual(dash.root, "/workspace/beta")
+        self.assertEqual(dash.workers, 10)
+
+        # 2. Switch directly via action_switch_profile
+        target = dash.action_switch_profile("alpha")
+        self.assertEqual(target, "alpha")
+        self.assertEqual(dash.active_profile, "alpha")
+        self.assertEqual(dash.root, "/workspace/alpha")
+        self.assertEqual(dash.workers, 6)
+
+        # 3. Switching to invalid profile fails gracefully
+        target_bad = dash.action_switch_profile("non_existent")
+        self.assertIsNone(target_bad)
+        self.assertIn("não encontrado", dash.last_message)
+
 
 if __name__ == "__main__":
     unittest.main()

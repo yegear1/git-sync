@@ -776,6 +776,57 @@ class TestHierarchicalConfigMergingAndInteractiveBootstrap(unittest.TestCase):
         self.assertTrue(target_cfg.is_file())
         self.assertEqual(stdout_capture.getvalue().strip(), str(target_cfg.resolve()))
 
+    def test_load_config_with_git_sync_profile_env(self):
+        workspace = self.root / "env_profile_ws"
+        workspace.mkdir()
+        cfg_file = workspace / CONFIG_FILENAME
+        cfg_file.write_text(json.dumps({
+            "root": "/default/repos",
+            "workers": 4,
+            "profiles": {
+                "work": {
+                    "root": "/work/repos",
+                    "workers": 8,
+                    "groups": ["backend"],
+                },
+                "personal": {
+                    "root": "/personal/repos",
+                    "workers": 2,
+                }
+            }
+        }), encoding="utf-8")
+
+        with patch("pathlib.Path.cwd", return_value=workspace):
+            with patch.dict(os.environ, {"GIT_SYNC_PROFILE": "work"}):
+                cfg = load_config()
+                self.assertEqual(cfg.active_profile, "work")
+                self.assertEqual(cfg.root, "/work/repos")
+                self.assertEqual(cfg.workers, 8)
+                self.assertEqual(cfg.groups, ["backend"])
+                self.assertIn("profile:work", cfg.sources)
+
+            # Explicit profile CLI argument overrides GIT_SYNC_PROFILE
+            with patch.dict(os.environ, {"GIT_SYNC_PROFILE": "work"}):
+                cfg = load_config(profile_name="personal")
+                self.assertEqual(cfg.active_profile, "personal")
+                self.assertEqual(cfg.root, "/personal/repos")
+                self.assertEqual(cfg.workers, 2)
+                self.assertIn("profile:personal", cfg.sources)
+
+    def test_profile_root_tilde_expansion(self):
+        data = {
+            "root": "~/repos/default",
+            "profiles": {
+                "custom": {
+                    "root": "~/repos/custom"
+                }
+            }
+        }
+        cfg = resolve_config(data, profile_name="custom")
+        self.assertTrue(os.path.isabs(cfg.root))
+        self.assertFalse(cfg.root.startswith("~"))
+        self.assertTrue(cfg.root.endswith("/repos/custom"))
+
 
 if __name__ == "__main__":
     unittest.main()

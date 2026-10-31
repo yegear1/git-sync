@@ -80,6 +80,8 @@ def read_single_key(stream: Optional[Any] = None) -> str:
                     return "ESC"
                 if ch in ("\r", "\n"):
                     return "ENTER"
+                if ch == "\t":
+                    return "TAB"
                 return ch
             finally:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
@@ -96,6 +98,8 @@ def read_single_key(stream: Optional[Any] = None) -> str:
     stripped = line.rstrip("\r\n")
     if stripped == "":
         return "ENTER"
+    if stripped == "\t":
+        return "TAB"
     return stripped
 
 
@@ -153,6 +157,11 @@ class InteractiveDashboard:
         inspect_fn: Optional[Callable[..., List[Dict[str, Any]]]] = None,
         pull_fn: Optional[Callable[..., Dict[str, Any]]] = None,
         diff_stat_fn: Optional[Callable[[Dict[str, Any]], str]] = None,
+        config: Optional[Any] = None,
+        active_profile: Optional[str] = None,
+        available_profiles: Optional[List[str]] = None,
+        raw_config: Optional[Dict[str, Any]] = None,
+        config_path: Optional[str] = None,
     ) -> None:
         self.root = root
         self.do_fetch = do_fetch
@@ -177,6 +186,20 @@ class InteractiveDashboard:
         self.repos: List[Dict[str, Any]] = list(repos) if repos is not None else []
         self.selected_idx: int = 0
         self.last_message: str = ""
+
+        # Multi-profile state
+        self.config = config
+        self.raw_config = raw_config
+        self.config_path = config_path or (getattr(config, "config_path", None) if config else None)
+        self.active_profile = active_profile or (getattr(config, "active_profile", None) if config else None)
+        if available_profiles is not None:
+            self.available_profiles = list(available_profiles)
+        elif config and getattr(config, "available_profiles", None):
+            self.available_profiles = list(config.available_profiles)
+        elif raw_config and isinstance(raw_config.get("profiles"), dict):
+            self.available_profiles = sorted(list(raw_config["profiles"].keys()))
+        else:
+            self.available_profiles = []
 
     def _write(self, text: str = "") -> None:
         self.stream.write(text + "\n")
@@ -234,6 +257,87 @@ class InteractiveDashboard:
         else:
             self.selected_idx = 0
         return self.repos
+
+    def switch_profile(self, profile_name: str, do_fetch: Optional[bool] = None) -> bool:
+        """
+        Dynamically switch the dashboard to a named profile and reload scoped settings.
+        # INVARIANT: Updates root, workers, exclusions, groups, and remote without restarting dashboard.
+        """
+        if not self.available_profiles and not self.raw_config and not self.config_path and not (self.config and getattr(self.config, "config_path", None)):
+            self.last_message = self.styler.yellow(f"⚠️ Perfil '{profile_name}' não pôde ser ativado: nenhuma configuração disponível.")
+            return False
+
+        if self.available_profiles and profile_name not in self.available_profiles:
+            avail_str = ", ".join(self.available_profiles)
+            self.last_message = self.styler.yellow(f"⚠️ Perfil '{profile_name}' não encontrado. Disponíveis: {avail_str}")
+            return False
+
+        try:
+            if self.raw_config:
+                from git_sync.config import resolve_config
+                new_cfg = resolve_config(data=self.raw_config, profile_name=profile_name, config_path=self.config_path)
+            elif self.config_path:
+                from git_sync.config import load_config
+                new_cfg = load_config(config_path=self.config_path, profile_name=profile_name)
+            elif self.config and getattr(self.config, "config_path", None):
+                from git_sync.config import load_config
+                new_cfg = load_config(config_path=self.config.config_path, profile_name=profile_name)
+            else:
+                from git_sync.config import load_config
+                new_cfg = load_config(profile_name=profile_name)
+        except Exception as exc:
+            self.last_message = self.styler.red(f"❌ Erro ao ativar perfil '{profile_name}': {exc}")
+            return False
+
+        if new_cfg is None:
+            return False
+
+        # Apply scoped configuration options without restart
+        self.config = new_cfg
+        self.active_profile = profile_name
+        self.root = new_cfg.root
+        self.workers = new_cfg.workers
+        self.timeout = new_cfg.timeout
+        self.exclude = list(new_cfg.exclude)
+        self.groups = list(new_cfg.groups)
+        self.remote = new_cfg.remote
+        self.retries = new_cfg.retries
+        self.ff_only = new_cfg.pull_ff_only
+        self.sync_branches = new_cfg.pull_sync_branches
+        self.autostash = new_cfg.pull_autostash
+        if hasattr(new_cfg, "pull_dry_run"):
+            self.dry_run = new_cfg.pull_dry_run
+
+        # Refresh repositories in new workspace root
+        fetch_flag = self.do_fetch if do_fetch is None else do_fetch
+        self.selected_idx = 0
+        self.refresh_repos(do_fetch=fetch_flag)
+
+        self.last_message = self.styler.green(
+            f"🔀 Perfil alterado para '{profile_name}' (root: {self.root}, workers: {self.workers})"
+        )
+        return True
+
+    def action_switch_profile(self, profile_name: Optional[str] = None) -> Optional[str]:
+        """
+        Interactive action to cycle or switch to a target profile.
+        If profile_name is None, cycles to the next available profile.
+        """
+        if not self.available_profiles:
+            self.last_message = self.styler.yellow("⚠️ Nenhum perfil alternativo configurado em .git-sync.json.")
+            return None
+
+        if profile_name:
+            target = profile_name.strip()
+        else:
+            if self.active_profile in self.available_profiles:
+                idx = self.available_profiles.index(self.active_profile)
+                target = self.available_profiles[(idx + 1) % len(self.available_profiles)]
+            else:
+                target = self.available_profiles[0]
+
+        success = self.switch_profile(target)
+        return target if success else None
 
     def format_row(self, repo: Dict[str, Any], selected: bool = False) -> str:
         """Render a single compact repository row for the dashboard table."""
@@ -296,9 +400,20 @@ class InteractiveDashboard:
     def render(self) -> str:
         """Render full high-density dashboard screen string."""
         lines: List[str] = []
-        header_title = self.styler.bold(f"📊 GIT-SYNC DASHBOARD — {self.root}")
+        header_prof = f" [{self.styler.cyan(f'perfil: {self.active_profile}')}]" if self.active_profile else ""
+        header_title = self.styler.bold(f"📊 GIT-SYNC DASHBOARD — {self.root}") + header_prof
         lines.append(header_title)
         lines.append("=" * 92)
+
+        if self.available_profiles:
+            prof_badges: List[str] = []
+            for p in self.available_profiles:
+                if p == self.active_profile:
+                    prof_badges.append(self.styler.bold(self.styler.cyan(f"[{p}]")))
+                else:
+                    prof_badges.append(self.styler.dim(p))
+            lines.append(f"Perfis: {'  '.join(prof_badges)}  " + self.styler.dim("([w] alternar)"))
+            lines.append("-" * 92)
 
         pending_pull = sum(1 for r in self.repos if "PULL" in r.get("status", "") or r.get("aux_branches_behind"))
         pending_push = sum(1 for r in self.repos if "PUSH" in r.get("status", ""))
@@ -329,10 +444,16 @@ class InteractiveDashboard:
             lines.append(f"💬 {self.last_message}")
             lines.append("-" * 92)
 
-        controls = (
-            "[Enter] Pull pendentes  [p] Pull selecionado  [r] Atualizar  "
-            "[c] Changelog  [d] Dirty/Diff  [j/k] Navegar  [q] Sair"
-        )
+        if self.available_profiles:
+            controls = (
+                "[Enter] Pull pendentes  [p] Pull selecionado  [w] Perfil  [r] Atualizar  "
+                "[c] Changelog  [d] Dirty/Diff  [j/k] Navegar  [q] Sair"
+            )
+        else:
+            controls = (
+                "[Enter] Pull pendentes  [p] Pull selecionado  [r] Atualizar  "
+                "[c] Changelog  [d] Dirty/Diff  [j/k] Navegar  [q] Sair"
+            )
         lines.append(self.styler.bold(controls))
         output = "\n".join(lines)
         self._write(output)
@@ -511,6 +632,12 @@ class InteractiveDashboard:
                     self.action_pull_pending()
                 elif norm_key in ("p", "P"):
                     self.action_pull_selected()
+                elif norm_key in ("w", "W", "TAB"):
+                    self.action_switch_profile()
+                elif norm_key.startswith("w ") or norm_key.startswith("profile "):
+                    parts = norm_key.split(maxsplit=1)
+                    if len(parts) > 1:
+                        self.action_switch_profile(parts[1].strip())
                 elif norm_key in ("r", "R"):
                     self.refresh_repos(do_fetch=self.do_fetch)
                     self.last_message = self.styler.cyan("🔄 Status dos repositórios atualizado.")

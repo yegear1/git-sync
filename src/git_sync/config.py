@@ -347,7 +347,15 @@ def resolve_config(
             effective_sources.append(profile_source_tag)
 
     # Parse and validate root directory
-    root = str(combined.get("root") or resolve_default_root())
+    root_raw = combined.get("root")
+    if root_raw:
+        root_str = str(root_raw).strip()
+        if root_str.startswith("~"):
+            root = str(Path(root_str).expanduser().resolve())
+        else:
+            root = root_str
+    else:
+        root = resolve_default_root()
 
     # Parse and validate workers
     workers_raw = combined.get("workers", DEFAULT_WORKERS)
@@ -524,6 +532,11 @@ def load_config(
     defaults < XDG config < ~/.git-sync.json < ./.git-sync.json < env < profile < CLI
     # INVARIANT: Tracks override provenance in GitSyncConfig.sources in ascending order of precedence.
     """
+    if profile_name is None:
+        env_prof = os.environ.get("GIT_SYNC_PROFILE")
+        if env_prof and env_prof.strip():
+            profile_name = env_prof.strip()
+
     sources: List[str] = ["defaults"]
     accumulated: Dict[str, Any] = {}
     last_file_path: Optional[str] = None
