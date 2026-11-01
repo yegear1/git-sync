@@ -49,6 +49,9 @@
 
 ## Backlog (Upcoming, in priority order)
 
+> Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
+
+
 ### 📌 Task [00.19]: Automated Git LFS Object Tracking and Bandwidth-Aware Fetch Controls
 - **Description:** Detect Git LFS pointer files and `.gitattributes` filters during repository inspection, surface LFS status in `status` and `doctor`, and provide `--lfs` / `--no-lfs` controls during `pull`.
 - **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
