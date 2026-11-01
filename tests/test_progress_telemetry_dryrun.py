@@ -19,13 +19,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from git_sync.cli import main
 from git_sync.config import GitSyncConfig, load_config
 from git_sync.core import (
+    BulkActionItem,
     BulkCache,
     DEFAULT_ROOT,
     DEFAULT_WORKERS,
     ProgressIndicator,
     TelemetryBenchmark,
     check_repo_dirty,
+    format_bulk_action_preview,
     inspect_repo,
+    prompt_bulk_confirmation,
     pull_repo,
     push_repo,
     resolve_divergence,
@@ -392,6 +395,7 @@ class TestCliDryRunIntegration(unittest.TestCase):
         cfg_file = self.root / ".git-sync.json"
         cfg_data = {
             "root": str(self.root),
+            "confirm": True,
             "pull": {"dry_run": True},
             "push": {"dry_run": False}
         }
@@ -404,6 +408,279 @@ class TestCliDryRunIntegration(unittest.TestCase):
         text_out = stdout_capture.getvalue()
         self.assertIn("Pull (dry-run):      True", text_out)
         self.assertIn("Push (dry-run):      False", text_out)
+        self.assertIn("Confirm (bulk):      True", text_out)
+
+
+class TestBulkActionPreviewAndConfirmation(unittest.TestCase):
+    """Unit tests for BulkActionItem, preview formatting, and interactive prompt mechanics."""
+
+    def test_bulk_action_item_model_and_dict(self):
+        item = BulkActionItem(
+            repo="/path/to/repo",
+            action="PULL (ff-only)",
+            repo_rel="my-repo",
+            branch="main",
+            ahead=0,
+            behind=3,
+            is_dirty=True,
+            dirty_files_count=2,
+            is_protected=True,
+            submodules_count=1,
+            warnings=["Working tree dirty"],
+            details={"custom": 123},
+        )
+        data = item.to_dict()
+        self.assertEqual(data["repo"], "/path/to/repo")
+        self.assertEqual(data["repo_rel"], "my-repo")
+        self.assertEqual(data["action"], "PULL (ff-only)")
+        self.assertEqual(data["behind"], 3)
+        self.assertTrue(data["is_dirty"])
+        self.assertTrue(data["is_protected"])
+        self.assertEqual(data["warnings"], ["Working tree dirty"])
+        self.assertEqual(data["details"]["custom"], 123)
+
+    def test_format_bulk_action_preview_empty(self):
+        rendered = format_bulk_action_preview([], title="TEST PREVIEW", color=False)
+        self.assertIn("TEST PREVIEW", rendered)
+        self.assertIn("(Nenhum repositório pendente de mutação)", rendered)
+
+    def test_format_bulk_action_preview_rendering_and_safety_summary(self):
+        items = [
+            BulkActionItem(
+                repo="/repos/repo-a",
+                repo_rel="repo-a",
+                action="PULL (ff-only)",
+                branch="main",
+                behind=4,
+                is_dirty=True,
+                dirty_files_count=3,
+                is_protected=True,
+            ),
+            BulkActionItem(
+                repo="/repos/repo-b",
+                repo_rel="repo-b",
+                action="PUSH",
+                branch="feat/test",
+                ahead=2,
+            ),
+        ]
+        rendered = format_bulk_action_preview(items, title="TEST AUDIT", color=False)
+        self.assertIn("TEST AUDIT", rendered)
+        self.assertIn("Repositórios alvo (2):", rendered)
+        self.assertIn("repo-a [main] ↳ PULL (ff-only) (4 commit(s) atrás)", rendered)
+        self.assertIn("[Árvore suja: 3 arquivo(s)]", rendered)
+        self.assertIn("[Branch protegida: main]", rendered)
+        self.assertIn("repo-b [feat/test] ↳ PUSH (2 commit(s) à frente)", rendered)
+        self.assertIn("Resumo de Segurança:", rendered)
+        self.assertIn("Total de repositórios a modificar: 2", rendered)
+        self.assertIn("Repositórios com autostash necessário: 1", rendered)
+        self.assertIn("Branches protegidas afetadas: 1", rendered)
+
+    def test_prompt_bulk_confirmation_accepts_yes(self):
+        stream = io.StringIO()
+        items = [BulkActionItem(repo="/r1", action="PULL", repo_rel="r1")]
+        # User answers 'y'
+        res = prompt_bulk_confirmation(items, stream=stream, input_func=lambda _: "y")
+        self.assertTrue(res)
+
+        # User answers 'sim'
+        res_sim = prompt_bulk_confirmation(items, stream=stream, input_func=lambda _: "sim")
+        self.assertTrue(res_sim)
+
+    def test_prompt_bulk_confirmation_denied_or_abort(self):
+        stream = io.StringIO()
+        items = [BulkActionItem(repo="/r1", action="PULL", repo_rel="r1")]
+
+        # User answers 'n'
+        res_no = prompt_bulk_confirmation(items, stream=stream, input_func=lambda _: "n")
+        self.assertFalse(res_no)
+        self.assertIn("Operação cancelada pelo usuário.", stream.getvalue())
+
+        # User presses Ctrl+C or EOF
+        def raise_eof(_):
+            raise EOFError()
+
+        res_eof = prompt_bulk_confirmation(items, stream=stream, input_func=raise_eof)
+        self.assertFalse(res_eof)
+        self.assertIn("Operação abortada pelo usuário.", stream.getvalue())
+
+    def test_prompt_bulk_confirmation_auto_yes(self):
+        items = [BulkActionItem(repo="/r1", action="PULL", repo_rel="r1")]
+        # Should return True without calling input_func
+        called = []
+        res = prompt_bulk_confirmation(items, input_func=lambda _: called.append(True), auto_yes=True)
+        self.assertTrue(res)
+        self.assertEqual(len(called), 0)
+
+
+class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
+    """Integration tests for CLI --preview and --confirm flags."""
+
+    def setUp(self):
+        self.test_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.test_dir.name)
+
+    def tearDown(self):
+        self.test_dir.cleanup()
+
+    def _init_repo(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        run_git(str(path), ["init", "-b", "main"])
+        run_git(str(path), ["config", "user.email", "test@example.com"])
+        run_git(str(path), ["config", "user.name", "Test User"])
+        return path
+
+    def _init_bare_remote(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        run_git(str(path), ["init", "--bare", "-b", "main"])
+        return path
+
+    def _setup_repos_with_remote(self):
+        remote_dir = self._init_bare_remote(self.root / "remote.git")
+        seed_dir = self._init_repo(self.root / "seed")
+        (seed_dir / "file.txt").write_text("v1\n")
+        run_git(str(seed_dir), ["add", "file.txt"])
+        run_git(str(seed_dir), ["commit", "-m", "init"])
+        run_git(str(seed_dir), ["remote", "add", "origin", str(remote_dir)])
+        run_git(str(seed_dir), ["push", "-u", "origin", "main"])
+
+        local_dir = self.root / "repo1"
+        run_git(str(self.root), ["clone", str(remote_dir), "repo1"])
+        run_git(str(local_dir), ["config", "user.email", "test@example.com"])
+        run_git(str(local_dir), ["config", "user.name", "Test User"])
+
+        # Create upstream commit
+        (seed_dir / "file.txt").write_text("v2\n")
+        run_git(str(seed_dir), ["commit", "-am", "v2"])
+        run_git(str(seed_dir), ["push", "origin", "main"])
+
+        return remote_dir, seed_dir, local_dir
+
+    def test_cli_pull_preview_mode_text_and_json(self):
+        remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
+        # Fetch remote updates
+        run_git(str(local_dir), ["fetch"])
+
+        # 1. Text preview mode
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = main(["pull", "repo1", "--root", str(self.root), "--preview"])
+        self.assertEqual(exit_code, 0)
+        out = stdout_capture.getvalue()
+        self.assertIn("PRÉVIA DE PULL EM LOTE", out)
+        self.assertIn("repo1 [main] ↳ PULL (ff-only)", out)
+
+        # INVARIANT: HEAD MUST NOT change during preview mode
+        head_commit = run_git(str(local_dir), ["rev-parse", "HEAD"]).stdout.strip()
+        seed_head = run_git(str(seed_dir), ["rev-parse", "HEAD"]).stdout.strip()
+        self.assertNotEqual(head_commit, seed_head)
+
+        # 2. JSON preview mode
+        stdout_json = io.StringIO()
+        with patch("sys.stdout", stdout_json):
+            exit_code = main(["pull", "repo1", "--root", str(self.root), "--preview", "--json"])
+        self.assertEqual(exit_code, 0)
+        parsed = json.loads(stdout_json.getvalue())
+        self.assertTrue(parsed["preview"])
+        self.assertEqual(parsed["action"], "pull")
+        self.assertEqual(len(parsed["items"]), 1)
+        self.assertEqual(parsed["items"][0]["repo_rel"], "repo1")
+        self.assertEqual(parsed["items"][0]["behind"], 1)
+
+    def test_cli_pull_confirm_interactive_denied_aborts(self):
+        remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
+        run_git(str(local_dir), ["fetch"])
+        head_before = run_git(str(local_dir), ["rev-parse", "HEAD"]).stdout.strip()
+
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            with patch("builtins.input", return_value="n"):
+                exit_code = main(["pull", "repo1", "--root", str(self.root), "--confirm"])
+
+        self.assertEqual(exit_code, 0)
+        out = stdout_capture.getvalue()
+        self.assertIn("PRÉVIA DE PULL EM LOTE", out)
+        self.assertIn("Operação cancelada pelo usuário.", out)
+
+        # INVARIANT: Repository MUST NOT be modified when confirmation is denied
+        head_after = run_git(str(local_dir), ["rev-parse", "HEAD"]).stdout.strip()
+        self.assertEqual(head_before, head_after)
+
+    def test_cli_pull_confirm_interactive_accepted_executes_mutation(self):
+        remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
+        run_git(str(local_dir), ["fetch"])
+        seed_head = run_git(str(seed_dir), ["rev-parse", "HEAD"]).stdout.strip()
+
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            with patch("builtins.input", return_value="yes"):
+                exit_code = main(["pull", "repo1", "--root", str(self.root), "--confirm"])
+
+        self.assertEqual(exit_code, 0)
+        out = stdout_capture.getvalue()
+        self.assertIn("PRÉVIA DE PULL EM LOTE", out)
+        self.assertIn("✅ [repo1]", out)
+
+        # INVARIANT: Mutation MUST be applied upon confirmation
+        head_after = run_git(str(local_dir), ["rev-parse", "HEAD"]).stdout.strip()
+        self.assertEqual(head_after, seed_head)
+
+    def test_cli_pull_confirm_yes_flag_bypasses_prompt(self):
+        remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
+        run_git(str(local_dir), ["fetch"])
+        seed_head = run_git(str(seed_dir), ["rev-parse", "HEAD"]).stdout.strip()
+
+        input_mock = MagicMock(side_effect=Exception("input should not be called"))
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            with patch("builtins.input", input_mock):
+                exit_code = main(["pull", "repo1", "--root", str(self.root), "--confirm", "-y"])
+
+        self.assertEqual(exit_code, 0)
+        head_after = run_git(str(local_dir), ["rev-parse", "HEAD"]).stdout.strip()
+        self.assertEqual(head_after, seed_head)
+        self.assertEqual(input_mock.call_count, 0)
+
+    def test_cli_pull_confirm_json_without_yes_returns_error(self):
+        remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
+        run_git(str(local_dir), ["fetch"])
+
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = main(["pull", "repo1", "--root", str(self.root), "--confirm", "--json"])
+
+        self.assertEqual(exit_code, 1)
+        parsed = json.loads(stdout_capture.getvalue())
+        self.assertIn("Interactive confirmation cannot be prompted in JSON mode", parsed["error"])
+
+    def test_cli_push_preview_and_confirm(self):
+        remote_dir = self._init_bare_remote(self.root / "origin.git")
+        local_dir = self.root / "push_repo"
+        run_git(str(self.root), ["clone", str(remote_dir), "push_repo"])
+        run_git(str(local_dir), ["config", "user.email", "test@example.com"])
+        run_git(str(local_dir), ["config", "user.name", "Test User"])
+
+        # Add local commit
+        (local_dir / "new.txt").write_text("push me\n")
+        run_git(str(local_dir), ["add", "new.txt"])
+        run_git(str(local_dir), ["commit", "-m", "local commit"])
+
+        # 1. Preview push
+        stdout_capture = io.StringIO()
+        with patch("sys.stdout", stdout_capture):
+            exit_code = main(["push", "push_repo", "--root", str(self.root), "--preview"])
+        self.assertEqual(exit_code, 0)
+        out = stdout_capture.getvalue()
+        self.assertIn("PRÉVIA DE ENVIO EM LOTE", out)
+        self.assertIn("push_repo [main] ↳ PUSH", out)
+
+        # 2. Confirm push denied
+        stdout_denied = io.StringIO()
+        with patch("sys.stdout", stdout_denied):
+            with patch("builtins.input", return_value="n"):
+                exit_code = main(["push", "push_repo", "--root", str(self.root), "--confirm"])
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Operação cancelada pelo usuário.", stdout_denied.getvalue())
 
 
 if __name__ == "__main__":

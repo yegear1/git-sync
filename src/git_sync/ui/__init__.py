@@ -10,7 +10,12 @@ from git_sync.ui.dashboard import (
     get_repo_diff_stat,
     read_single_key,
 )
-from git_sync.ui.progress import ProgressIndicator
+from git_sync.ui.progress import (
+    BulkActionItem,
+    ProgressIndicator,
+    format_bulk_action_preview,
+    prompt_bulk_confirmation,
+)
 from git_sync.ui.style import (
     ANSI_BLUE,
     ANSI_BOLD,
@@ -38,11 +43,14 @@ __all__ = [
     "ANSI_RESET",
     "ANSI_YELLOW",
     "AnsiStyler",
+    "BulkActionItem",
     "EXIT_CODE_SIGINT",
     "InteractiveDashboard",
     "ProgressIndicator",
+    "format_bulk_action_preview",
     "format_diff_stat",
     "get_repo_diff_stat",
+    "prompt_bulk_confirmation",
     "read_single_key",
     "should_use_color",
     "style_text",

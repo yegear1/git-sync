@@ -60,9 +60,12 @@ from git_sync.engine import (
 from git_sync.telemetry import BulkCache, TelemetryBenchmark
 from git_sync.ui import (
     AnsiStyler,
+    BulkActionItem,
     InteractiveDashboard,
     ProgressIndicator,
+    format_bulk_action_preview,
     format_diff_stat,
+    prompt_bulk_confirmation,
 )
 from git_sync.installer import (
     generate_completion_script,
@@ -955,6 +958,71 @@ def cmd_pull(args: argparse.Namespace) -> int:
     strategy = getattr(args, "strategy", None)
     is_interactive = getattr(args, "interactive", False)
 
+    preview_mode = getattr(args, "preview", False)
+    confirm_mode = getattr(args, "confirm", False)
+
+    if (preview_mode or confirm_mode) and targets:
+        insp_map = {r["path"]: r for r in inspections} if args.all else {}
+        preview_items: List[BulkActionItem] = []
+        for r in targets:
+            rel = os.path.relpath(r, root)
+            if r in insp_map:
+                info = insp_map[r]
+            else:
+                info = inspect_repo(r, root, False, args.timeout, cache, remote, benchmark, retries)
+            branch = info.get("branch")
+            behind = int(info.get("behind", 0))
+            ahead = int(info.get("ahead", 0))
+            is_dirty = bool(info.get("is_dirty", False))
+            dirty_files_count = len(info.get("dirty_files", []))
+            submodules_count = len(info.get("submodules", []))
+            warnings: List[str] = []
+            if is_dirty:
+                warnings.append(
+                    f"Árvore suja ({dirty_files_count} arquivo(s)) - autostash ativado"
+                    if getattr(args, "autostash", True)
+                    else f"Árvore suja ({dirty_files_count} arquivo(s))"
+                )
+            if info.get("aux_branches_behind"):
+                warnings.append(f"{len(info['aux_branches_behind'])} branch(es) secundária(s) pendente(s)")
+            if info.get("is_shallow"):
+                warnings.append("Repositório raso (shallow)")
+            action_label = f"PULL ({strategy})" if strategy else "PULL (ff-only)"
+            preview_items.append(
+                BulkActionItem(
+                    repo=r,
+                    repo_rel=rel,
+                    action=action_label,
+                    branch=branch,
+                    ahead=ahead,
+                    behind=behind,
+                    is_dirty=is_dirty,
+                    dirty_files_count=dirty_files_count,
+                    submodules_count=submodules_count,
+                    warnings=warnings,
+                    details=info,
+                )
+            )
+
+        if preview_mode:
+            if args.json:
+                print(json.dumps({"preview": True, "action": "pull", "total": len(preview_items), "items": [i.to_dict() for i in preview_items]}, indent=2))
+            else:
+                print(format_bulk_action_preview(preview_items, title="PRÉVIA DE PULL EM LOTE (BULK PULL PREVIEW)"))
+            return 0
+
+        if confirm_mode:
+            if args.json:
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [i.to_dict() for i in preview_items]}, indent=2))
+                return 1
+            confirmed = prompt_bulk_confirmation(
+                preview_items,
+                title="PRÉVIA DE PULL EM LOTE (BULK PULL PREVIEW)",
+                prompt_text=f"Confirmar atualização em {len(preview_items)} repositório(s)? [y/N]: ",
+            )
+            if not confirmed:
+                return 0
+
     t2 = time.perf_counter()
     msg_prog = "Simulando pull..." if dry_run else "Atualizando repositórios..."
     with ProgressIndicator(msg_prog, total=len(targets), enabled=show_progress) as progress:
@@ -1134,6 +1202,53 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     results: List[Dict[str, Any]] = []
     strategy = getattr(args, "strategy", None)
     show_diff_only = getattr(args, "diff", False)
+    preview_mode = getattr(args, "preview", False)
+    confirm_mode = getattr(args, "confirm", False)
+
+    if (preview_mode or confirm_mode) and strategy and targets:
+        preview_items = []
+        for r in targets:
+            rel = os.path.relpath(r, root)
+            details = get_divergence_details(r, timeout=args.timeout)
+            is_dirty = bool(details.get("is_dirty", False))
+            dirty_count = len(details.get("dirty_files", []))
+            warnings = []
+            if is_dirty:
+                warnings.append(f"Árvore suja: {dirty_count} arquivo(s)")
+            preview_items.append(
+                BulkActionItem(
+                    repo=r,
+                    repo_rel=rel,
+                    action=f"RESOLVE ({strategy})",
+                    branch=details.get("branch"),
+                    ahead=details.get("ahead", 0),
+                    behind=details.get("behind", 0),
+                    is_dirty=is_dirty,
+                    dirty_files_count=dirty_count,
+                    warnings=warnings,
+                    details=details,
+                )
+            )
+
+        if preview_mode:
+            if args.json:
+                print(json.dumps({"preview": True, "action": "resolve", "strategy": strategy, "total": len(preview_items), "items": [i.to_dict() for i in preview_items]}, indent=2))
+            else:
+                print(format_bulk_action_preview(preview_items, title="PRÉVIA DE RESOLUÇÃO EM LOTE"))
+            return 0
+
+        if confirm_mode:
+            if args.json:
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [i.to_dict() for i in preview_items]}, indent=2))
+                return 1
+            confirmed = prompt_bulk_confirmation(
+                preview_items,
+                title="PRÉVIA DE RESOLUÇÃO EM LOTE",
+                prompt_text=f"Confirmar resolução ({strategy}) em {len(preview_items)} repositório(s)? [y/N]: ",
+            )
+            if not confirmed:
+                return 0
+
     is_interactive = (not dry_run) and (getattr(args, "interactive", False) or (
         not args.json and not strategy and not show_diff_only and sys.stdin.isatty()
     ))
@@ -1292,14 +1407,67 @@ def cmd_push(args: argparse.Namespace) -> int:
                     print(f"❌ Repositório não encontrado para a busca: '{q}'")
 
     push_results = []
-    t2 = time.perf_counter()
-    show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
-    msg_prog = "Simulando push..." if args.dry_run else "Enviando commits..."
-
+    preview_mode = getattr(args, "preview", False)
+    confirm_mode = getattr(args, "confirm", False)
     force = getattr(args, "force", False)
     block_prot = getattr(args, "block_protected", False)
     allow_prot = getattr(args, "allow_protected", False)
     prot_branches = getattr(args, "effective_protected_branches", DEFAULT_PROTECTED_BRANCHES)
+
+    if (preview_mode or confirm_mode) and targets:
+        pending_map = {r["path"]: r for r in pending_repos} if args.all else {}
+        preview_items: List[BulkActionItem] = []
+        for r in targets:
+            rel = os.path.relpath(r, root)
+            if r in pending_map:
+                info = pending_map[r]
+            else:
+                chk = preflight_push_check(r, branch=args.branch, remote=remote, timeout=args.timeout)
+                info = {"branch": chk.get("branch"), "ahead": chk.get("ahead", 0)}
+            branch = info.get("branch") or args.branch
+            ahead = int(info.get("ahead", 0))
+            is_prot = is_branch_protected(branch, prot_branches) if branch else False
+            warnings: List[str] = []
+            if is_prot:
+                warnings.append(f"Branch protegida: {branch}")
+            if force:
+                warnings.append("Push forçado (--force)")
+            action_label = "PUSH (--force)" if force else "PUSH"
+            preview_items.append(
+                BulkActionItem(
+                    repo=r,
+                    repo_rel=rel,
+                    action=action_label,
+                    branch=branch,
+                    ahead=ahead,
+                    is_protected=is_prot,
+                    warnings=warnings,
+                    details=info,
+                )
+            )
+
+        if preview_mode:
+            if args.json:
+                print(json.dumps({"preview": True, "action": "push", "total": len(preview_items), "items": [i.to_dict() for i in preview_items]}, indent=2))
+            else:
+                print(format_bulk_action_preview(preview_items, title="PRÉVIA DE ENVIO EM LOTE (BULK PUSH PREVIEW)"))
+            return 0
+
+        if confirm_mode:
+            if args.json:
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [i.to_dict() for i in preview_items]}, indent=2))
+                return 1
+            confirmed = prompt_bulk_confirmation(
+                preview_items,
+                title="PRÉVIA DE ENVIO EM LOTE (BULK PUSH PREVIEW)",
+                prompt_text=f"Confirmar envio de commits em {len(preview_items)} repositório(s)? [y/N]: ",
+            )
+            if not confirmed:
+                return 0
+
+    t2 = time.perf_counter()
+    show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
+    msg_prog = "Simulando push..." if args.dry_run else "Enviando commits..."
 
     with ProgressIndicator(msg_prog, total=len(targets), enabled=show_progress) as progress:
         for r in targets:
@@ -1495,6 +1663,7 @@ def cmd_config(args: argparse.Namespace, config: GitSyncConfig) -> int:
     print(f"  Pull (autostash):    {getattr(args, 'autostash', config.pull_autostash)}")
     print(f"  Pull (dry-run):      {args.dry_run if getattr(args, 'dry_run', None) is not None else config.pull_dry_run}")
     print(f"  Push (dry-run):      {args.dry_run if getattr(args, 'dry_run', None) is not None else config.push_dry_run}")
+    print(f"  Confirm (bulk):      {getattr(args, 'confirm', config.confirm)}")
     print(f"  Push (protected):    {', '.join(getattr(config, 'push_protected_branches', DEFAULT_PROTECTED_BRANCHES))}")
     print(f"  Push (block-prot):   {getattr(config, 'push_block_protected', False)}")
     print(f"  Status (compact):    {getattr(args, 'compact', config.status_compact)}")
@@ -1743,6 +1912,55 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
     dry_run = getattr(args, "dry_run", False)
     expire = getattr(args, "expire", "now")
     cache = BulkCache(enabled=not getattr(args, "no_cache", False))
+    preview_mode = getattr(args, "preview", False)
+    confirm_mode = getattr(args, "confirm", False)
+
+    if (preview_mode or confirm_mode) and targets:
+        sim_pruned_repos: List[Dict[str, Any]] = []
+        for repo_path in targets:
+            res_sim = prune_repo_worktrees(
+                repo_path,
+                dry_run=True,
+                expire=expire,
+                timeout=args.timeout,
+                cache=cache,
+                root_dir=root,
+            )
+            if res_sim["pruned"]:
+                sim_pruned_repos.append(res_sim)
+
+        preview_items: List[BulkActionItem] = []
+        for pr in sim_pruned_repos:
+            for p_item in pr["pruned"]:
+                preview_items.append(
+                    BulkActionItem(
+                        repo=pr["repo"],
+                        repo_rel=pr["rel_path"],
+                        action="PRUNE WORKTREE",
+                        warnings=[f"{p_item.get('name', '')}: {p_item.get('reason', '')}"],
+                        details=p_item,
+                    )
+                )
+
+        if preview_mode:
+            if getattr(args, "json", False):
+                print(json.dumps({"preview": True, "action": "worktree_prune", "total": len(preview_items), "items": [i.to_dict() for i in preview_items]}, indent=2))
+            else:
+                print(format_bulk_action_preview(preview_items, title="PRÉVIA DE LIMPEZA DE WORKTREES"))
+            return 0
+
+        if confirm_mode:
+            if getattr(args, "json", False):
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [i.to_dict() for i in preview_items]}, indent=2))
+                return 1
+            if preview_items:
+                confirmed = prompt_bulk_confirmation(
+                    preview_items,
+                    title="PRÉVIA DE LIMPEZA DE WORKTREES",
+                    prompt_text=f"Confirmar poda de {len(preview_items)} worktree(s)? [y/N]: ",
+                )
+                if not confirmed:
+                    return 0
 
     pruned_repos: List[Dict[str, Any]] = []
     all_warnings: List[str] = []
@@ -1929,6 +2147,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     common.add_argument("--remote", default=argparse.SUPPRESS, help="Target specific Git remote (e.g. origin, upstream, fork)")
     common.add_argument("--dry-run", dest="dry_run", action="store_true", default=argparse.SUPPRESS, help="Simulate execution without modifying repositories")
     common.add_argument("--no-dry-run", dest="dry_run", action="store_false", default=argparse.SUPPRESS, help="Disable dry-run simulation mode")
+    common.add_argument("--confirm", dest="confirm", action="store_true", default=argparse.SUPPRESS, help="Prompt for interactive confirmation with safety preview before mutating repositories")
+    common.add_argument("--no-confirm", dest="confirm", action="store_false", default=argparse.SUPPRESS, help="Disable confirmation prompts")
+    common.add_argument("-y", "--yes", dest="confirm", action="store_false", default=argparse.SUPPRESS, help="Automatic yes to confirmation prompts; run non-interactively without prompting")
+    common.add_argument("--preview", dest="preview", action="store_true", default=argparse.SUPPRESS, help="Show formatted bulk action preview and safety summary without mutating repositories")
     common.add_argument("--dashboard", "--tui", dest="dashboard", action="store_true", default=argparse.SUPPRESS, help="Launch interactive terminal dashboard")
     common.add_argument("--max-tokens", type=int, default=argparse.SUPPRESS, help="Maximum token budget for diff inspection (~4 chars/token)")
     common.add_argument("--changelog", action="store_true", default=argparse.SUPPRESS, help="Summarize pending incoming and outgoing commit categories (Conventional Commits)")
@@ -2158,6 +2380,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         args.dry_run = dry_run_flag
     else:
         args.dry_run = dry_run_flag if dry_run_flag is not None else False
+
+    confirm_flag = getattr(args, "confirm", None)
+    if args.command == "pull":
+        args.confirm = confirm_flag if confirm_flag is not None else config.pull_confirm
+    elif args.command == "push":
+        args.confirm = confirm_flag if confirm_flag is not None else config.push_confirm
+    else:
+        args.confirm = confirm_flag if confirm_flag is not None else config.confirm
+
+    args.preview = getattr(args, "preview", False)
 
     push_all_flag = getattr(args, "push_all", None)
     if push_all_flag is not None:

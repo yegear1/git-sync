@@ -51,9 +51,11 @@ DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
         "sync_branches": True,
         "autostash": True,
         "strategy": "abort",
+        "confirm": False,
     },
     "push": {
         "dry_run": False,
+        "confirm": False,
         "protected_branches": ["main", "master", "release/*", "production"],
         "block_protected": False,
     },
@@ -149,11 +151,13 @@ class GitSyncConfig:
     pull_strategy: Optional[str] = None
     pull_autostash: bool = True
     pull_dry_run: bool = False
+    pull_confirm: bool = False
     pull_prune: bool = False
     pull_submodules: bool = False
     pull_unshallow: bool = False
     pull_reapply_sparse: bool = False
     push_dry_run: bool = False
+    push_confirm: bool = False
     push_all: bool = False
     push_branch: Optional[str] = None
     push_protected_branches: List[str] = field(default_factory=lambda: ["main", "master", "release/*", "production", "prod"])
@@ -166,6 +170,7 @@ class GitSyncConfig:
     status_prune: bool = False
     status_changelog: bool = False
     status_submodules: bool = False
+    confirm: bool = False
     hygiene: bool = False
     prune: bool = False
     submodules: bool = False
@@ -203,6 +208,7 @@ class GitSyncConfig:
                 "strategy": self.pull_strategy,
                 "autostash": self.pull_autostash,
                 "dry_run": self.pull_dry_run,
+                "confirm": self.pull_confirm,
                 "prune": self.pull_prune,
                 "submodules": self.pull_submodules,
                 "unshallow": self.pull_unshallow,
@@ -211,6 +217,7 @@ class GitSyncConfig:
             },
             "push": {
                 "dry_run": self.push_dry_run,
+                "confirm": self.push_confirm,
                 "all": self.push_all,
                 "branch": self.push_branch,
                 "remote": self.push_remote,
@@ -234,6 +241,7 @@ class GitSyncConfig:
             "hygiene": self.hygiene,
             "benchmark": self.benchmark,
             "use_cache": self.use_cache,
+            "confirm": self.confirm,
             "remote": self.remote,
             "max_tokens": self.max_tokens,
             "active_profile": self.active_profile,
@@ -431,6 +439,8 @@ def resolve_config(
     pull_strategy = str(pull_strat_raw) if pull_strat_raw is not None else None
     pull_autostash = bool(pull_cfg.get("autostash", combined.get("autostash", True)))
     pull_dry_run = bool(pull_cfg.get("dry_run", combined.get("dry_run", False)))
+    confirm = bool(combined.get("confirm", False))
+    pull_confirm = bool(pull_cfg.get("confirm", combined.get("pull_confirm", confirm)))
     global_prune = bool(combined.get("prune", False))
     pull_prune = bool(pull_cfg.get("prune", combined.get("pull_prune", global_prune)))
     global_submodules = bool(combined.get("submodules", False))
@@ -445,6 +455,7 @@ def resolve_config(
     # Parse push section & flags
     push_cfg = combined.get("push") if isinstance(combined.get("push"), dict) else {}
     push_dry_run = bool(push_cfg.get("dry_run", combined.get("dry_run", False)))
+    push_confirm = bool(push_cfg.get("confirm", combined.get("push_confirm", confirm)))
     push_all = bool(push_cfg.get("all", combined.get("push_all", False)))
     push_branch_raw = push_cfg.get("branch", combined.get("branch", None))
     push_branch = str(push_branch_raw) if push_branch_raw is not None else None
@@ -514,11 +525,13 @@ def resolve_config(
         pull_strategy=pull_strategy,
         pull_autostash=pull_autostash,
         pull_dry_run=pull_dry_run,
+        pull_confirm=pull_confirm,
         pull_prune=pull_prune,
         pull_submodules=pull_submodules,
         pull_unshallow=pull_unshallow,
         pull_reapply_sparse=pull_reapply_sparse,
         push_dry_run=push_dry_run,
+        push_confirm=push_confirm,
         push_all=push_all,
         push_branch=push_branch,
         push_protected_branches=push_protected_branches,
@@ -531,6 +544,7 @@ def resolve_config(
         status_prune=status_prune,
         status_submodules=status_submodules,
         status_changelog=status_changelog,
+        confirm=confirm,
         hygiene=hygiene,
         prune=global_prune,
         submodules=global_submodules,

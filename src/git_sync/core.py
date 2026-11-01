@@ -100,7 +100,10 @@ from git_sync.ui.dashboard import (
     read_single_key,
 )
 from git_sync.ui.progress import (
+    BulkActionItem,
     ProgressIndicator,
+    format_bulk_action_preview,
+    prompt_bulk_confirmation,
 )
 from git_sync.ui.style import (
     AnsiStyler,
@@ -112,6 +115,7 @@ from git_sync.ui.style import (
 __all__ = [
     "AdaptiveConcurrencyController",
     "AnsiStyler",
+    "BulkActionItem",
     "BulkCache",
     "CHANGELOG_CATEGORY_ORDER",
     "CONVENTIONAL_CATEGORY_MAP",
@@ -156,6 +160,7 @@ __all__ = [
     "find_repo_locks",
     "format_changelog_summary",
     "format_diff_stat",
+    "format_bulk_action_preview",
     "get_divergence_details",
     "get_divergence_diff",
     "get_repo_commits",
@@ -177,6 +182,7 @@ __all__ = [
     "parse_commit_log",
     "preflight_push_check",
     "probe_remote_reachability",
+    "prompt_bulk_confirmation",
     "prune_repo_remotes",
     "prune_repo_worktrees",
     "pull_repo",
