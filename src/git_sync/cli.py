@@ -42,9 +42,11 @@ from git_sync.engine import (
     get_divergence_details,
     get_divergence_diff,
     get_worktree_info,
+    inspect_credential_helpers,
     inspect_github_cli,
     inspect_repo,
     inspect_ssh_config,
+    inspect_token_env,
     is_branch_protected,
     match_repo,
     preflight_push_check,
@@ -263,14 +265,40 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             print(f"  Sockets SSH:        🧹 {len(pruned)} socket(s) stale podado(s)")
 
     helpers = sanity["credential_helpers"]
+    cred_diag = sanity.get("credential_helper_diagnostics") or {}
+    helper_entries = cred_diag.get("helpers", [])
     if helpers:
-        print(f"  Credential Helper:  ✅ Configurado ({', '.join(helpers)})")
+        all_helpers_ok = all(h.get("ok", True) and h.get("status") == "HEALTHY" for h in helper_entries)
+        any_helper_err = any(not h.get("ok", True) for h in helper_entries)
+        hdr_icon = "✅" if all_helpers_ok else ("❌" if any_helper_err else "⚠️ ")
+        print(f"  Credential Helper:  {hdr_icon} Configurado ({', '.join(helpers)})")
+        for h_entry in helper_entries:
+            h_type = h_entry.get("type", "custom")
+            h_status = h_entry.get("status", "HEALTHY")
+            h_icon = "✅" if h_status == "HEALTHY" else ("❌" if not h_entry.get("ok", True) else "⚠️ ")
+            detail_parts = [f"status={h_status}"]
+            if h_type == "cache":
+                detail_parts.append(f"timeout={h_entry.get('timeout_seconds', 900)}s")
+                detail_parts.append(f"socket={h_entry.get('socket_status', 'IDLE')}")
+            elif h_type == "store":
+                detail_parts.append(f"entries={h_entry.get('entries_count', 0)}")
+                if h_entry.get("file_mode"):
+                    detail_parts.append(f"mode={h_entry['file_mode']}")
+            elif h_entry.get("binary_path"):
+                detail_parts.append(f"bin={h_entry['binary_path']}")
+            print(f"                      • {h_icon} [{h_type}] {', '.join(detail_parts)}")
     else:
         print("  Credential Helper:  ℹ️  Nenhum configurado (git config credential.helper)")
 
     has_token = sanity["has_token_env"]
+    token_env_info = cred_diag.get("token_env") or {}
     if has_token:
-        print("  Token de Ambiente:  ✅ GITHUB_TOKEN ou GH_TOKEN presente")
+        if token_env_info.get("valid_format", True):
+            t_fmt = token_env_info.get("token_format")
+            fmt_str = f" [{t_fmt}]" if t_fmt else ""
+            print(f"  Token de Ambiente:  ✅ GITHUB_TOKEN ou GH_TOKEN presente{fmt_str}")
+        else:
+            print("  Token de Ambiente:  ⚠️  Token presente, mas com formato inválido ou placeholder")
     else:
         print("  Token de Ambiente:  ℹ️  Nenhum token configurado no ambiente")
 
@@ -282,7 +310,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         scopes_str = f" [{', '.join(scopes)}]" if scopes else ""
         print(f"  GitHub CLI (gh):    ✅ Autenticado como {user} (protocolo: {proto}){scopes_str}")
     elif gh_info.get("installed"):
-        print("  GitHub CLI (gh):    ⚠️  Instalado, mas não autenticado (use 'gh auth login')")
+        if gh_info.get("token_expired"):
+            print("  GitHub CLI (gh):    ❌ Token expirado ou inválido (use 'gh auth refresh' ou 'gh auth login')")
+        else:
+            print("  GitHub CLI (gh):    ⚠️  Instalado, mas não autenticado (use 'gh auth login')")
     else:
         print("  GitHub CLI (gh):    ℹ️  Não instalado no PATH")
 

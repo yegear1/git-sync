@@ -35,10 +35,12 @@ from git_sync.core import (
     compute_latency_grade,
     diagnose_git_error,
     find_ssh_control_sockets,
+    inspect_credential_helpers,
     inspect_github_cli,
     inspect_repo,
     inspect_ssh_config,
     inspect_ssh_control_socket,
+    inspect_token_env,
     is_transient_network_error,
     probe_remote_reachability,
     prune_stale_ssh_control_sockets,
@@ -1161,6 +1163,314 @@ class TestRemoteLatencyGradingAndDoctor(unittest.TestCase):
         self.assertEqual(data["remotes"]["git@github.com:org/fast-repo.git"]["latency_seconds"], 0.124)
         self.assertEqual(data["remotes"]["https://gitlab.com/org/slow-repo.git"]["grade"], "C")
         self.assertEqual(data["remotes"]["https://gitlab.com/org/slow-repo.git"]["latency_seconds"], 2.450)
+
+
+class TestCredentialHelperTriageAndExpiryDiagnostics(unittest.TestCase):
+    """Test fine-grained credential helper inspection (cache, store, libsecret, osxkeychain, wincred, gh) and expiry detection."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp_dir.name)
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def test_diagnose_token_expired_and_keychain_locked(self):
+        diag_exp = diagnose_git_error("remote: Invalid username or token. Token has expired.")
+        self.assertIsNotNone(diag_exp)
+        self.assertEqual(diag_exp["category"], "TOKEN_EXPIRED")
+        self.assertEqual(diag_exp["action_required"], "refresh_expired_token")
+
+        diag_kc = diagnose_git_error("error: libsecret-credential: Cannot communicate with secret service")
+        self.assertIsNotNone(diag_kc)
+        self.assertEqual(diag_kc["category"], "KEYCHAIN_LOCKED_OR_UNAVAILABLE")
+        self.assertEqual(diag_kc["action_required"], "unlock_keychain")
+
+    def test_inspect_token_env_formats_and_placeholders(self):
+        # 1. Valid Fine-Grained PAT
+        res_fg = inspect_token_env({"GITHUB_TOKEN": "github_pat_11AABBCCDDEEFF00112233"})
+        self.assertTrue(res_fg["has_token"])
+        self.assertTrue(res_fg["valid_format"])
+        self.assertEqual(res_fg["token_format"], "github_fine_grained_pat")
+        self.assertEqual(res_fg["variables"], ["GITHUB_TOKEN"])
+        self.assertIsNone(res_fg["warning"])
+
+        # 2. Valid Classic PAT
+        res_classic = inspect_token_env({"GH_TOKEN": "ghp_1234567890abcdefghijklmnop"})
+        self.assertTrue(res_classic["has_token"])
+        self.assertTrue(res_classic["valid_format"])
+        self.assertEqual(res_classic["token_format"], "github_classic_pat")
+
+        # 3. Placeholder / Expired marker
+        res_bad = inspect_token_env({"GITHUB_TOKEN": "changeme"})
+        self.assertTrue(res_bad["has_token"])
+        self.assertFalse(res_bad["valid_format"])
+        self.assertEqual(res_bad["token_format"], "invalid_or_placeholder")
+        self.assertIsNotNone(res_bad["warning"])
+        self.assertIsNotNone(res_bad["suggestion"])
+
+        # 4. Empty env
+        res_empty = inspect_token_env({})
+        self.assertFalse(res_empty["has_token"])
+        self.assertFalse(res_empty["valid_format"])
+
+    @patch("subprocess.run")
+    @patch("shutil.which")
+    def test_inspect_github_cli_expired_token(self, mock_which, mock_run):
+        mock_which.return_value = "/usr/bin/gh"
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["gh", "auth", "status"],
+            returncode=1,
+            stdout="",
+            stderr="X Failed to log in to github.com account user (default)\n  - The token in default is invalid (HTTP 401: Bad credentials / expired)",
+        )
+        info = inspect_github_cli()
+        self.assertTrue(info["installed"])
+        self.assertFalse(info["logged_in"])
+        self.assertTrue(info["token_expired"])
+        self.assertIn("gh auth refresh", info["suggestion"])
+
+    def test_inspect_credential_helpers_cache_idle_and_short_timeout(self):
+        # 1. Standard cache (900s), no socket yet -> IDLE & HEALTHY
+        res_idle = inspect_credential_helpers(
+            helpers=["cache --timeout=1800"],
+            env={},
+            platform="linux",
+            home_dir=self.home,
+        )
+        self.assertTrue(res_idle["configured"])
+        self.assertEqual(len(res_idle["helpers"]), 1)
+        h0 = res_idle["helpers"][0]
+        self.assertEqual(h0["type"], "cache")
+        self.assertEqual(h0["timeout_seconds"], 1800)
+        self.assertEqual(h0["socket_status"], "IDLE")
+        self.assertEqual(h0["status"], "HEALTHY")
+        self.assertTrue(h0["ok"])
+        self.assertEqual(len(res_idle["warnings"]), 0)
+
+        # 2. Short timeout (<300s) -> WARNING
+        res_short = inspect_credential_helpers(
+            helpers=["cache --timeout=60"],
+            env={},
+            platform="linux",
+            home_dir=self.home,
+        )
+        h_short = res_short["helpers"][0]
+        self.assertEqual(h_short["status"], "WARNING")
+        self.assertTrue(any("very short (60s < 300s)" in w for w in res_short["warnings"]))
+
+    def test_inspect_credential_helpers_cache_active_and_expired_sockets(self):
+        sock_dir = self.home / ".git-credential-cache"
+        sock_dir.mkdir(parents=True, exist_ok=True)
+        sock_path = sock_dir / "socket"
+
+        # 1. Defunct socket stub -> EXPIRED
+        sock_path.write_text("stub")
+        res_exp = inspect_credential_helpers(
+            helpers=[f"cache --timeout=900 --socket={sock_path}"],
+            env={},
+            platform="linux",
+            home_dir=self.home,
+        )
+        h_exp = res_exp["helpers"][0]
+        self.assertEqual(h_exp["type"], "cache")
+        self.assertEqual(h_exp["socket_status"], "EXPIRED")
+        self.assertEqual(h_exp["status"], "EXPIRED")
+        self.assertFalse(h_exp["ok"])
+        self.assertIn(str(sock_path), res_exp["expired_caches"])
+        self.assertTrue(any("expired or daemon is defunct" in w for w in res_exp["warnings"]))
+        sock_path.unlink()
+
+        # 2. Active UNIX domain socket within TTL -> ACTIVE & HEALTHY
+        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            srv.bind(str(sock_path))
+            srv.listen(1)
+            res_act = inspect_credential_helpers(
+                helpers=[f"cache --timeout=900 --socket={sock_path}"],
+                env={},
+                platform="linux",
+                home_dir=self.home,
+            )
+            h_act = res_act["helpers"][0]
+            self.assertEqual(h_act["socket_status"], "ACTIVE")
+            self.assertEqual(h_act["status"], "HEALTHY")
+            self.assertTrue(h_act["ok"])
+        finally:
+            srv.close()
+            if sock_path.exists():
+                sock_path.unlink()
+
+    def test_inspect_credential_helpers_store_permissions_and_expiry(self):
+        cred_file = self.home / ".git-credentials"
+
+        # 1. Missing store file -> EMPTY_STORE
+        res_missing = inspect_credential_helpers(
+            helpers=["store"],
+            env={},
+            platform="linux",
+            home_dir=self.home,
+        )
+        self.assertEqual(res_missing["helpers"][0]["status"], "EMPTY_STORE")
+        self.assertTrue(any("does not exist" in w for w in res_missing["warnings"]))
+
+        # 2. Valid 0600 store file with valid entry
+        cred_file.write_text("https://yegear:ghp_validtoken123456@github.com\n")
+        os.chmod(cred_file, 0o600)
+        res_valid = inspect_credential_helpers(
+            helpers=["store"],
+            env={},
+            platform="linux",
+            home_dir=self.home,
+        )
+        h_valid = res_valid["helpers"][0]
+        self.assertEqual(h_valid["status"], "HEALTHY")
+        self.assertTrue(h_valid["ok"])
+        self.assertFalse(h_valid["insecure_permissions"])
+        self.assertEqual(h_valid["entries_count"], 1)
+        self.assertEqual(h_valid["hosts"], ["github.com"])
+        # Ensure secret token is never leaked in output
+        self.assertNotIn("ghp_validtoken123456", json.dumps(res_valid))
+
+        # 3. Overly permissive 0644 store file -> INSECURE_PERMISSIONS
+        os.chmod(cred_file, 0o644)
+        res_insec = inspect_credential_helpers(
+            helpers=["store"],
+            env={},
+            platform="linux",
+            home_dir=self.home,
+        )
+        h_insec = res_insec["helpers"][0]
+        self.assertEqual(h_insec["status"], "INSECURE_PERMISSIONS")
+        self.assertTrue(h_insec["insecure_permissions"])
+        self.assertIn(str(cred_file), res_insec["insecure_stores"])
+        self.assertTrue(any("chmod 600" in s for s in res_insec["suggestions"]))
+
+        # 4. Store file with expired / placeholder token -> EXPIRED
+        os.chmod(cred_file, 0o600)
+        cred_file.write_text("https://yegear:EXPIRED@github.com\n")
+        res_exp = inspect_credential_helpers(
+            helpers=["store"],
+            env={},
+            platform="linux",
+            home_dir=self.home,
+        )
+        h_exp = res_exp["helpers"][0]
+        self.assertEqual(h_exp["status"], "EXPIRED")
+        self.assertFalse(h_exp["ok"])
+        self.assertTrue(any("placeholder, or expired token" in w for w in res_exp["warnings"]))
+
+    def test_inspect_credential_helpers_os_keychains_and_platform(self):
+        # 1. osxkeychain on Linux -> UNSUPPORTED_PLATFORM
+        res_osx = inspect_credential_helpers(
+            helpers=["osxkeychain"],
+            env={},
+            platform="linux",
+            home_dir=self.home,
+        )
+        self.assertEqual(res_osx["helpers"][0]["type"], "osxkeychain")
+        self.assertEqual(res_osx["helpers"][0]["status"], "UNSUPPORTED_PLATFORM")
+        self.assertFalse(res_osx["helpers"][0]["ok"])
+
+        # 2. libsecret on Linux with fake executable binary
+        fake_bin = self.home / "git-credential-libsecret"
+        fake_bin.write_text("#!/bin/sh\nexit 0\n")
+        os.chmod(fake_bin, 0o755)
+
+        # Headless (no DBUS_SESSION_BUS_ADDRESS) -> KEYCHAIN_LOCKED_OR_HEADLESS
+        res_headless = inspect_credential_helpers(
+            helpers=[str(fake_bin)],
+            env={},
+            platform="linux",
+            home_dir=self.home,
+        )
+        self.assertEqual(res_headless["helpers"][0]["type"], "libsecret")
+        self.assertEqual(res_headless["helpers"][0]["status"], "KEYCHAIN_LOCKED_OR_HEADLESS")
+        self.assertTrue(any("DBUS_SESSION_BUS_ADDRESS" in w for w in res_headless["warnings"]))
+
+        # With DBUS_SESSION_BUS_ADDRESS -> HEALTHY
+        res_dbus = inspect_credential_helpers(
+            helpers=[str(fake_bin)],
+            env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"},
+            platform="linux",
+            home_dir=self.home,
+        )
+        self.assertEqual(res_dbus["helpers"][0]["status"], "HEALTHY")
+        self.assertTrue(res_dbus["helpers"][0]["ok"])
+
+        # 3. Missing binary -> MISSING_BINARY
+        with patch("git_sync.engine.git._resolve_credential_helper_binary", return_value=None):
+            res_missing = inspect_credential_helpers(
+                helpers=["libsecret"],
+                env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"},
+                platform="linux",
+                home_dir=self.home,
+            )
+            self.assertEqual(res_missing["helpers"][0]["status"], "MISSING_BINARY")
+            self.assertFalse(res_missing["helpers"][0]["ok"])
+            self.assertIn("git-credential-libsecret", res_missing["missing_binaries"])
+
+    def test_inspect_credential_helpers_chain_reset_and_gh(self):
+        # Empty string "" resets previous helper entries
+        res_reset = inspect_credential_helpers(
+            helpers=["osxkeychain", "", "!gh auth git-credential"],
+            gh_info={"installed": True, "logged_in": False, "token_expired": True},
+            env={},
+            platform="linux",
+            home_dir=self.home,
+        )
+        self.assertTrue(res_reset["chain_reset"])
+        self.assertEqual(res_reset["active_helpers"], ["!gh auth git-credential"])
+        self.assertEqual(len(res_reset["helpers"]), 1)
+        self.assertEqual(res_reset["helpers"][0]["type"], "gh")
+        self.assertEqual(res_reset["helpers"][0]["status"], "EXPIRED")
+        self.assertFalse(res_reset["helpers"][0]["ok"])
+        self.assertTrue(any("gh auth refresh" in s for s in res_reset["suggestions"]))
+
+    @patch("git_sync.cli.check_credentials_sanity")
+    def test_cli_doctor_displays_credential_helper_diagnostics(self, mock_sanity):
+        mock_sanity.return_value = {
+            "ok": False,
+            "ssh_agent": {"status": "ACTIVE", "socket": "/sock", "identities_count": 1, "identities": ["key1"]},
+            "ssh_keys": ["id_ed25519"],
+            "ssh_multiplexing": {"is_enabled": True, "control_master": "auto"},
+            "github_cli": {"installed": True, "logged_in": False, "token_expired": True},
+            "credential_helpers": ["cache --timeout=900"],
+            "credential_helper_diagnostics": {
+                "configured": True,
+                "helpers": [
+                    {
+                        "raw": "cache --timeout=900",
+                        "type": "cache",
+                        "status": "EXPIRED",
+                        "ok": False,
+                        "timeout_seconds": 900,
+                        "socket_status": "EXPIRED",
+                    }
+                ],
+                "token_env": {
+                    "has_token": True,
+                    "variables": ["GITHUB_TOKEN"],
+                    "token_format": "invalid_or_placeholder",
+                    "valid_format": False,
+                },
+            },
+            "has_token_env": True,
+            "remotes": {},
+            "warnings": ["Git credential-cache socket has expired"],
+            "errors": ["github.com: Authentication token has expired or been revoked."],
+            "suggestions": ["Refresh your expired GitHub CLI token via 'gh auth refresh'"],
+        }
+
+        captured = []
+        with patch("sys.stdout.write", side_effect=captured.append):
+            exit_code = main(["doctor"])
+            self.assertEqual(exit_code, 1)
+
+        out_text = "".join(captured)
+        self.assertIn("[cache] status=EXPIRED, timeout=900s, socket=EXPIRED", out_text)
+        self.assertIn("formato inválido ou placeholder", out_text)
+        self.assertIn("Token expirado ou inválido", out_text)
 
 
 if __name__ == "__main__":

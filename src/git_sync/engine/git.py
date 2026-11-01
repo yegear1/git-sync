@@ -208,13 +208,27 @@ def diagnose_git_error(error_text: str, remote_url: Optional[str] = None) -> Opt
             "action_required": "prune_ssh_sockets",
         }
 
-    # 2. HTTP/HTTPS Authentication errors
+    # 2. HTTP/HTTPS Authentication, Keychain & Token Expiry errors
     if "terminal prompts disabled" in txt or "could not read username" in txt or "could not read password" in txt:
         return {
             "category": "HTTP_AUTH_REQUIRED",
             "message": "HTTP authentication prompt was disabled (GIT_TERMINAL_PROMPT=0) and no saved credentials were found.",
             "suggestion": "Configure a git credential helper ('git config --global credential.helper store') or provide a Personal Access Token via GITHUB_TOKEN or credentials store.",
             "action_required": "configure_http_credentials",
+        }
+    if ("token" in txt and ("expired" in txt or "revoked" in txt)) or "expired token" in txt or "token has expired" in txt:
+        return {
+            "category": "TOKEN_EXPIRED",
+            "message": "Authentication token has expired or been revoked.",
+            "suggestion": "Refresh or regenerate your Personal Access Token (PAT) via 'gh auth refresh', 'gh auth login', or update ~/.git-credentials.",
+            "action_required": "refresh_expired_token",
+        }
+    if "keychain" in txt or "libsecret" in txt or "gnome-keyring" in txt or "secret service" in txt:
+        return {
+            "category": "KEYCHAIN_LOCKED_OR_UNAVAILABLE",
+            "message": "OS credential keychain or secret service is locked or unavailable.",
+            "suggestion": "Unlock your OS keychain (e.g. 'security unlock-keychain' on macOS or start gnome-keyring/D-Bus on Linux) or switch credential helper.",
+            "action_required": "unlock_keychain",
         }
     if "authentication failed" in txt or "invalid username or password" in txt or "401" in txt or "403" in txt:
         return {
@@ -330,6 +344,14 @@ def is_transient_network_error(exc: Optional[Exception], stderr: str) -> bool:
         "host key verification failed",
         "repository not found",
         "project not found",
+        "token expired",
+        "token has expired",
+        "expired token",
+        "expired or revoked",
+        "keychain",
+        "libsecret",
+        "gnome-keyring",
+        "secret service",
     )
     if any(p in txt for p in permanent_patterns):
         return False
@@ -1503,8 +1525,9 @@ def audit_ssh_multiplexing(
 
 def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
     """
-    Inspect local GitHub CLI (gh) installation and authentication state.
+    Inspect local GitHub CLI (gh) installation, authentication state, and token expiry status.
     # INVARIANT: Uses short execution timeout to prevent blocking during doctor checks.
+    # INVARIANT: Never exposes raw authentication tokens in returned structures.
     """
     gh_bin = shutil.which("gh")
     if not gh_bin:
@@ -1512,6 +1535,7 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
             "installed": False,
             "path": None,
             "logged_in": False,
+            "token_expired": False,
             "active_account": None,
             "host": None,
             "protocol": None,
@@ -1530,7 +1554,21 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
             env=GIT_ENV,
         )
         combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
-        if proc.returncode == 0:
+        combined_lower = combined.lower()
+        is_expired = any(
+            marker in combined_lower
+            for marker in (
+                "token is invalid",
+                "token in ",
+                "expired",
+                "bad credentials",
+                "http 401",
+                "authentication failed",
+                "token has expired",
+            )
+        ) and ("invalid" in combined_lower or "expired" in combined_lower or "401" in combined_lower or "bad credentials" in combined_lower)
+
+        if proc.returncode == 0 and not is_expired:
             account: Optional[str] = None
             host = "github.com"
             protocol = "https"
@@ -1558,6 +1596,7 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
                 "installed": True,
                 "path": gh_bin,
                 "logged_in": True,
+                "token_expired": False,
                 "active_account": account,
                 "host": host,
                 "protocol": protocol,
@@ -1567,22 +1606,29 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
             }
         else:
             err_line = combined.strip().splitlines()[-1] if combined.strip() else "Not logged in"
+            suggestion = (
+                "Refresh or re-authenticate your expired GitHub CLI token using 'gh auth refresh' or 'gh auth login'."
+                if is_expired
+                else "Authenticate with GitHub using 'gh auth login'."
+            )
             return {
                 "installed": True,
                 "path": gh_bin,
                 "logged_in": False,
+                "token_expired": is_expired,
                 "active_account": None,
                 "host": None,
                 "protocol": None,
                 "token_scopes": [],
                 "error": err_line,
-                "suggestion": "Authenticate with GitHub using 'gh auth login'.",
+                "suggestion": suggestion,
             }
     except subprocess.TimeoutExpired:
         return {
             "installed": True,
             "path": gh_bin,
             "logged_in": False,
+            "token_expired": False,
             "active_account": None,
             "host": None,
             "protocol": None,
@@ -1595,6 +1641,7 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
             "installed": True,
             "path": gh_bin,
             "logged_in": False,
+            "token_expired": False,
             "active_account": None,
             "host": None,
             "protocol": None,
@@ -1602,6 +1649,516 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
             "error": str(exc),
             "suggestion": "Run 'gh auth status' manually to diagnose.",
         }
+
+
+def inspect_token_env(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """
+    Inspect environment variables for Git authentication tokens (GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN)
+    and validate format without leaking secret token values.
+    # INVARIANT: Raw token values MUST NEVER be returned or logged.
+    """
+    eff_env = env if env is not None else os.environ
+    token_vars = ["GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "BITBUCKET_TOKEN"]
+    present_vars: List[str] = []
+    primary_val: Optional[str] = None
+
+    for var in token_vars:
+        val = eff_env.get(var)
+        if val is not None and val != "":
+            present_vars.append(var)
+            if primary_val is None:
+                primary_val = val.strip()
+
+    if not present_vars or primary_val is None:
+        return {
+            "has_token": False,
+            "variables": [],
+            "token_format": None,
+            "valid_format": False,
+            "warning": None,
+            "suggestion": None,
+        }
+
+    low = primary_val.lower()
+    placeholders = {"todo", "changeme", "your_token", "<token>", "null", "none", "expired", "revoked", "xxx", "test"}
+    if low in placeholders or len(primary_val) < 8 or " " in primary_val:
+        return {
+            "has_token": True,
+            "variables": present_vars,
+            "token_format": "invalid_or_placeholder",
+            "valid_format": False,
+            "warning": f"Environment token ({', '.join(present_vars)}) contains a placeholder, expired marker, or malformed value.",
+            "suggestion": f"Export a valid Personal Access Token in {present_vars[0]} or unset it to use your Git credential helper.",
+        }
+
+    if primary_val.startswith("github_pat_"):
+        fmt = "github_fine_grained_pat"
+    elif primary_val.startswith("ghp_"):
+        fmt = "github_classic_pat"
+    elif primary_val.startswith("gho_"):
+        fmt = "github_oauth_token"
+    elif primary_val.startswith("ghu_"):
+        fmt = "github_user_to_server_token"
+    elif primary_val.startswith("ghs_"):
+        fmt = "github_server_to_server_token"
+    elif primary_val.startswith("ghr_"):
+        fmt = "github_refresh_token"
+    elif primary_val.startswith("glpat-"):
+        fmt = "gitlab_pat"
+    else:
+        fmt = "generic_token"
+
+    return {
+        "has_token": True,
+        "variables": present_vars,
+        "token_format": fmt,
+        "valid_format": True,
+        "warning": None,
+        "suggestion": None,
+    }
+
+
+def _resolve_credential_helper_binary(
+    helper_type: str,
+    raw_spec: str,
+) -> Optional[str]:
+    """
+    Resolve the executable path for an OS Git credential helper (libsecret, osxkeychain, wincred, manager).
+    # INVARIANT: Checks explicit file paths, PATH, and standard Git exec-path directories without spawning subshells.
+    """
+    first_token = raw_spec.strip().split()[0] if raw_spec.strip() else ""
+    if first_token.startswith("!"):
+        cmd_token = first_token[1:].strip()
+        if cmd_token:
+            expanded = os.path.expanduser(cmd_token)
+            if os.path.isabs(expanded):
+                return expanded if (os.path.isfile(expanded) and os.access(expanded, os.X_OK)) else None
+            return shutil.which(cmd_token)
+        return None
+
+    if first_token.startswith("/") or first_token.startswith("~"):
+        expanded = os.path.expanduser(first_token)
+        if os.path.isfile(expanded) and os.access(expanded, os.X_OK):
+            return expanded
+        return None
+
+    candidate_names = [f"git-credential-{helper_type}"]
+    if helper_type == "manager":
+        candidate_names.extend(["git-credential-manager", "git-credential-manager-core"])
+
+    for cname in candidate_names:
+        found = shutil.which(cname)
+        if found:
+            return found
+
+    search_dirs = [
+        "/usr/lib/git-core",
+        "/usr/libexec/git-core",
+        f"/usr/share/doc/git/contrib/credential/{helper_type}",
+        "/usr/local/libexec/git-core",
+        "/usr/local/lib/git-core",
+        "/opt/homebrew/opt/git/libexec/git-core",
+    ]
+    for sdir in search_dirs:
+        for cname in candidate_names:
+            p = os.path.join(sdir, cname)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                return p
+
+    return None
+
+
+def inspect_credential_helpers(
+    helpers: Optional[List[str]] = None,
+    timeout: int = 3,
+    gh_info: Optional[Dict[str, Any]] = None,
+    env: Optional[Dict[str, str]] = None,
+    platform: Optional[str] = None,
+    home_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """
+    Perform fine-grained triage of configured Git credential helpers (libsecret, osxkeychain,
+    wincred, manager, store, cache, gh) and detect expired cache sockets, missing helper
+    binaries, headless keyring lockouts, or insecure credential stores.
+
+    # INVARIANT: Never exposes plaintext passwords or tokens from credential stores.
+    # INVARIANT: Non-blocking socket and inode checks guarantee zero hang risk.
+    """
+    eff_env = env if env is not None else os.environ
+    eff_platform = (platform or sys.platform).lower()
+    eff_home = Path(home_dir) if home_dir is not None else Path.home()
+
+    raw_list: List[str] = []
+    if helpers is not None:
+        raw_list = list(helpers)
+    else:
+        try:
+            p_helper = subprocess.run(
+                ["git", "config", "--get-all", "credential.helper"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=timeout,
+                env=GIT_ENV,
+            )
+            if p_helper.returncode == 0:
+                raw_list = [h.strip() for h in p_helper.stdout.splitlines()]
+        except Exception:
+            raw_list = []
+
+    token_report = inspect_token_env(env=eff_env)
+
+    warnings: List[str] = []
+    errors: List[str] = []
+    suggestions: List[str] = []
+
+    if token_report.get("warning"):
+        warnings.append(token_report["warning"])
+    if token_report.get("suggestion"):
+        suggestions.append(token_report["suggestion"])
+
+    # Compute effective helper chain (an empty string "" in credential.helper resets prior entries)
+    effective_raw: List[str] = []
+    chain_reset = False
+    for raw_item in raw_list:
+        stripped = raw_item.strip()
+        if stripped == "":
+            effective_raw = []
+            chain_reset = True
+        else:
+            effective_raw.append(stripped)
+
+    helper_reports: List[Dict[str, Any]] = []
+    expired_caches: List[str] = []
+    missing_binaries: List[str] = []
+    insecure_stores: List[str] = []
+
+    for h_raw in effective_raw:
+        h_low = h_raw.lower()
+        entry: Dict[str, Any] = {
+            "raw": h_raw,
+            "type": "custom",
+            "status": "HEALTHY",
+            "ok": True,
+        }
+
+        # 1. Git credential-cache
+        if h_low == "cache" or h_low.startswith("cache ") or "git-credential-cache" in h_low:
+            entry["type"] = "cache"
+            m_timeout = re.search(r"--timeout(?:=|\s+)(\d+)", h_raw)
+            cache_timeout = int(m_timeout.group(1)) if m_timeout else 900
+            entry["timeout_seconds"] = cache_timeout
+
+            m_sock = re.search(r"--socket(?:=|\s+)([^\s\"']+)", h_raw)
+            if m_sock:
+                sock_candidates = [Path(os.path.expanduser(m_sock.group(1)))]
+            else:
+                sock_candidates = []
+                xdg_cache = eff_env.get("XDG_CACHE_HOME")
+                if xdg_cache:
+                    sock_candidates.append(Path(xdg_cache) / "git" / "credential" / "socket")
+                sock_candidates.append(eff_home / ".cache" / "git" / "credential" / "socket")
+                sock_candidates.append(eff_home / ".git-credential-cache" / "socket")
+
+            existing_sock: Optional[Path] = None
+            for cand in sock_candidates:
+                if cand.exists():
+                    existing_sock = cand
+                    break
+
+            if existing_sock is not None:
+                entry["socket_path"] = str(existing_sock)
+                try:
+                    st = existing_sock.stat()
+                    age_s = round(max(0.0, time.time() - st.st_mtime), 2)
+                    entry["age_seconds"] = age_s
+                    is_sock = stat.S_ISSOCK(st.st_mode)
+                except Exception:
+                    age_s = 0.0
+                    is_sock = False
+
+                sock_alive = False
+                if is_sock:
+                    s_probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    s_probe.settimeout(0.2)
+                    try:
+                        s_probe.connect(str(existing_sock))
+                        sock_alive = True
+                    except Exception:
+                        sock_alive = False
+                    finally:
+                        s_probe.close()
+
+                if not is_sock or not sock_alive or age_s > cache_timeout:
+                    entry["socket_status"] = "EXPIRED"
+                    entry["status"] = "EXPIRED"
+                    entry["ok"] = False
+                    expired_caches.append(str(existing_sock))
+                    w_msg = (
+                        f"Git credential-cache socket '{existing_sock}' has expired or daemon is defunct "
+                        f"(age: {age_s:.0f}s, timeout: {cache_timeout}s)."
+                    )
+                    s_msg = (
+                        "Re-authenticate or increase credential cache TTL via "
+                        "'git config --global credential.helper \"cache --timeout=3600\"'."
+                    )
+                    if w_msg not in warnings:
+                        warnings.append(w_msg)
+                    if s_msg not in suggestions:
+                        suggestions.append(s_msg)
+                else:
+                    entry["socket_status"] = "ACTIVE"
+            else:
+                entry["socket_path"] = str(sock_candidates[0]) if sock_candidates else None
+                entry["socket_status"] = "IDLE"
+
+            if cache_timeout < 300:
+                if entry["status"] == "HEALTHY":
+                    entry["status"] = "WARNING"
+                w_short = (
+                    f"Git credential-cache timeout is very short ({cache_timeout}s < 300s), "
+                    "which may cause frequent token expirations during bulk operations."
+                )
+                s_short = "Increase credential cache timeout via 'git config --global credential.helper \"cache --timeout=3600\"'."
+                if w_short not in warnings:
+                    warnings.append(w_short)
+                if s_short not in suggestions:
+                    suggestions.append(s_short)
+
+        # 2. Git credential-store
+        elif h_low == "store" or h_low.startswith("store ") or "git-credential-store" in h_low:
+            entry["type"] = "store"
+            m_file = re.search(r"--file(?:=|\s+)([^\s\"']+)", h_raw)
+            if m_file:
+                store_candidates = [Path(os.path.expanduser(m_file.group(1)))]
+            else:
+                xdg_cfg = eff_env.get("XDG_CONFIG_HOME")
+                cfg_base = Path(xdg_cfg) if xdg_cfg else (eff_home / ".config")
+                store_candidates = [
+                    eff_home / ".git-credentials",
+                    cfg_base / "git" / "credentials",
+                ]
+
+            existing_store: Optional[Path] = None
+            for cand in store_candidates:
+                if cand.is_file():
+                    existing_store = cand
+                    break
+
+            if existing_store is not None:
+                entry["store_file"] = str(existing_store)
+                try:
+                    st = existing_store.stat()
+                    mode = st.st_mode & 0o777
+                    entry["file_mode"] = oct(mode)
+                    if eff_platform != "win32" and (mode & 0o077) != 0:
+                        entry["insecure_permissions"] = True
+                        entry["status"] = "INSECURE_PERMISSIONS"
+                        insecure_stores.append(str(existing_store))
+                        w_perm = (
+                            f"Plaintext credential store '{existing_store}' has overly permissive file mode "
+                            f"({oct(mode)}); credentials are readable by other local users."
+                        )
+                        s_perm = f"Restrict credential store permissions via 'chmod 600 {existing_store}'."
+                        if w_perm not in warnings:
+                            warnings.append(w_perm)
+                        if s_perm not in suggestions:
+                            suggestions.append(s_perm)
+                    else:
+                        entry["insecure_permissions"] = False
+                except Exception:
+                    entry["insecure_permissions"] = False
+
+                hosts: List[str] = []
+                entries_count = 0
+                has_invalid_token = False
+                try:
+                    lines = existing_store.read_text(encoding="utf-8", errors="replace").splitlines()
+                    for raw_line in lines:
+                        line = raw_line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        entries_count += 1
+                        # Format: https://username:password@host/path
+                        m_cred = re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://([^:@/]*):([^@/]*)@([^/\s]+)", line)
+                        if m_cred:
+                            _user, secret, host_part = m_cred.group(1), m_cred.group(2), m_cred.group(3)
+                            if host_part and host_part not in hosts:
+                                hosts.append(host_part)
+                            sec_low = secret.strip().lower()
+                            if not sec_low or sec_low in ("todo", "changeme", "your_token", "<token>", "expired", "revoked", "null", "none"):
+                                has_invalid_token = True
+                except Exception:
+                    pass
+
+                entry["entries_count"] = entries_count
+                entry["hosts"] = hosts
+                if has_invalid_token:
+                    entry["status"] = "EXPIRED"
+                    entry["ok"] = False
+                    w_inv = f"Credential store '{existing_store}' contains an empty, placeholder, or expired token entry."
+                    s_inv = f"Update expired or placeholder credentials in '{existing_store}' or re-authenticate via 'gh auth login'."
+                    if w_inv not in warnings:
+                        warnings.append(w_inv)
+                    if s_inv not in suggestions:
+                        suggestions.append(s_inv)
+                elif entries_count == 0:
+                    entry["status"] = "EMPTY_STORE"
+                    w_empty = f"Git credential store '{existing_store}' is empty (0 saved credentials)."
+                    s_empty = f"Populate credentials in '{existing_store}' or authenticate via 'gh auth login'."
+                    if w_empty not in warnings:
+                        warnings.append(w_empty)
+                    if s_empty not in suggestions:
+                        suggestions.append(s_empty)
+            else:
+                target_f = str(store_candidates[0])
+                entry["store_file"] = target_f
+                entry["entries_count"] = 0
+                entry["hosts"] = []
+                entry["status"] = "EMPTY_STORE"
+                w_missing = f"Git credential.helper 'store' is configured, but '{target_f}' does not exist."
+                s_missing = "Authenticate once interactively to populate ~/.git-credentials or run 'gh auth login'."
+                if w_missing not in warnings:
+                    warnings.append(w_missing)
+                if s_missing not in suggestions:
+                    suggestions.append(s_missing)
+
+        # 3. GitHub CLI credential helper (!gh auth git-credential or gh)
+        elif "gh auth git-credential" in h_low or h_low == "gh" or h_low.endswith("/gh"):
+            entry["type"] = "gh"
+            eff_gh = gh_info if gh_info is not None else _dispatch_fn("inspect_github_cli", inspect_github_cli)(timeout=timeout)
+            if not eff_gh.get("installed"):
+                entry["status"] = "MISSING_BINARY"
+                entry["ok"] = False
+                missing_binaries.append("gh")
+                w_gh = "Git credential.helper references GitHub CLI ('gh'), but 'gh' binary was not found on PATH."
+                s_gh = "Install GitHub CLI (https://cli.github.com) or update credential.helper config."
+                if w_gh not in warnings:
+                    warnings.append(w_gh)
+                if s_gh not in suggestions:
+                    suggestions.append(s_gh)
+            elif eff_gh.get("token_expired"):
+                entry["status"] = "EXPIRED"
+                entry["ok"] = False
+                w_gh_exp = "GitHub CLI ('gh') credential helper is configured, but its token has expired or been revoked."
+                s_gh_exp = "Refresh your expired GitHub CLI token via 'gh auth refresh' or 'gh auth login'."
+                if w_gh_exp not in warnings:
+                    warnings.append(w_gh_exp)
+                if s_gh_exp not in suggestions:
+                    suggestions.append(s_gh_exp)
+            elif not eff_gh.get("logged_in"):
+                entry["status"] = "UNAUTHENTICATED"
+                entry["ok"] = False
+                w_gh_unauth = "GitHub CLI ('gh') credential helper is configured, but 'gh' is not authenticated."
+                s_gh_unauth = "Authenticate GitHub CLI with 'gh auth login'."
+                if w_gh_unauth not in warnings:
+                    warnings.append(w_gh_unauth)
+                if s_gh_unauth not in suggestions:
+                    suggestions.append(s_gh_unauth)
+
+        # 4. OS Keychain Helpers (libsecret, osxkeychain, wincred, manager)
+        elif any(k in h_low for k in ("libsecret", "osxkeychain", "wincred", "manager", "gcm")):
+            if "libsecret" in h_low:
+                h_type = "libsecret"
+            elif "osxkeychain" in h_low:
+                h_type = "osxkeychain"
+            elif "wincred" in h_low:
+                h_type = "wincred"
+            else:
+                h_type = "manager"
+            entry["type"] = h_type
+
+            # Check platform compatibility
+            platform_ok = True
+            if h_type == "osxkeychain" and "darwin" not in eff_platform:
+                platform_ok = False
+            elif h_type == "wincred" and not any(p in eff_platform for p in ("win", "cygwin", "msys")):
+                is_wsl = False
+                try:
+                    if hasattr(os, "uname") and "microsoft" in os.uname().release.lower():
+                        is_wsl = True
+                except Exception:
+                    pass
+                if not is_wsl:
+                    platform_ok = False
+            elif h_type == "libsecret" and ("darwin" in eff_platform or "win" in eff_platform):
+                platform_ok = False
+
+            if not platform_ok:
+                entry["status"] = "UNSUPPORTED_PLATFORM"
+                entry["ok"] = False
+                w_plat = f"OS credential helper '{h_type}' is not supported on current platform ({eff_platform})."
+                s_plat = "Switch to a platform-native credential helper (e.g. 'gh auth setup-git', 'cache', or OS native keychain)."
+                if w_plat not in warnings:
+                    warnings.append(w_plat)
+                if s_plat not in suggestions:
+                    suggestions.append(s_plat)
+            else:
+                bin_path = _resolve_credential_helper_binary(h_type, h_raw)
+                entry["binary_path"] = bin_path
+                if not bin_path:
+                    entry["status"] = "MISSING_BINARY"
+                    entry["ok"] = False
+                    missing_binaries.append(f"git-credential-{h_type}")
+                    w_bin = f"OS credential helper '{h_type}' is configured, but 'git-credential-{h_type}' executable was not found."
+                    s_bin = (
+                        f"Install 'git-credential-{h_type}' or switch credential helper via "
+                        "'gh auth setup-git' / 'git config --global credential.helper cache'."
+                    )
+                    if w_bin not in warnings:
+                        warnings.append(w_bin)
+                    if s_bin not in suggestions:
+                        suggestions.append(s_bin)
+                elif h_type == "libsecret" and "linux" in eff_platform:
+                    dbus_addr = eff_env.get("DBUS_SESSION_BUS_ADDRESS")
+                    entry["dbus_session"] = bool(dbus_addr)
+                    if not dbus_addr:
+                        entry["status"] = "KEYCHAIN_LOCKED_OR_HEADLESS"
+                        w_dbus = (
+                            "Credential helper 'libsecret' is configured in a headless session without "
+                            "DBUS_SESSION_BUS_ADDRESS; GNOME Keyring / Secret Service may be locked or unreachable."
+                        )
+                        s_dbus = (
+                            "Ensure D-Bus user session and gnome-keyring-daemon are unlocked, or use "
+                            "'gh auth setup-git' / 'credential.helper cache' for headless environments."
+                        )
+                        if w_dbus not in warnings:
+                            warnings.append(w_dbus)
+                        if s_dbus not in suggestions:
+                            suggestions.append(s_dbus)
+
+        # 5. Custom helper script or binary
+        else:
+            entry["type"] = "custom"
+            bin_path = _resolve_credential_helper_binary(h_raw, h_raw)
+            entry["binary_path"] = bin_path
+            if bin_path is None and (h_raw.startswith("/") or h_raw.startswith("~") or h_raw.startswith("!")):
+                entry["status"] = "MISSING_BINARY"
+                entry["ok"] = False
+                missing_binaries.append(h_raw)
+                w_cust = f"Custom Git credential helper '{h_raw}' executable was not found or is not executable."
+                s_cust = "Verify the path in 'git config --list --show-origin | grep credential.helper'."
+                if w_cust not in warnings:
+                    warnings.append(w_cust)
+                if s_cust not in suggestions:
+                    suggestions.append(s_cust)
+
+        helper_reports.append(entry)
+
+    return {
+        "configured": len(effective_raw) > 0,
+        "chain_reset": chain_reset,
+        "raw_helpers": [h for h in raw_list if h],
+        "active_helpers": effective_raw,
+        "helpers": helper_reports,
+        "expired_caches": expired_caches,
+        "missing_binaries": missing_binaries,
+        "insecure_stores": insecure_stores,
+        "token_env": token_report,
+        "warnings": warnings,
+        "errors": errors,
+        "suggestions": suggestions,
+    }
 
 
 def compute_latency_grade(rtt_seconds: Optional[float], ok: bool = True) -> str:
@@ -1770,6 +2327,7 @@ def check_credentials_sanity(
                 ssh_keys_found.append(key_name)
 
     # 3. Credential Helpers & Tokens
+    raw_helper_lines: List[str] = []
     credential_helpers: List[str] = []
     try:
         p_helper = subprocess.run(
@@ -1781,14 +2339,25 @@ def check_credentials_sanity(
             env=GIT_ENV,
         )
         if p_helper.returncode == 0:
-            credential_helpers = [h.strip() for h in p_helper.stdout.splitlines() if h.strip()]
+            raw_helper_lines = [h.strip() for h in p_helper.stdout.splitlines()]
+            credential_helpers = [h for h in raw_helper_lines if h]
     except Exception:
         pass
 
-    has_token_env = bool(os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
+    has_token_env = bool(
+        os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("GH_TOKEN")
+        or os.environ.get("GITLAB_TOKEN")
+        or os.environ.get("BITBUCKET_TOKEN")
+    )
 
-    # 3.5 GitHub CLI (gh) Status
+    # 3.5 GitHub CLI (gh) Status & Fine-Grained Credential Helper Triage
     gh_info = _dispatch_fn("inspect_github_cli", inspect_github_cli)(timeout=timeout)
+    cred_diag = _dispatch_fn("inspect_credential_helpers", inspect_credential_helpers)(
+        helpers=raw_helper_lines,
+        timeout=timeout,
+        gh_info=gh_info,
+    )
 
     # 4. Remote Connectivity Probing
     remotes_tested: Dict[str, Dict[str, Any]] = {}
@@ -1864,8 +2433,19 @@ def check_credentials_sanity(
 
     gh_logged_in = bool(gh_info.get("installed") and gh_info.get("logged_in"))
     if gh_info.get("installed") and not gh_logged_in:
-        warnings.append("GitHub CLI (gh) is installed but not authenticated.")
-        suggestions.append("Authenticate GitHub CLI with 'gh auth login'.")
+        if gh_info.get("token_expired"):
+            warnings.append("GitHub CLI (gh) authentication token has expired or is invalid.")
+            suggestions.append("Refresh your expired GitHub CLI token with 'gh auth refresh' or 'gh auth login'.")
+        else:
+            warnings.append("GitHub CLI (gh) is installed but not authenticated.")
+            suggestions.append("Authenticate GitHub CLI with 'gh auth login'.")
+
+    for c_warn in cred_diag.get("warnings", []):
+        if c_warn not in warnings:
+            warnings.append(c_warn)
+    for c_sug in cred_diag.get("suggestions", []):
+        if c_sug not in suggestions:
+            suggestions.append(c_sug)
 
     if has_http_remotes and not credential_helpers and not has_token_env and not gh_logged_in:
         warnings.append("HTTP remotes detected without configured Git credential helper, GITHUB_TOKEN, or authenticated GitHub CLI (gh).")
@@ -1901,6 +2481,13 @@ def check_credentials_sanity(
                         errors.append(err_msg)
                     if diag.get("suggestion") and diag["suggestion"] not in suggestions:
                         suggestions.append(diag["suggestion"])
+                    if diag.get("category") in ("HTTP_AUTH_FAILED", "TOKEN_EXPIRED") and credential_helpers:
+                        evict_sug = (
+                            f"Evict stale cached credentials for '{host}' via "
+                            f"'printf \"protocol=https\\nhost={host}\\n\\n\" | git credential reject' and re-authenticate."
+                        )
+                        if evict_sug not in suggestions:
+                            suggestions.append(evict_sug)
                 else:
                     err_label = r_data.get("error") or "Failed"
                     err_msg = f"{host or r_url}: {err_label}"
@@ -1967,6 +2554,7 @@ def check_credentials_sanity(
         "ssh_multiplexing": ssh_mux_info,
         "github_cli": gh_info,
         "credential_helpers": credential_helpers,
+        "credential_helper_diagnostics": cred_diag,
         "has_token_env": has_token_env,
         "remotes": remotes_tested,
         "locked_repos": locked_repos,
