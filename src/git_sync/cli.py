@@ -49,6 +49,7 @@ from git_sync.engine import (
     match_repo,
     preflight_push_check,
     prune_repo_worktrees,
+    prune_stale_ssh_control_sockets,
     pull_repo,
     push_repo,
     recover_index_lock,
@@ -140,6 +141,22 @@ def _print_ssh_audit_output(ssh_audit: Dict[str, Any]) -> None:
         print(f"  ControlPersist:     ✅ {persist}")
     else:
         print("  ControlPersist:     ℹ️  Não configurado")
+
+    sock_info = ssh_audit.get("sockets")
+    if sock_info:
+        act = sock_info.get("active", [])
+        pruned = sock_info.get("pruned", [])
+        corrupted = sock_info.get("corrupted", [])
+        if act:
+            print(f"  Sockets Ativos:     🔌 {len(act)} conexão(ões) mestre ativa(s)")
+            for s in act:
+                print(f"                      • {s.get('path')}")
+        if pruned:
+            print(f"  Sockets Podados:    🧹 {len(pruned)} socket(s) obsoleto(s) removido(s)")
+            for p in pruned:
+                print(f"                      • {p}")
+        if corrupted and not pruned:
+            print(f"  Sockets Inválidos:  ⚠️  {len(corrupted)} arquivo(s) corrompido(s)")
 
     bench = ssh_audit.get("benchmark")
     if bench:
@@ -233,8 +250,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if mux_info.get("is_enabled"):
         cm_val = mux_info.get("control_master", "auto")
         print(f"  SSH Multiplexing:   ✅ Ativo (ControlMaster {cm_val})")
+        pruned = mux_info.get("stale_sockets_pruned", [])
+        if pruned:
+            print(f"                      🧹 {len(pruned)} socket(s) stale podado(s)")
+        active = mux_info.get("active_sockets", [])
+        if active:
+            print(f"                      🔌 {len(active)} conexão(ões) mestre ativa(s)")
     else:
         print("  SSH Multiplexing:   ℹ️  Inativo (use 'git-sync doctor --ssh' para auditar)")
+        pruned = mux_info.get("stale_sockets_pruned", [])
+        if pruned:
+            print(f"  Sockets SSH:        🧹 {len(pruned)} socket(s) stale podado(s)")
 
     helpers = sanity["credential_helpers"]
     if helpers:
@@ -2178,6 +2204,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_doctor = subparsers.add_parser("doctor", parents=[common], help="Run proactive credential and connectivity diagnostics")
     p_doctor.add_argument("--group", default=None, help="Filter target repositories by group")
     p_doctor.add_argument("--ssh", action="store_true", default=False, help="Audit SSH connection multiplexing (ControlMaster) and measure latency")
+    p_doctor.add_argument("--prune-ssh", action="store_true", default=False, help="Auto-prune stale or defunct SSH ControlMaster multiplexing sockets")
 
     # status
     p_status = subparsers.add_parser("status", parents=[common], help="Show status of all repositories")

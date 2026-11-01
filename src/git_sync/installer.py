@@ -566,7 +566,7 @@ _git_sync_completions() {
             return 0
             ;;
         doctor)
-            COMPREPLY=($(compgen -W "$common_opts --ssh --group" -- "$cur"))
+            COMPREPLY=($(compgen -W "$common_opts --ssh --prune-ssh --group" -- "$cur"))
             return 0
             ;;
         pull)
@@ -733,6 +733,7 @@ _git_sync() {
                     _arguments \\
                         $common_args \\
                         '--ssh[Benchmark SSH ControlMaster multiplexing]' \\
+                        '--prune-ssh[Auto-prune stale or defunct SSH ControlMaster multiplexing sockets]' \\
                         '--group[Filter target repositories by group]:group:'
                     ;;
                 status|dashboard|tui)

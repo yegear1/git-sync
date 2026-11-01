@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -30,13 +31,17 @@ from git_sync.core import (
     audit_ssh_multiplexing,
     benchmark_ssh_multiplexing,
     check_credentials_sanity,
+    close_ssh_control_socket,
     compute_latency_grade,
     diagnose_git_error,
+    find_ssh_control_sockets,
     inspect_github_cli,
     inspect_repo,
     inspect_ssh_config,
+    inspect_ssh_control_socket,
     is_transient_network_error,
     probe_remote_reachability,
+    prune_stale_ssh_control_sockets,
     run_git_with_retry,
 )
 
@@ -623,6 +628,173 @@ Host *
             self.assertIn("ssh_audit", data)
             self.assertTrue(data["ssh_audit"]["ok"])
             self.assertEqual(data["ssh_audit"]["benchmark"]["speedup_factor"], 10.0)
+
+    def test_inspect_ssh_control_socket_missing(self):
+        info = inspect_ssh_control_socket("/tmp/nonexistent_socket_path_xyz")
+        self.assertEqual(info["status"], "MISSING")
+        self.assertFalse(info["is_socket"])
+
+    def test_inspect_ssh_control_socket_active_and_stale(self):
+        with tempfile.TemporaryDirectory(prefix="gs_sock_") as tmp_dir:
+            sock_path = os.path.join(tmp_dir, "control-active.sock")
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(sock_path)
+            srv.listen(1)
+            try:
+                # 1. Active socket inspection
+                info_active = inspect_ssh_control_socket(sock_path)
+                self.assertEqual(info_active["status"], "ACTIVE")
+                self.assertTrue(info_active["is_socket"])
+                self.assertIsNone(info_active["error"])
+            finally:
+                srv.close()
+
+            # 2. Stale socket inspection (inode remains on disk, but server closed)
+            info_stale = inspect_ssh_control_socket(sock_path)
+            self.assertEqual(info_stale["status"], "STALE")
+            self.assertTrue(info_stale["is_socket"])
+            self.assertIn("Connection refused", str(info_stale["error"]))
+
+    def test_inspect_ssh_control_socket_corrupted_stub(self):
+        with tempfile.TemporaryDirectory(prefix="gs_sock_") as tmp_dir:
+            stub_path = os.path.join(tmp_dir, "control-corrupt.sock")
+            Path(stub_path).touch()  # 0-byte regular file
+            info = inspect_ssh_control_socket(stub_path)
+            self.assertEqual(info["status"], "CORRUPTED")
+            self.assertFalse(info["is_socket"])
+            self.assertIn("Not a valid UNIX domain socket", str(info["error"]))
+
+    def test_find_ssh_control_sockets_filtering(self):
+        with tempfile.TemporaryDirectory(prefix="gs_sock_") as tmp_dir:
+            # Create a regular file that should NEVER be pruned or treated as a socket
+            key_file = os.path.join(tmp_dir, "id_ed25519")
+            with open(key_file, "w") as f:
+                f.write("DUMMY_KEY")
+            config_file = os.path.join(tmp_dir, "config")
+            with open(config_file, "w") as f:
+                f.write("Host *")
+
+            # Create an active socket
+            act_sock = os.path.join(tmp_dir, "control-master-1")
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(act_sock)
+            srv.listen(1)
+
+            # Create a stale socket
+            stale_sock = os.path.join(tmp_dir, "control-master-2")
+            srv_stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv_stale.bind(stale_sock)
+            srv_stale.close()
+
+            # Create a 0-byte corrupted socket stub
+            corrupt_sock = os.path.join(tmp_dir, "control-corrupted")
+            Path(corrupt_sock).touch()
+
+            try:
+                found = find_ssh_control_sockets(socket_dir=tmp_dir)
+                paths = [f["path"] for f in found]
+                self.assertIn(act_sock, paths)
+                self.assertIn(stale_sock, paths)
+                self.assertIn(corrupt_sock, paths)
+                self.assertNotIn(key_file, paths)
+                self.assertNotIn(config_file, paths)
+            finally:
+                srv.close()
+
+    def test_prune_stale_ssh_control_sockets_lifecycle(self):
+        with tempfile.TemporaryDirectory(prefix="gs_sock_") as tmp_dir:
+            act_sock = os.path.join(tmp_dir, "control-act")
+            srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            srv.bind(act_sock)
+            srv.listen(1)
+
+            stale_sock = os.path.join(tmp_dir, "control-stale")
+            s_stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s_stale.bind(stale_sock)
+            s_stale.close()
+
+            corrupt_sock = os.path.join(tmp_dir, "control-corrupt")
+            Path(corrupt_sock).touch()
+
+            try:
+                # 1. Dry run
+                dry_res = prune_stale_ssh_control_sockets(socket_dir=tmp_dir, dry_run=True)
+                self.assertEqual(len(dry_res["active"]), 1)
+                self.assertEqual(len(dry_res["stale"]), 1)
+                self.assertEqual(len(dry_res["corrupted"]), 1)
+                self.assertIn(stale_sock, dry_res["pruned"])
+                self.assertIn(corrupt_sock, dry_res["pruned"])
+                self.assertTrue(os.path.exists(stale_sock))
+                self.assertTrue(os.path.exists(corrupt_sock))
+
+                # 2. Live prune
+                prune_res = prune_stale_ssh_control_sockets(socket_dir=tmp_dir, dry_run=False)
+                self.assertEqual(len(prune_res["pruned"]), 2)
+                self.assertFalse(os.path.exists(stale_sock))
+                self.assertFalse(os.path.exists(corrupt_sock))
+                self.assertTrue(os.path.exists(act_sock))  # Active socket was preserved!
+            finally:
+                srv.close()
+
+    def test_diagnose_git_error_control_socket(self):
+        diag1 = diagnose_git_error("Control socket connect(/home/user/.ssh/control-abc): Connection refused")
+        self.assertIsNotNone(diag1)
+        self.assertEqual(diag1["category"], "SSH_CONTROL_SOCKET_ERROR")
+        self.assertEqual(diag1["action_required"], "prune_ssh_sockets")
+
+        diag2 = diagnose_git_error("Corrupted control socket /tmp/ssh-master")
+        self.assertIsNotNone(diag2)
+        self.assertEqual(diag2["category"], "SSH_CONTROL_SOCKET_ERROR")
+
+    @patch("git_sync.engine.git.prune_stale_ssh_control_sockets")
+    @patch("git_sync.engine.git.run_git")
+    def test_run_git_with_retry_control_socket_recovery(self, mock_run_git, mock_prune):
+        p_fail = subprocess.CompletedProcess(
+            args=["git", "fetch"],
+            returncode=255,
+            stdout="",
+            stderr="Control socket connect(/home/.ssh/control-123): Connection refused\nfatal: Could not read from remote",
+        )
+        p_ok = subprocess.CompletedProcess(
+            args=["git", "fetch"],
+            returncode=0,
+            stdout="Fetched successfully",
+            stderr="",
+        )
+        mock_run_git.side_effect = [p_fail, p_ok]
+
+        res = run_git_with_retry("/dummy/repo", ["fetch"], retries=1, sleep_func=lambda s: None)
+        self.assertEqual(res.returncode, 0)
+        self.assertEqual(mock_run_git.call_count, 2)
+        mock_prune.assert_called_once()
+
+    @patch("git_sync.cli.check_credentials_sanity")
+    def test_cli_doctor_prune_ssh_flag(self, mock_sanity):
+        mock_sanity.return_value = {
+            "ok": True,
+            "ssh_agent": {"status": "ACTIVE", "socket": "/sock", "identities_count": 1, "identities": ["key1"]},
+            "ssh_keys": ["id_ed25519"],
+            "ssh_multiplexing": {
+                "is_enabled": True,
+                "control_master": "auto",
+                "stale_sockets_pruned": ["/home/user/.ssh/control-stale1", "/home/user/.ssh/control-stale2"],
+                "active_sockets": ["/home/user/.ssh/control-active"],
+            },
+            "credential_helpers": [],
+            "has_token_env": True,
+            "remotes": {},
+            "warnings": [],
+            "errors": [],
+            "suggestions": [],
+        }
+
+        captured = []
+        with patch("sys.stdout.write", side_effect=captured.append):
+            exit_code = main(["doctor", "--prune-ssh"])
+            self.assertEqual(exit_code, 0)
+            output = "".join(captured)
+            self.assertIn("podado(s)", output)
+            self.assertIn("ativa(s)", output)
 
 
 class TestGitHubCliInspection(unittest.TestCase):

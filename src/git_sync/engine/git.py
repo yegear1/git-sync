@@ -6,10 +6,13 @@ from __future__ import annotations
 
 import concurrent.futures
 from dataclasses import dataclass, field
+import errno
 import fnmatch
 import os
 import re
 import shutil
+import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -197,6 +200,13 @@ def diagnose_git_error(error_text: str, remote_url: Optional[str] = None) -> Opt
             "suggestion": f"Trust the remote host key by running: '{scan_cmd}'.",
             "action_required": "verify_ssh_host",
         }
+    if "control socket" in txt or ("controlpath" in txt and "connection refused" in txt) or "corrupted control socket" in txt:
+        return {
+            "category": "SSH_CONTROL_SOCKET_ERROR",
+            "message": "Defunct or corrupted SSH ControlMaster socket detected.",
+            "suggestion": "Run 'git-sync doctor --prune-ssh' to inspect and auto-prune stale SSH control sockets, or clean them from ~/.ssh.",
+            "action_required": "prune_ssh_sockets",
+        }
 
     # 2. HTTP/HTTPS Authentication errors
     if "terminal prompts disabled" in txt or "could not read username" in txt or "could not read password" in txt:
@@ -344,6 +354,7 @@ def is_transient_network_error(exc: Optional[Exception], stderr: str) -> bool:
         "connection refused",
         "interrupted system call",
         "transfer closed with outstanding read data remaining",
+        "control socket",
     )
     return any(p in txt for p in transient_patterns)
 
@@ -376,6 +387,14 @@ def run_git_with_retry(
 
             last_proc = proc
             if attempt < retries and is_transient_network_error(None, proc.stderr):
+                if proc.stderr and (
+                    "control socket" in proc.stderr.lower()
+                    or ("controlpath" in proc.stderr.lower() and "connection refused" in proc.stderr.lower())
+                ):
+                    try:
+                        _dispatch_fn("prune_stale_ssh_control_sockets", prune_stale_ssh_control_sockets)()
+                    except Exception:
+                        pass
                 if benchmark:
                     benchmark.record_retry(recovered=False)
                 delay = min(max_backoff, backoff_factor * (2 ** attempt))
@@ -873,6 +892,286 @@ def inspect_ssh_config(
     }
 
 
+def inspect_ssh_control_socket(sock_path: str | Path) -> Dict[str, Any]:
+    """
+    Inspect an SSH ControlMaster socket path and determine if it is ACTIVE, STALE, or CORRUPTED.
+
+    # INVARIANT: Uses non-blocking AF_UNIX stream socket connect with timeout to determine if
+    # an OpenSSH master process is actively listening on the socket inode.
+    # INVARIANT: Defunct sockets (ECONNREFUSED) or corrupted stubs are identified without hanging.
+    """
+    p = Path(sock_path).expanduser()
+    if not p.exists():
+        return {
+            "path": str(p),
+            "status": "MISSING",
+            "is_socket": False,
+            "size": 0,
+            "mtime": 0.0,
+            "error": "File does not exist",
+        }
+    try:
+        st = p.stat()
+    except Exception as exc:
+        return {
+            "path": str(p),
+            "status": "CORRUPTED",
+            "is_socket": False,
+            "size": 0,
+            "mtime": 0.0,
+            "error": str(exc),
+        }
+
+    is_socket = stat.S_ISSOCK(st.st_mode)
+    if not is_socket:
+        return {
+            "path": str(p),
+            "status": "CORRUPTED",
+            "is_socket": False,
+            "size": st.st_size,
+            "mtime": st.st_mtime,
+            "error": "Not a valid UNIX domain socket inode (file stub)",
+        }
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(0.3)
+    status = "UNKNOWN"
+    err: Optional[str] = None
+    try:
+        sock.connect(str(p))
+        status = "ACTIVE"
+    except (ConnectionRefusedError, FileNotFoundError):
+        status = "STALE"
+        err = "Connection refused (no listening master process)"
+    except OSError as exc:
+        if exc.errno == errno.ECONNREFUSED:
+            status = "STALE"
+            err = "Connection refused (no listening master process)"
+        elif exc.errno in (errno.ENOENT,):
+            status = "MISSING"
+            err = "Socket path not found"
+        else:
+            status = "CORRUPTED"
+            err = f"Socket error: {exc}"
+    except Exception as exc:
+        status = "CORRUPTED"
+        err = str(exc)
+    finally:
+        sock.close()
+
+    return {
+        "path": str(p),
+        "status": status,
+        "is_socket": True,
+        "size": st.st_size,
+        "mtime": st.st_mtime,
+        "error": err,
+    }
+
+
+def find_ssh_control_sockets(
+    socket_dir: Optional[str | Path] = None,
+    control_path_pattern: Optional[str] = None,
+    config_path: Optional[Path | str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Find and inspect all SSH ControlMaster unix sockets in configured or default socket directories.
+
+    # INVARIANT: Probes candidate files safely and whitelists socket naming patterns to prevent
+    # inspecting or touching regular SSH keys, credentials, or config files.
+    """
+    dirs_to_check: List[Path] = []
+    pattern_prefix: Optional[str] = None
+
+    if socket_dir:
+        p = Path(socket_dir).expanduser()
+        if p.is_dir():
+            dirs_to_check.append(p)
+    else:
+        # Inquire ssh config for configured ControlPath directory
+        cfg_info = _dispatch_fn("inspect_ssh_config", inspect_ssh_config)(
+            config_path=config_path, query_ssh_g=False
+        )
+        cp = cfg_info.get("control_path")
+        if cp and cp.lower() != "none":
+            expanded_cp = os.path.expanduser(cp)
+            d = os.path.dirname(expanded_cp)
+            if d and os.path.isdir(d):
+                dirs_to_check.append(Path(d))
+            bname = os.path.basename(expanded_cp)
+            if "%" in bname:
+                pref = bname.split("%", 1)[0]
+                if pref:
+                    pattern_prefix = pref
+
+    # Fallback / standard candidate directories
+    ssh_home = Path.home() / ".ssh"
+    std_sockets = ssh_home / "sockets"
+    if std_sockets.is_dir() and std_sockets not in dirs_to_check:
+        dirs_to_check.append(std_sockets)
+    if ssh_home.is_dir() and ssh_home not in dirs_to_check:
+        dirs_to_check.append(ssh_home)
+
+    known_prefixes = ["control-", "control_", "cm-", "cm_", "ssh-", "socket-", "mux-", "master-"]
+    if pattern_prefix and pattern_prefix not in known_prefixes:
+        known_prefixes.insert(0, pattern_prefix)
+    if control_path_pattern:
+        b = os.path.basename(control_path_pattern)
+        if "%" in b:
+            pfx = b.split("%", 1)[0]
+            if pfx and pfx not in known_prefixes:
+                known_prefixes.insert(0, pfx)
+
+    protected_files = {
+        "config",
+        "authorized_keys",
+        "known_hosts",
+        "known_hosts.old",
+        "id_rsa",
+        "id_ed25519",
+        "id_ecdsa",
+        "id_dsa",
+        "environment",
+        "rc",
+    }
+    ignored_extensions = (".pub", ".pem", ".key", ".conf", ".config", ".txt", ".bak", ".old")
+
+    found_sockets: List[Dict[str, Any]] = []
+    seen_paths: set[str] = set()
+
+    inspect_fn = _dispatch_fn("inspect_ssh_control_socket", inspect_ssh_control_socket)
+
+    for d in dirs_to_check:
+        try:
+            entries = list(d.iterdir())
+        except Exception:
+            continue
+
+        is_dedicated_sockets_dir = (
+            d.name.lower() in ("sockets", "ssh_sockets") or
+            (socket_dir is not None and Path(socket_dir).expanduser() == d)
+        )
+
+        for entry in entries:
+            canonical = str(entry.resolve()) if entry.exists() else str(entry)
+            if canonical in seen_paths:
+                continue
+
+            fname = entry.name
+            fname_lower = fname.lower()
+
+            if fname in protected_files or any(fname_lower.endswith(ext) for ext in ignored_extensions):
+                continue
+
+            try:
+                st = entry.stat()
+            except Exception:
+                continue
+
+            is_sock = stat.S_ISSOCK(st.st_mode)
+            matches_pattern = (
+                any(fname.startswith(pfx) for pfx in known_prefixes) or
+                ("@" in fname and ":" in fname)
+            )
+
+            # In dedicated socket directories, accept any socket inode
+            # In general directories (like ~/.ssh or /tmp), must match socket naming convention
+            if is_sock:
+                if is_dedicated_sockets_dir or matches_pattern:
+                    seen_paths.add(canonical)
+                    found_sockets.append(inspect_fn(entry))
+            elif st.st_size == 0 and matches_pattern:
+                # 0-byte corrupted stub file in socket directory
+                seen_paths.add(canonical)
+                found_sockets.append(inspect_fn(entry))
+
+    return found_sockets
+
+
+def close_ssh_control_socket(
+    sock_path: str | Path,
+    host: str = "github.com",
+    timeout: int = 2,
+) -> bool:
+    """
+    Gracefully terminate an active OpenSSH ControlMaster process and release its socket.
+    # INVARIANT: Uses ssh -O exit with timeout to prevent blocking.
+    """
+    path_str = str(Path(sock_path).expanduser().resolve())
+    try:
+        subprocess.run(
+            ["ssh", "-O", "exit", "-o", f"ControlPath={path_str}", host],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            env=GIT_ENV,
+        )
+    except Exception:
+        pass
+
+    if os.path.exists(path_str):
+        inspect_fn = _dispatch_fn("inspect_ssh_control_socket", inspect_ssh_control_socket)
+        info = inspect_fn(path_str)
+        if info.get("status") != "ACTIVE":
+            try:
+                os.unlink(path_str)
+            except Exception:
+                pass
+
+    return not os.path.exists(path_str)
+
+
+def prune_stale_ssh_control_sockets(
+    socket_dir: Optional[str | Path] = None,
+    config_path: Optional[Path | str] = None,
+    dry_run: bool = False,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """
+    Safely detect and prune defunct (stale) or corrupted SSH ControlMaster sockets.
+    # INVARIANT: Preserves ACTIVE sockets unless force=True.
+    # INVARIANT: Only removes verified unix domain sockets or 0-byte corrupted socket stubs.
+    """
+    find_fn = _dispatch_fn("find_ssh_control_sockets", find_ssh_control_sockets)
+    sockets = find_fn(socket_dir=socket_dir, config_path=config_path)
+
+    active = [s for s in sockets if s.get("status") == "ACTIVE"]
+    stale = [s for s in sockets if s.get("status") == "STALE"]
+    corrupted = [s for s in sockets if s.get("status") == "CORRUPTED"]
+
+    to_prune: List[Dict[str, Any]] = list(stale) + list(corrupted)
+    if force:
+        close_fn = _dispatch_fn("close_ssh_control_socket", close_ssh_control_socket)
+        for act in active:
+            close_fn(act["path"])
+            to_prune.append(act)
+
+    pruned: List[str] = []
+    errors: List[Dict[str, str]] = []
+
+    if not dry_run:
+        for item in to_prune:
+            p = item["path"]
+            try:
+                if os.path.exists(p):
+                    os.unlink(p)
+                pruned.append(p)
+            except Exception as exc:
+                errors.append({"path": p, "error": str(exc)})
+    else:
+        pruned = [item["path"] for item in to_prune]
+
+    return {
+        "scanned": len(sockets),
+        "active": active,
+        "stale": stale,
+        "corrupted": corrupted,
+        "pruned": pruned,
+        "errors": errors,
+        "dry_run": dry_run,
+    }
+
+
 def benchmark_ssh_multiplexing(
     remote_url: str,
     host: str = "github.com",
@@ -1064,12 +1363,7 @@ def benchmark_ssh_multiplexing(
         finally:
             # INVARIANT: Terminate master process to release sockets and file descriptors
             try:
-                subprocess.run(
-                    ["ssh", "-O", "exit", "-o", f"ControlPath={sock_path}", host],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=2,
-                )
+                _dispatch_fn("close_ssh_control_socket", close_ssh_control_socket)(sock_path, host=host, timeout=2)
             except Exception:
                 pass
 
@@ -1136,6 +1430,11 @@ def audit_ssh_multiplexing(
     config_info = _dispatch_fn("inspect_ssh_config", inspect_ssh_config)(
         config_path=config_path, host=primary_host
     )
+    socket_report = _dispatch_fn("prune_stale_ssh_control_sockets", prune_stale_ssh_control_sockets)(
+        socket_dir=config_info.get("socket_dir"),
+        config_path=config_path,
+        dry_run=False,
+    )
 
     benchmark_result: Optional[Dict[str, Any]] = None
     if run_benchmark:
@@ -1181,6 +1480,11 @@ def audit_ssh_multiplexing(
         if err:
             warnings.append(f"SSH benchmark probe fallback: {err}")
 
+    if socket_report and socket_report.get("pruned"):
+        warnings.append(
+            f"Pruned {len(socket_report['pruned'])} stale/defunct SSH ControlMaster socket(s)."
+        )
+
     ok = config_info.get("is_enabled", False) and config_info.get("socket_dir_exists", False)
     if benchmark_result and benchmark_result.get("supported"):
         ok = True
@@ -1191,6 +1495,7 @@ def audit_ssh_multiplexing(
         "primary_host": primary_host,
         "ssh_remotes_found": len(ssh_remotes),
         "benchmark": benchmark_result,
+        "sockets": socket_report,
         "warnings": warnings,
         "suggestions": suggestions,
     }
@@ -1354,6 +1659,30 @@ def probe_remote_reachability(
             }
         else:
             err_text = proc.stderr.strip()
+            if is_ssh and err_text and (
+                "control socket" in err_text.lower()
+                or ("controlpath" in err_text.lower() and "connection refused" in err_text.lower())
+            ):
+                try:
+                    _dispatch_fn("prune_stale_ssh_control_sockets", prune_stale_ssh_control_sockets)()
+                    proc_retry = run_git(sample_repo or ".", ["ls-remote", "--heads", remote_url], timeout=timeout)
+                    if proc_retry.returncode == 0:
+                        rtt = round(time.perf_counter() - t0, 3)
+                        return {
+                            "ok": True,
+                            "protocol": protocol,
+                            "host": host,
+                            "latency_seconds": rtt,
+                            "grade": compute_latency_grade(rtt, ok=True),
+                            "error": None,
+                            "diagnostic": None,
+                            "socket_recovered": True,
+                        }
+                    else:
+                        proc = proc_retry
+                        err_text = proc.stderr.strip()
+                except Exception:
+                    pass
             diag = diagnose_git_error(err_text, remote_url)
             return {
                 "ok": False,
@@ -1498,6 +1827,17 @@ def check_credentials_sanity(
             break
 
     ssh_mux_info = _dispatch_fn("inspect_ssh_config", inspect_ssh_config)(host=ssh_mux_host)
+    socket_report = _dispatch_fn("prune_stale_ssh_control_sockets", prune_stale_ssh_control_sockets)(
+        socket_dir=ssh_mux_info.get("socket_dir")
+    )
+    ssh_mux_info["sockets"] = socket_report
+    ssh_mux_info["stale_sockets_pruned"] = socket_report.get("pruned", [])
+    ssh_mux_info["active_sockets"] = [s["path"] for s in socket_report.get("active", [])]
+
+    if socket_report.get("pruned"):
+        suggestions.append(
+            f"Pruned {len(socket_report['pruned'])} stale SSH ControlMaster socket(s) to maintain socket health."
+        )
 
     if has_ssh_remotes:
         if agent_status == "NO_AGENT":
@@ -4756,6 +5096,7 @@ __all__ = [
     "benchmark_ssh_multiplexing",
     "check_credentials_sanity",
     "check_repo_dirty",
+    "close_ssh_control_socket",
     "compute_latency_grade",
     "delete_local_branches",
     "diagnose_git_error",
@@ -4764,6 +5105,7 @@ __all__ = [
     "find_locked_repos",
     "find_push_pending_repos",
     "find_repo_locks",
+    "find_ssh_control_sockets",
     "get_divergence_details",
     "get_divergence_diff",
     "get_repo_git_dir",
@@ -4773,6 +5115,7 @@ __all__ = [
     "inspect_github_cli",
     "inspect_repo",
     "inspect_ssh_config",
+    "inspect_ssh_control_socket",
     "is_branch_protected",
     "is_shallow_repository",
     "is_transient_network_error",
@@ -4781,6 +5124,7 @@ __all__ = [
     "probe_remote_reachability",
     "prune_repo_remotes",
     "prune_repo_worktrees",
+    "prune_stale_ssh_control_sockets",
     "pull_repo",
     "push_repo",
     "recover_index_lock",
