@@ -7,9 +7,9 @@
 
 ## Active Task
 
-### 📌 Task [00.16]: SSH ControlMaster Multiplexing Lifecycle and Stale Socket Auto-Pruning
+### 📌 Task [00.17]: Fine-Grained Git Credential Helper Triage and Keychain Expiry Diagnostics
 
-- **Description:** Provide automatic lifecycle management and stale socket pruning for SSH multiplexed connection master sockets in Doctor and network operations.
+- **Description:** Provide automated inspection and diagnostics for OS credential helpers (libsecret, osxkeychain, wincred, store, cache) and detect expired tokens in Doctor.
 - **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
 - **Action Type:**
   - [x] Read-only / Documentation
@@ -17,7 +17,7 @@
 - **Status:** RUNNING
 
 ### Acceptance Criteria
-- [ ] Doctor and CLI operations detect and safely clean defunct or corrupted SSH ControlMaster unix sockets.
+- [ ] Doctor checks credential helper health, cache expiration, and surfaces actionable remediation.
 - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -42,16 +42,17 @@
 | [00.13] | Multi-Profile Dynamic Workspace Switching and Profile Scoped Defaults | [71f9962] | 2026-10-31 |
 | [00.14] | Direct Push Pre-Flight Telemetry and Protected Branch Force-Push Defense | [64533e6] | 2026-10-31 |
 | [00.15] | Dry-Run Interactive Confirmation and Bulk Action Preview Mode | [1fd38ca] | 2026-10-31 |
+| [00.16] | SSH ControlMaster Multiplexing Lifecycle and Stale Socket Auto-Pruning | [dfb4969] | 2026-10-31 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-### 📌 Task [00.17]: Fine-Grained Git Credential Helper Triage and Keychain Expiry Diagnostics
-- **Description:** Provide automated inspection and diagnostics for OS credential helpers (libsecret, osxkeychain, wincred, store, cache) and detect expired tokens in Doctor.
+### 📌 Task [00.18]: Parallel Batch Worktree Health Audit and Multi-Remote Connectivity Matrix
+- **Description:** Provide parallel cross-remote reachability matrix and worktree health audit across multi-origin upstream setups in Doctor and status.
 - **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
 - **Acceptance Criteria:**
-  - [ ] Doctor checks credential helper health, cache expiration, and surfaces actionable remediation.
+  - [ ] Matrix visualization of multi-remote reachability and latency grades in doctor and status.
   - [ ] Canonical test suite passes with exit code 0.
 
 ---
