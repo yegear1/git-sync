@@ -7,9 +7,9 @@
 
 ## Active Task
 
-### 📌 Task [00.17]: Fine-Grained Git Credential Helper Triage and Keychain Expiry Diagnostics
+### 📌 Task [00.18]: Parallel Batch Worktree Health Audit and Multi-Remote Connectivity Matrix
 
-- **Description:** Provide automated inspection and diagnostics for OS credential helpers (libsecret, osxkeychain, wincred, store, cache) and detect expired tokens in Doctor.
+- **Description:** Provide parallel cross-remote reachability matrix and worktree health audit across multi-origin upstream setups in Doctor and status.
 - **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
 - **Action Type:**
   - [x] Read-only / Documentation
@@ -17,7 +17,7 @@
 - **Status:** RUNNING
 
 ### Acceptance Criteria
-- [ ] Doctor checks credential helper health, cache expiration, and surfaces actionable remediation.
+- [ ] Matrix visualization of multi-remote reachability and latency grades in doctor and status.
 - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -43,16 +43,17 @@
 | [00.14] | Direct Push Pre-Flight Telemetry and Protected Branch Force-Push Defense | [64533e6] | 2026-10-31 |
 | [00.15] | Dry-Run Interactive Confirmation and Bulk Action Preview Mode | [1fd38ca] | 2026-10-31 |
 | [00.16] | SSH ControlMaster Multiplexing Lifecycle and Stale Socket Auto-Pruning | [dfb4969] | 2026-10-31 |
+| [00.17] | Fine-Grained Git Credential Helper Triage and Keychain Expiry Diagnostics | [e1e0571] | 2026-10-31 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
-### 📌 Task [00.18]: Parallel Batch Worktree Health Audit and Multi-Remote Connectivity Matrix
-- **Description:** Provide parallel cross-remote reachability matrix and worktree health audit across multi-origin upstream setups in Doctor and status.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
+### 📌 Task [00.19]: Automated Git LFS Object Tracking and Bandwidth-Aware Fetch Controls
+- **Description:** Detect Git LFS pointer files and `.gitattributes` filters during repository inspection, surface LFS status in `status` and `doctor`, and provide `--lfs` / `--no-lfs` controls during `pull`.
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Acceptance Criteria:**
-  - [ ] Matrix visualization of multi-remote reachability and latency grades in doctor and status.
+  - [ ] Repositories using Git LFS are identified with pointer/object hygiene and optional fetch controls.
   - [ ] Canonical test suite passes with exit code 0.
 
 ---
