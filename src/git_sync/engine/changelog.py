@@ -21,6 +21,7 @@ def _dispatch_fn(name: str, fallback_fn: Any = None) -> Any:
         "git_sync.engine.diff",
         "git_sync.engine.ssh",
         "git_sync.engine.credentials",
+        "git_sync.engine.topology",
     ):
         mod = sys.modules.get(mod_name)
         if mod and hasattr(mod, name):
