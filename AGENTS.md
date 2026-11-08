@@ -59,7 +59,7 @@ When human requests release:
 - **Project Root:** Current repository root (`.`)
 - **Default Workspaces Directory:** Configurable via `--root`, `GIT_SYNC_ROOT`, XDG config, or automatic discovery (`~/github`, `~/Github`, `~/src`, `.` / CWD)
 - **OS / Shell:** Linux / POSIX Bash
-- **Language / Runtime:** Python 3.12+ (standard library only for runtime)
+- **Language / Runtime:** Python 3.10+ / 3.12+ (standard library only for runtime)
 - **Architecture:** Modular CLI utility (CLI parser, concurrent worker pool, Git subshell abstraction)
 - **Global Path Entrypoint:** `~/.local/bin/git-sync`
 
@@ -77,7 +77,8 @@ When human requests release:
 ## Validation Commands
 
 - Run tests: `python3 -m unittest discover -s tests` (Exit code MUST be 0)
-- Syntax & compilation: `python3 -m py_compile src/git_sync/*.py tests/*.py` (Exit code MUST be 0)
+- Syntax & compilation: `python3 -m py_compile src/git_sync/*.py src/git_sync/engine/*.py src/git_sync/ui/*.py tests/*.py` (Exit code MUST be 0)
+- Strict typing: `mypy --strict src/git_sync` (Exit code MUST be 0)
 - Smoke test: `python3 -m git_sync.cli status --no-fetch` (Exit code MUST be 0)
 
 ---
