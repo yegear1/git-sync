@@ -7,14 +7,14 @@
 
 ## Active Task
 
-### 📌 Task [00.25]: Engine Modularization Phase 3 — Extract Worktree, Submodule & Sparse-Checkout Managers (`engine/topology.py`)
+### 📌 Task [00.26]: Test Mock Decoupling and Elimination of Runtime `sys.modules` Dispatch (`_dispatch_fn`)
 - **Status:** RUNNING
-- **Paths:** `src/git_sync/engine/topology.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
-- **Description:** Extract linked worktree inspection/pruning, submodule status/update/unshallow operations, sparse-checkout cone diagnostics, and stale lock recovery into `src/git_sync/engine/topology.py`, reducing `src/git_sync/engine/git.py` to core runner, discovery, status inspection, and pull/push/resolve orchestration.
-- **Systems Involved:** `src/git_sync/engine/topology.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Paths:** `src/git_sync/engine/`, `tests/`
+- **Description:** Replace the 32 dynamic `_dispatch_fn` runtime `sys.modules["git_sync.core"]` lookups with a clean, lightweight dependency/runner hook and standardized mock targets across `tests/`, removing runtime reflection overhead and simplifying static analysis.
+- **Systems Involved:** `src/git_sync/engine/`, `tests/`
 - **Acceptance Criteria:**
-  - [ ] Topology functions (worktrees, submodules, sparse-checkout, locks) are isolated into `engine/topology.py`.
-  - [ ] All public re-exports in `engine/git.py`, `engine/__init__.py`, and `core.py` maintain 100% backward compatibility and object identity.
+  - [ ] `_dispatch_fn` is removed from the engine while all unit tests and mock patches pass cleanly.
+  - [ ] Zero runtime `sys.modules` reflection in hot execution paths.
   - [ ] Full packaging symbol parity and unit test suite pass with exit code 0.
 
 ---
@@ -48,21 +48,13 @@
 | [00.22] | Public Facade Re-Export Parity (`__all__`) and Dynamic `GIT_ENV` Construction | [ecc14c5] | 2026-11-08 |
 | [00.23] | Engine Modularization Phase 1 — Extract SSH Multiplexing & Credential Diagnostics | [2c2a2d5] | 2026-11-08 |
 | [00.24] | Engine Modularization Phase 2 — Extract Changelog Classifier & Diff Chunker | [ccbb332] | 2026-11-08 |
+| [00.25] | Engine Modularization Phase 3 — Extract Worktree, Submodule & Sparse-Checkout Managers | [84ea732] | 2026-11-08 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-### 📌 Task [00.26]: Test Mock Decoupling and Elimination of Runtime `sys.modules` Dispatch (`_dispatch_fn`)
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/engine/`, `tests/`
-- **Description:** Replace the 32 dynamic `_dispatch_fn` runtime `sys.modules["git_sync.core"]` lookups with a clean, lightweight dependency/runner hook and standardized mock targets across `tests/`, removing runtime reflection overhead and simplifying static analysis.
-- **Systems Involved:** `src/git_sync/engine/`, `tests/`
-- **Acceptance Criteria:**
-  - [ ] `_dispatch_fn` is removed from the engine while all unit tests and mock patches pass cleanly.
-  - [ ] Zero runtime `sys.modules` reflection in hot execution paths.
 
 ### 📌 Task [00.27]: Strict Domain Payload Contracts (`TypedDict` / `@dataclass`) and Mypy Strict Compliance
 - **Status:** APPROVED
