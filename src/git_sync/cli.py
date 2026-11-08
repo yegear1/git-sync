@@ -357,6 +357,60 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                 if diag and diag.get("suggestion"):
                     print(f"        💡 Sugestão: {diag['suggestion']}")
 
+    multi_matrix = sanity.get("multi_remote_matrix") or {}
+    matrix_entries = multi_matrix.get("matrix", [])
+    if matrix_entries:
+        multi_count = multi_matrix.get("multi_remote_repos", 0)
+        total_endpoints = multi_matrix.get("total_endpoints_tested", 0)
+        healthy_endpoints = multi_matrix.get("healthy_endpoints", 0)
+        grades = multi_matrix.get("grade_distribution", {})
+        grade_summary = f"A:{grades.get('A', 0)} B:{grades.get('B', 0)} C:{grades.get('C', 0)} F:{grades.get('F', 0)}"
+
+        print("\n🌐 MATRIZ DE CONECTIVIDADE MULTI-REMOTE:")
+        print("-" * 70)
+        print(f"  Repos: {len(matrix_entries)} ({multi_count} multi-remote) | Endpoints: {healthy_endpoints}/{total_endpoints} ok | Latência: {grade_summary}")
+        focus_entries = [m for m in matrix_entries if m.get("multi_remote") or m.get("has_unreachable")]
+        if not focus_entries:
+            focus_entries = matrix_entries[:10]
+        for m in focus_entries:
+            r_name = m["repo"]
+            if len(r_name) > 28:
+                r_name = r_name[:25] + "..."
+            endpoints_parts = []
+            for r_k, r_v in m.get("remotes", {}).items():
+                lat = r_v.get("latency_seconds")
+                lat_str = f" ({lat:.2f}s)" if lat is not None else ""
+                ok_mark = "✅" if r_v.get("ok") else "❌"
+                endpoints_parts.append(f"{r_k}:{ok_mark}{r_v.get('grade', 'F')}{lat_str}")
+            endpoints_str = " | ".join(endpoints_parts) if endpoints_parts else "nenhum remote"
+            status_tag = "❌ FALHA" if m.get("has_unreachable") else "✅ OK"
+            print(f"  {r_name:<28} {status_tag:<9} {endpoints_str}")
+
+    wt_health = sanity.get("worktree_health") or {}
+    wt_items = wt_health.get("items", [])
+    if wt_items:
+        repos_with_wt = [w for w in wt_items if w.get("total_worktrees", 0) > 1 or w.get("is_secondary_worktree") or w.get("stale_worktrees_count", 0) > 0 or not w.get("is_healthy")]
+        if repos_with_wt:
+            print("\n🌿 AUDITORIA DE WORKTREES VINCULADOS:")
+            print("-" * 70)
+            print(f"  Repos com worktrees: {wt_health.get('repos_with_linked_worktrees', len(repos_with_wt))} | Sujos: {wt_health.get('total_dirty_worktrees', 0)} | Stale: {wt_health.get('total_stale_worktrees', 0)} | Detached: {wt_health.get('total_detached_worktrees', 0)}")
+            for w in repos_with_wt:
+                r_name = w["repo"]
+                if len(r_name) > 28:
+                    r_name = r_name[:25] + "..."
+                wt_status = "✅ SAUDÁVEL" if w.get("is_healthy") else "⚠️  ATENÇÃO"
+                details = []
+                if w.get("dirty_worktrees_count", 0) > 0:
+                    details.append(f"{w['dirty_worktrees_count']} sujo(s)")
+                if w.get("stale_worktrees_count", 0) > 0:
+                    details.append(f"{w['stale_worktrees_count']} stale")
+                if w.get("detached_worktrees_count", 0) > 0:
+                    details.append(f"{w['detached_worktrees_count']} detached")
+                if not details:
+                    details.append(f"{w.get('total_worktrees', 1)} worktree(s)")
+                detail_str = ", ".join(details)
+                print(f"  {r_name:<28} {wt_status:<14} {detail_str}")
+
     locked = sanity.get("locked_repos", [])
     if locked:
         print("\n🔒 REPOSITÓRIOS COM LOCK ATIVO/STALE (.git/*.lock):")
@@ -562,6 +616,12 @@ def cmd_status(args: argparse.Namespace) -> int:
             "no_upstream": [r["rel_path"] for r in results if r["status"] == "NO_UPSTREAM"],
             "offline": [r["rel_path"] for r in results if r.get("network_state") == "offline"],
             "errors": [r["rel_path"] for r in results if r["status"] == "FETCH_ERROR"],
+            "multi_remote": [r["rel_path"] for r in results if r.get("multi_remote") or len(r.get("remotes") or {}) > 1],
+            "worktree_health": {
+                "repos_with_worktrees": [r["rel_path"] for r in results if len(r.get("worktrees") or []) > 1 or r.get("is_worktree")],
+                "stale_worktrees": [r["rel_path"] for r in results if r.get("stale_worktrees")],
+                "dirty_worktrees": [r["rel_path"] for r in results if r.get("is_worktree") and r.get("is_dirty")],
+            },
             "remediations": [
                 {
                     "repo": r["rel_path"],

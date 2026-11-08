@@ -2283,6 +2283,280 @@ def probe_remote_reachability(
         }
 
 
+def audit_multi_remote_matrix(
+    root_dir: str,
+    repos: Optional[List[str]] = None,
+    group: Optional[str] = None,
+    timeout: int = 5,
+    workers: int | str = DEFAULT_WORKERS,
+    max_remotes_to_test: int = 30,
+) -> Dict[str, Any]:
+    """
+    Perform parallel multi-remote reachability probing and construct a reachability matrix across all configured remotes.
+    # INVARIANT: Probes are executed in parallel across unique remote endpoints with GIT_TERMINAL_PROMPT=0.
+    """
+    eff_workers = max(1, min(32, workers if isinstance(workers, int) else 8))
+    target_repos = repos
+    if target_repos is None:
+        discover_fn = _dispatch_fn("discover_repos", discover_repos)
+        target_repos = discover_fn(root_dir)
+        if group:
+            target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
+
+    # 1. Map each repo to its configured remotes
+    repo_remotes_map: Dict[str, Dict[str, str]] = {}
+    unique_remotes_to_sample: Dict[str, str] = {}  # url -> sample_repo
+
+    get_remotes_fn = _dispatch_fn("get_repo_remotes", get_repo_remotes)
+    for r_path in target_repos:
+        r_map = get_remotes_fn(r_path, timeout=timeout)
+        if r_map:
+            repo_remotes_map[r_path] = r_map
+            for _, r_url in r_map.items():
+                if r_url and r_url not in unique_remotes_to_sample:
+                    if len(unique_remotes_to_sample) < max_remotes_to_test:
+                        unique_remotes_to_sample[r_url] = r_path
+
+    # 2. Probe unique remotes concurrently
+    probe_fn = _dispatch_fn("probe_remote_reachability", probe_remote_reachability)
+
+    def _probe_worker(item: Tuple[str, str]) -> Tuple[str, Dict[str, Any]]:
+        url, sample_repo = item
+        res = probe_fn(remote_url=url, sample_repo=sample_repo, timeout=timeout)
+        return url, res
+
+    items_to_probe = list(unique_remotes_to_sample.items())
+    probed_results: Dict[str, Dict[str, Any]] = {}
+    if items_to_probe:
+        eff_probe_workers = min(len(items_to_probe), eff_workers)
+        if eff_probe_workers > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=eff_probe_workers) as executor:
+                for u, res in executor.map(_probe_worker, items_to_probe):
+                    probed_results[u] = res
+        else:
+            for u, sample_repo in items_to_probe:
+                probed_results[u] = probe_fn(remote_url=u, sample_repo=sample_repo, timeout=timeout)
+
+    # 3. Build repository matrix entries
+    matrix_entries: List[Dict[str, Any]] = []
+    grade_distribution: Dict[str, int] = {"A": 0, "B": 0, "C": 0, "F": 0}
+    total_endpoints_tested = 0
+    healthy_endpoints = 0
+    unreachable_endpoints = 0
+
+    for r_path in target_repos:
+        rel_p = os.path.relpath(r_path, root_dir) if root_dir else os.path.basename(r_path)
+        r_map = repo_remotes_map.get(r_path, {})
+        remotes_detail: Dict[str, Dict[str, Any]] = {}
+        repo_grades: Dict[str, str] = {}
+        has_unreachable = False
+
+        for r_name, r_url in r_map.items():
+            r_info = probed_results.get(r_url)
+            if r_info is None:
+                is_ssh = "@" in r_url or r_url.startswith("ssh://")
+                r_info = {
+                    "ok": True,
+                    "protocol": "ssh" if is_ssh else "https",
+                    "host": "",
+                    "latency_seconds": None,
+                    "grade": "B",
+                    "error": None,
+                    "diagnostic": None,
+                    "unprobed": True,
+                }
+            else:
+                total_endpoints_tested += 1
+                g = r_info.get("grade", "F")
+                grade_distribution[g] = grade_distribution.get(g, 0) + 1
+                if r_info.get("ok"):
+                    healthy_endpoints += 1
+                else:
+                    unreachable_endpoints += 1
+                    has_unreachable = True
+
+            remotes_detail[r_name] = {
+                "name": r_name,
+                "url": r_url,
+                "protocol": r_info.get("protocol", "https"),
+                "host": r_info.get("host", ""),
+                "ok": r_info.get("ok", False),
+                "latency_seconds": r_info.get("latency_seconds"),
+                "grade": r_info.get("grade", "F"),
+                "error": r_info.get("error"),
+                "diagnostic": r_info.get("diagnostic"),
+            }
+            repo_grades[r_name] = r_info.get("grade", "F")
+
+        matrix_entries.append({
+            "repo": rel_p,
+            "path": r_path,
+            "multi_remote": len(r_map) > 1,
+            "remotes_count": len(r_map),
+            "remotes": remotes_detail,
+            "grades": repo_grades,
+            "has_unreachable": has_unreachable,
+            "primary_grade": repo_grades.get("origin") or (list(repo_grades.values())[0] if repo_grades else "N/A"),
+        })
+
+    multi_remote_count = sum(1 for m in matrix_entries if m["multi_remote"])
+    return {
+        "total_repos_audited": len(target_repos),
+        "multi_remote_repos": multi_remote_count,
+        "total_unique_remotes_tested": len(probed_results),
+        "total_endpoints_tested": total_endpoints_tested,
+        "healthy_endpoints": healthy_endpoints,
+        "unreachable_endpoints": unreachable_endpoints,
+        "grade_distribution": grade_distribution,
+        "matrix": matrix_entries,
+        "probed_remotes": probed_results,
+    }
+
+
+def audit_worktree_health_batch(
+    root_dir: str,
+    repos: Optional[List[str]] = None,
+    group: Optional[str] = None,
+    timeout: int = 5,
+    workers: int | str = DEFAULT_WORKERS,
+) -> Dict[str, Any]:
+    """
+    Perform parallel batch audit of linked worktree topologies, uncommitted dirty states,
+    and stale/orphaned worktree metadata across repositories.
+    # INVARIANT: Inspects linked worktree working copies without modifying or deleting developer work.
+    """
+    eff_workers = max(1, min(32, workers if isinstance(workers, int) else 8))
+    target_repos = repos
+    if target_repos is None:
+        discover_fn = _dispatch_fn("discover_repos", discover_repos)
+        target_repos = discover_fn(root_dir)
+        if group:
+            target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
+
+    wt_info_fn = _dispatch_fn("get_worktree_info", get_worktree_info)
+    dirty_fn = _dispatch_fn("check_repo_dirty", check_repo_dirty)
+
+    def _audit_repo_worktrees(r_path: str) -> Dict[str, Any]:
+        rel_p = os.path.relpath(r_path, root_dir) if root_dir else os.path.basename(r_path)
+        info = wt_info_fn(r_path, timeout=timeout)
+        raw_wts = info.get("worktrees", [])
+        stale_wts = info.get("stale_worktrees", [])
+        is_secondary = info.get("is_worktree", False)
+        main_wt = info.get("main_worktree")
+
+        audited_wts: List[Dict[str, Any]] = []
+        dirty_count = 0
+        detached_count = 0
+        prunable_count = len(stale_wts)
+
+        for wt in raw_wts:
+            w_path = wt.get("path", "")
+            is_main = wt.get("is_main", False)
+            branch = wt.get("branch", "")
+            is_detached = (branch == "HEAD (detached)") or wt.get("detached", False)
+            is_prunable = wt.get("is_prunable", False)
+            prunable_reason = wt.get("prunable_reason")
+            is_locked = wt.get("is_locked", False)
+            lock_reason = wt.get("lock_reason")
+
+            is_dirty = False
+            dirty_files: List[str] = []
+            if os.path.exists(w_path):
+                try:
+                    is_dirty, dirty_files = dirty_fn(w_path, timeout=timeout)
+                except Exception:
+                    pass
+
+            if is_dirty:
+                dirty_count += 1
+            if is_detached:
+                detached_count += 1
+
+            if is_prunable:
+                status = "PRUNABLE"
+            elif is_locked:
+                status = "LOCKED"
+            elif is_dirty:
+                status = "DIRTY"
+            elif is_detached:
+                status = "DETACHED"
+            else:
+                status = "HEALTHY"
+
+            audited_wts.append({
+                "path": w_path,
+                "branch": branch,
+                "is_main": is_main,
+                "is_detached": is_detached,
+                "is_dirty": is_dirty,
+                "dirty_files": dirty_files,
+                "is_locked": is_locked,
+                "lock_reason": lock_reason,
+                "is_prunable": is_prunable,
+                "prunable_reason": prunable_reason,
+                "status": status,
+            })
+
+        is_healthy = (
+            prunable_count == 0
+            and dirty_count == 0
+            and detached_count == 0
+            and all(not w["is_locked"] for w in audited_wts)
+        )
+
+        return {
+            "repo": rel_p,
+            "path": r_path,
+            "is_secondary_worktree": is_secondary,
+            "main_worktree_path": main_wt,
+            "total_worktrees": len(raw_wts),
+            "linked_worktrees_count": max(0, len(raw_wts) - 1),
+            "dirty_worktrees_count": dirty_count,
+            "detached_worktrees_count": detached_count,
+            "stale_worktrees_count": prunable_count,
+            "is_healthy": is_healthy,
+            "worktrees": audited_wts,
+            "stale_worktrees": stale_wts,
+        }
+
+    results: List[Dict[str, Any]] = []
+    if target_repos:
+        eff_wt_workers = min(len(target_repos), eff_workers)
+        if eff_wt_workers > 1:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=eff_wt_workers) as executor:
+                results = list(executor.map(_audit_repo_worktrees, target_repos))
+        else:
+            results = [_audit_repo_worktrees(r) for r in target_repos]
+
+    repos_with_worktrees = [
+        r for r in results
+        if r["total_worktrees"] > 1 or r["is_secondary_worktree"] or r["stale_worktrees_count"] > 0
+    ]
+    total_dirty_linked = sum(r["dirty_worktrees_count"] for r in repos_with_worktrees)
+    total_stale = sum(r["stale_worktrees_count"] for r in results)
+    total_detached = sum(r["detached_worktrees_count"] for r in results)
+
+    alerts: List[str] = []
+    for r in repos_with_worktrees:
+        if r["dirty_worktrees_count"] > 0:
+            alerts.append(f"Repo '{r['repo']}' has {r['dirty_worktrees_count']} dirty linked worktree(s) with uncommitted files.")
+        if r["stale_worktrees_count"] > 0:
+            alerts.append(f"Repo '{r['repo']}' has {r['stale_worktrees_count']} stale/orphaned worktree metadata entry(ies). Prune with 'git-sync worktree prune'.")
+        if r["detached_worktrees_count"] > 0:
+            alerts.append(f"Repo '{r['repo']}' has {r['detached_worktrees_count']} worktree(s) with detached HEAD.")
+
+    return {
+        "total_repos_audited": len(target_repos),
+        "repos_with_linked_worktrees": len(repos_with_worktrees),
+        "total_dirty_worktrees": total_dirty_linked,
+        "total_stale_worktrees": total_stale,
+        "total_detached_worktrees": total_detached,
+        "healthy_repos_count": sum(1 for r in results if r["is_healthy"]),
+        "alerts": alerts,
+        "items": results,
+    }
+
+
 def check_credentials_sanity(
     root_dir: str,
     repos: Optional[List[str]] = None,
@@ -2294,7 +2568,7 @@ def check_credentials_sanity(
 ) -> Dict[str, Any]:
     """
     Perform a proactive sanity check of Git credentials, SSH agent, key files,
-    and remote connectivity across repositories in root_dir.
+    multi-remote reachability matrix, and worktree health across repositories in root_dir.
     # INVARIANT: Uses GIT_TERMINAL_PROMPT=0 to guarantee probing never hangs.
     # INVARIANT: Groups and tests unique remotes to avoid redundant network probes.
     """
@@ -2367,35 +2641,46 @@ def check_credentials_sanity(
         gh_info=gh_info,
     )
 
-    # 4. Remote Connectivity Probing
-    remotes_tested: Dict[str, Dict[str, Any]] = {}
     target_repos = repos
     if target_repos is None:
         target_repos = _dispatch_fn("discover_repos", discover_repos)(root_dir)
         if group:
             target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
 
-    # Collect unique remote URLs across repos
-    unique_remotes: Dict[str, str] = {}  # url -> sample_repo_path
-    for r_path in target_repos:
-        r_map = _dispatch_fn("get_repo_remotes", get_repo_remotes)(r_path, timeout=timeout)
-        for _, r_url in r_map.items():
-            if r_url and r_url not in unique_remotes:
-                unique_remotes[r_url] = r_path
-                if len(unique_remotes) >= max_remotes_to_test:
-                    break
-        if len(unique_remotes) >= max_remotes_to_test:
-            break
+    # 4. Multi-Remote Matrix & Reachability Probing
+    multi_remote_matrix: Dict[str, Any] = {}
+    remotes_tested: Dict[str, Dict[str, Any]] = {}
+    if test_remotes:
+        multi_matrix_fn = _dispatch_fn("audit_multi_remote_matrix", audit_multi_remote_matrix)
+        multi_remote_matrix = multi_matrix_fn(
+            root_dir=root_dir,
+            repos=target_repos,
+            group=group,
+            timeout=timeout,
+            workers=workers,
+            max_remotes_to_test=max_remotes_to_test,
+        )
+        remotes_tested = multi_remote_matrix.get("probed_remotes", {})
+
+    # 5. Worktree Health Audit
+    wt_batch_fn = _dispatch_fn("audit_worktree_health_batch", audit_worktree_health_batch)
+    worktree_health = wt_batch_fn(
+        root_dir=root_dir,
+        repos=target_repos,
+        group=group,
+        timeout=timeout,
+        workers=workers,
+    )
 
     warnings: List[str] = []
     errors: List[str] = []
     suggestions: List[str] = []
 
-    has_ssh_remotes = any("@" in u or u.startswith("ssh://") for u in unique_remotes)
-    has_http_remotes = any(u.startswith("http://") or u.startswith("https://") for u in unique_remotes)
+    has_ssh_remotes = any("@" in u or u.startswith("ssh://") for u in remotes_tested)
+    has_http_remotes = any(u.startswith("http://") or u.startswith("https://") for u in remotes_tested)
 
     ssh_mux_host = "github.com"
-    for u in unique_remotes:
+    for u in remotes_tested:
         if "@" in u and ":" in u:
             ssh_mux_host = u.split("@", 1)[1].split(":", 1)[0]
             break
@@ -2459,84 +2744,76 @@ def check_credentials_sanity(
         warnings.append("HTTP remotes detected without configured Git credential helper, GITHUB_TOKEN, or authenticated GitHub CLI (gh).")
         suggestions.append("Configure credential helper via 'git config --global credential.helper store' or authenticate via 'gh auth login'.")
 
-    if test_remotes:
-        def _probe_worker(item: Tuple[str, str]) -> Tuple[str, Dict[str, Any]]:
-            url, repo = item
-            probe_fn = _dispatch_fn("probe_remote_reachability", probe_remote_reachability)
-            res = probe_fn(remote_url=url, sample_repo=repo, timeout=timeout)
-            return url, res
+    for r_url, r_data in remotes_tested.items():
+        host = r_data.get("host") or r_url
+        grade = r_data.get("grade", "F")
+        latency = r_data.get("latency_seconds")
+        protocol = r_data.get("protocol", "https")
 
-        items = list(unique_remotes.items())
-        eff_workers = min(len(items), max(1, workers if isinstance(workers, int) else 8))
-        if eff_workers > 1:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=eff_workers) as executor:
-                probed = list(executor.map(_probe_worker, items))
-        else:
-            probed = [_probe_worker(it) for it in items]
-
-        for r_url, r_data in probed:
-            remotes_tested[r_url] = r_data
-            host = r_data.get("host") or r_url
-            grade = r_data.get("grade", "F")
-            latency = r_data.get("latency_seconds")
-            protocol = r_data.get("protocol", "https")
-
-            if not r_data.get("ok"):
-                diag = r_data.get("diagnostic")
-                if diag:
-                    err_msg = f"{host or r_url}: {diag['message']}"
-                    if err_msg not in errors:
-                        errors.append(err_msg)
-                    if diag.get("suggestion") and diag["suggestion"] not in suggestions:
-                        suggestions.append(diag["suggestion"])
-                    if diag.get("category") in ("HTTP_AUTH_FAILED", "TOKEN_EXPIRED") and credential_helpers:
-                        evict_sug = (
-                            f"Evict stale cached credentials for '{host}' via "
-                            f"'printf \"protocol=https\\nhost={host}\\n\\n\" | git credential reject' and re-authenticate."
-                        )
-                        if evict_sug not in suggestions:
-                            suggestions.append(evict_sug)
-                else:
-                    err_label = r_data.get("error") or "Failed"
-                    err_msg = f"{host or r_url}: {err_label}"
-                    if err_msg not in errors:
-                        errors.append(err_msg)
+        if not r_data.get("ok"):
+            diag = r_data.get("diagnostic")
+            if diag:
+                err_msg = f"{host or r_url}: {diag['message']}"
+                if err_msg not in errors:
+                    errors.append(err_msg)
+                if diag.get("suggestion") and diag["suggestion"] not in suggestions:
+                    suggestions.append(diag["suggestion"])
+                if diag.get("category") in ("HTTP_AUTH_FAILED", "TOKEN_EXPIRED") and credential_helpers:
+                    evict_sug = (
+                        f"Evict stale cached credentials for '{host}' via "
+                        f"'printf \"protocol=https\\nhost={host}\\n\\n\" | git credential reject' and re-authenticate."
+                    )
+                    if evict_sug not in suggestions:
+                        suggestions.append(evict_sug)
             else:
-                # INVARIANT: Degraded latency (C/F) triggers targeted diagnostics for slow DNS or SSH mux sockets.
-                if grade in ("C", "F"):
-                    lat_str = f"{latency:.3f}s" if latency is not None else "unknown"
-                    if protocol == "ssh":
-                        if not ssh_mux_info.get("is_enabled"):
-                            warn_msg = (
-                                f"Remote '{host or r_url}' has degraded handshake latency ({lat_str}, Grade {grade}). "
-                                "SSH multiplexing is disabled."
-                            )
-                            sug_msg = (
-                                "Enable SSH multiplexing in ~/.ssh/config to speed up multi-repository fetch operations "
-                                "(audit with 'git-sync doctor --ssh')."
-                            )
-                        else:
-                            warn_msg = (
-                                f"Remote '{host or r_url}' has degraded handshake latency ({lat_str}, Grade {grade}) "
-                                "despite SSH multiplexing."
-                            )
-                            sug_msg = (
-                                f"Verify DNS resolution speed for '{host}' or recreate SSH control sockets in "
-                                f"'{ssh_mux_info.get('socket_dir', '~/.ssh')}'."
-                            )
-                    else:
+                err_label = r_data.get("error") or "Failed"
+                err_msg = f"{host or r_url}: {err_label}"
+                if err_msg not in errors:
+                    errors.append(err_msg)
+        else:
+            if grade in ("C", "F"):
+                lat_str = f"{latency:.3f}s" if latency is not None else "unknown"
+                if protocol == "ssh":
+                    if not ssh_mux_info.get("is_enabled"):
                         warn_msg = (
                             f"Remote '{host or r_url}' has degraded handshake latency ({lat_str}, Grade {grade}). "
-                            "Slow DNS resolution or network route detected."
+                            "SSH multiplexing is disabled."
                         )
-                        sug_msg = f"Check DNS lookup latency or inspect network routing to '{host}'."
+                        sug_msg = (
+                            "Enable SSH multiplexing in ~/.ssh/config to speed up multi-repository fetch operations "
+                            "(audit with 'git-sync doctor --ssh')."
+                        )
+                    else:
+                        warn_msg = (
+                            f"Remote '{host or r_url}' has degraded handshake latency ({lat_str}, Grade {grade}) "
+                            "despite SSH multiplexing."
+                        )
+                        sug_msg = (
+                            f"Verify DNS resolution speed for '{host}' or recreate SSH control sockets in "
+                            f"'{ssh_mux_info.get('socket_dir', '~/.ssh')}'."
+                        )
+                else:
+                    warn_msg = (
+                        f"Remote '{host or r_url}' has degraded handshake latency ({lat_str}, Grade {grade}). "
+                        "Slow DNS resolution or network route detected."
+                    )
+                    sug_msg = f"Check DNS lookup latency or inspect network routing to '{host}'."
 
-                    if warn_msg not in warnings:
-                        warnings.append(warn_msg)
-                    if sug_msg not in suggestions:
-                        suggestions.append(sug_msg)
+                if warn_msg not in warnings:
+                    warnings.append(warn_msg)
+                if sug_msg not in suggestions:
+                    suggestions.append(sug_msg)
 
-    # 5. Lock file inspection
+    # 6. Worktree alerts
+    for alert in worktree_health.get("alerts", []):
+        if alert not in warnings:
+            warnings.append(alert)
+    if worktree_health.get("total_stale_worktrees", 0) > 0:
+        sug = "Prune stale worktree metadata across repositories: 'git-sync worktree prune --all'."
+        if sug not in suggestions:
+            suggestions.append(sug)
+
+    # 7. Lock file inspection
     locked_repos = find_locked_repos(root_dir, repos=target_repos, timeout=timeout)
     if locked_repos:
         stale_count = sum(1 for lk in locked_repos if lk.get("stale"))
@@ -2565,6 +2842,8 @@ def check_credentials_sanity(
         "credential_helper_diagnostics": cred_diag,
         "has_token_env": has_token_env,
         "remotes": remotes_tested,
+        "multi_remote_matrix": multi_remote_matrix,
+        "worktree_health": worktree_health,
         "locked_repos": locked_repos,
         "warnings": warnings,
         "errors": errors,
@@ -5691,7 +5970,9 @@ __all__ = [
     "GRADE_C_THRESHOLD_SECONDS",
     "TOOL_DIR_PREFIXES",
     "audit_branch_hygiene",
+    "audit_multi_remote_matrix",
     "audit_ssh_multiplexing",
+    "audit_worktree_health_batch",
     "benchmark_ssh_multiplexing",
     "check_credentials_sanity",
     "check_repo_dirty",

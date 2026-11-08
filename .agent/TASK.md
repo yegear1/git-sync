@@ -7,13 +7,13 @@
 
 ## Active Task
 
-### 📌 Task [00.18]: Parallel Batch Worktree Health Audit and Multi-Remote Connectivity Matrix
-- **Status:** PLANNING
-- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
-- **Description:** Provide parallel cross-remote reachability matrix and worktree health audit across multi-origin upstream setups in Doctor and status.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
+### 📌 Task [00.19]: Automated Git LFS Object Tracking and Bandwidth-Aware Fetch Controls
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
+- **Description:** Detect Git LFS pointer files and `.gitattributes` filters during repository inspection, surface LFS status in `status` and `doctor`, and provide `--lfs` / `--no-lfs` controls during `pull`.
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Acceptance Criteria:**
-  - [ ] Matrix visualization of multi-remote reachability and latency grades in doctor and status.
+  - [ ] Repositories using Git LFS are identified with pointer/object hygiene and optional fetch controls.
   - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -40,6 +40,7 @@
 | [00.15] | Dry-Run Interactive Confirmation and Bulk Action Preview Mode | [1fd38ca] | 2026-10-31 |
 | [00.16] | SSH ControlMaster Multiplexing Lifecycle and Stale Socket Auto-Pruning | [dfb4969] | 2026-10-31 |
 | [00.17] | Fine-Grained Git Credential Helper Triage and Keychain Expiry Diagnostics | [e1e0571] | 2026-10-31 |
+| [00.18] | Parallel Batch Worktree Health Audit and Multi-Remote Connectivity Matrix | [30eca71] | 2026-11-08 |
 | [00.20] | Setuptools PEP 639 License Warning Suppression and Distribution Validator Completeness | [9ef3ab8] | 2026-11-08 |
 | [00.21] | CI Pipeline Recursive Bytecode Compilation, Strict Mypy Gate, and Python Version Alignment | [f838659] | 2026-11-08 |
 | [00.22] | Public Facade Re-Export Parity (`__all__`) and Dynamic `GIT_ENV` Construction | [ecc14c5] | 2026-11-08 |
@@ -49,15 +50,6 @@
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-### 📌 Task [00.19]: Automated Git LFS Object Tracking and Bandwidth-Aware Fetch Controls
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
-- **Description:** Detect Git LFS pointer files and `.gitattributes` filters during repository inspection, surface LFS status in `status` and `doctor`, and provide `--lfs` / `--no-lfs` controls during `pull`.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
-- **Acceptance Criteria:**
-  - [ ] Repositories using Git LFS are identified with pointer/object hygiene and optional fetch controls.
-  - [ ] Canonical test suite passes with exit code 0.
 
 ### 📌 Task [00.23]: Engine Modularization Phase 1 — Extract SSH Multiplexing & Credential Diagnostics (`engine/ssh.py`, `engine/credentials.py`)
 - **Status:** APPROVED

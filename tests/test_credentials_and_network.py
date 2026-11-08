@@ -28,7 +28,9 @@ from git_sync.core import (
     GRADE_B_THRESHOLD_SECONDS,
     GRADE_C_THRESHOLD_SECONDS,
     TelemetryBenchmark,
+    audit_multi_remote_matrix,
     audit_ssh_multiplexing,
+    audit_worktree_health_batch,
     benchmark_ssh_multiplexing,
     check_credentials_sanity,
     close_ssh_control_socket,
@@ -1471,6 +1473,263 @@ class TestCredentialHelperTriageAndExpiryDiagnostics(unittest.TestCase):
         self.assertIn("[cache] status=EXPIRED, timeout=900s, socket=EXPIRED", out_text)
         self.assertIn("formato inválido ou placeholder", out_text)
         self.assertIn("Token expirado ou inválido", out_text)
+
+
+class TestMultiRemoteMatrixAndWorktreeHealthAudit(unittest.TestCase):
+    """Test suite covering parallel multi-remote reachability matrix and worktree health audit."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.root = self.tmp_dir.name
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    @patch("git_sync.engine.git.get_repo_remotes")
+    @patch("git_sync.engine.git.probe_remote_reachability")
+    def test_audit_multi_remote_matrix_deduplication_and_latency(self, mock_probe, mock_get_remotes):
+        """Verify unique remote probing deduplication and latency matrix calculation."""
+        repo1 = os.path.join(self.root, "repo1")
+        repo2 = os.path.join(self.root, "repo2")
+        repo3 = os.path.join(self.root, "repo3")
+
+        mock_get_remotes.side_effect = lambda path, timeout=5: {
+            repo1: {"origin": "https://github.com/org/shared.git", "upstream": "git@github.com:upstream/shared.git"},
+            repo2: {"origin": "https://github.com/org/shared.git"},
+            repo3: {"origin": "https://github.com/org/broken.git"},
+        }.get(path, {})
+
+        def _mock_probe_impl(remote_url, sample_repo=None, timeout=5):
+            if "shared.git" in remote_url and remote_url.startswith("https"):
+                return {
+                    "ok": True,
+                    "protocol": "https",
+                    "host": "github.com",
+                    "latency_seconds": 0.15,
+                    "grade": "A",
+                    "error": None,
+                    "diagnostic": None,
+                }
+            elif "upstream/shared.git" in remote_url:
+                return {
+                    "ok": True,
+                    "protocol": "ssh",
+                    "host": "github.com",
+                    "latency_seconds": 0.85,
+                    "grade": "B",
+                    "error": None,
+                    "diagnostic": None,
+                }
+            else:
+                return {
+                    "ok": False,
+                    "protocol": "https",
+                    "host": "github.com",
+                    "latency_seconds": None,
+                    "grade": "F",
+                    "error": "Authentication failed",
+                    "diagnostic": {"category": "HTTP_AUTH_FAILED", "message": "Auth failed", "suggestion": "Check PAT"},
+                }
+
+        mock_probe.side_effect = _mock_probe_impl
+
+        res = audit_multi_remote_matrix(self.root, repos=[repo1, repo2, repo3], timeout=5, workers=2)
+
+        self.assertEqual(res["total_repos_audited"], 3)
+        self.assertEqual(res["multi_remote_repos"], 1)
+        self.assertEqual(res["total_unique_remotes_tested"], 3)
+        self.assertEqual(res["total_endpoints_tested"], 4)
+        self.assertEqual(res["healthy_endpoints"], 3)
+        self.assertEqual(res["unreachable_endpoints"], 1)
+        self.assertEqual(res["grade_distribution"]["A"], 2)
+        self.assertEqual(res["grade_distribution"]["B"], 1)
+        self.assertEqual(res["grade_distribution"]["F"], 1)
+
+        entries_by_repo = {e["repo"]: e for e in res["matrix"]}
+        r1_entry = entries_by_repo[os.path.basename(repo1)]
+        self.assertTrue(r1_entry["multi_remote"])
+        self.assertEqual(r1_entry["remotes_count"], 2)
+        self.assertFalse(r1_entry["has_unreachable"])
+        self.assertEqual(r1_entry["grades"]["origin"], "A")
+        self.assertEqual(r1_entry["grades"]["upstream"], "B")
+
+        r3_entry = entries_by_repo[os.path.basename(repo3)]
+        self.assertFalse(r3_entry["multi_remote"])
+        self.assertTrue(r3_entry["has_unreachable"])
+        self.assertEqual(r3_entry["primary_grade"], "F")
+
+    @patch("git_sync.engine.git.get_worktree_info")
+    @patch("git_sync.engine.git.check_repo_dirty")
+    def test_audit_worktree_health_batch_dirty_and_stale_detection(self, mock_dirty, mock_wt_info):
+        """Verify parallel batch worktree audit detects dirty working copies and stale metadata."""
+        repo1 = os.path.join(self.root, "repo1")
+        repo2 = os.path.join(self.root, "repo2")
+        os.makedirs(repo1, exist_ok=True)
+        os.makedirs(repo2, exist_ok=True)
+        wt_linked = os.path.join(self.root, "repo1_feature")
+        os.makedirs(wt_linked, exist_ok=True)
+
+        mock_wt_info.side_effect = lambda path, timeout=5: {
+            repo1: {
+                "worktrees": [
+                    {"path": repo1, "branch": "main", "is_main": True, "is_prunable": False, "is_locked": False},
+                    {"path": wt_linked, "branch": "feature/x", "is_main": False, "is_prunable": False, "is_locked": False},
+                ],
+                "stale_worktrees": [],
+                "is_worktree": False,
+                "main_worktree": None,
+            },
+            repo2: {
+                "worktrees": [
+                    {"path": repo2, "branch": "HEAD (detached)", "is_main": True, "is_prunable": False, "is_locked": False},
+                ],
+                "stale_worktrees": [{"path": "/stale/wt", "reason": "missing path"}],
+                "is_worktree": False,
+                "main_worktree": None,
+            },
+        }.get(path, {"worktrees": [], "stale_worktrees": []})
+
+        mock_dirty.side_effect = lambda path, timeout=5: {
+            repo1: (False, []),
+            wt_linked: (True, ["M dirty.py"]),
+            repo2: (False, []),
+        }.get(path, (False, []))
+
+        res = audit_worktree_health_batch(self.root, repos=[repo1, repo2], timeout=5, workers=2)
+
+        self.assertEqual(res["total_repos_audited"], 2)
+        self.assertEqual(res["repos_with_linked_worktrees"], 2)
+        self.assertEqual(res["total_dirty_worktrees"], 1)
+        self.assertEqual(res["total_stale_worktrees"], 1)
+        self.assertEqual(res["total_detached_worktrees"], 1)
+        self.assertEqual(res["healthy_repos_count"], 0)
+
+        self.assertTrue(any("dirty linked worktree" in a for a in res["alerts"]))
+        self.assertTrue(any("stale/orphaned worktree" in a for a in res["alerts"]))
+        self.assertTrue(any("detached HEAD" in a for a in res["alerts"]))
+
+    @patch("git_sync.engine.git.audit_multi_remote_matrix")
+    @patch("git_sync.engine.git.audit_worktree_health_batch")
+    def test_check_credentials_sanity_wires_matrix_and_worktrees(self, mock_wt_batch, mock_multi_matrix):
+        """Verify check_credentials_sanity integrates multi_remote_matrix and worktree_health."""
+        mock_multi_matrix.return_value = {
+            "total_repos_audited": 1,
+            "multi_remote_repos": 1,
+            "total_unique_remotes_tested": 2,
+            "total_endpoints_tested": 2,
+            "healthy_endpoints": 2,
+            "unreachable_endpoints": 0,
+            "grade_distribution": {"A": 2},
+            "matrix": [
+                {
+                    "repo": "repo1",
+                    "multi_remote": True,
+                    "remotes_count": 2,
+                    "remotes": {
+                        "origin": {"name": "origin", "url": "https://github.com/org/repo.git", "protocol": "https", "host": "github.com", "ok": True, "latency_seconds": 0.1, "grade": "A"},
+                        "upstream": {"name": "upstream", "url": "https://github.com/upstream/repo.git", "protocol": "https", "host": "github.com", "ok": True, "latency_seconds": 0.2, "grade": "A"},
+                    },
+                    "grades": {"origin": "A", "upstream": "A"},
+                    "has_unreachable": False,
+                    "primary_grade": "A",
+                }
+            ],
+            "probed_remotes": {
+                "https://github.com/org/repo.git": {"ok": True, "grade": "A", "latency_seconds": 0.1, "protocol": "https", "host": "github.com"},
+                "https://github.com/upstream/repo.git": {"ok": True, "grade": "A", "latency_seconds": 0.2, "protocol": "https", "host": "github.com"},
+            },
+        }
+
+        mock_wt_batch.return_value = {
+            "total_repos_audited": 1,
+            "repos_with_linked_worktrees": 1,
+            "total_dirty_worktrees": 1,
+            "total_stale_worktrees": 1,
+            "total_detached_worktrees": 0,
+            "healthy_repos_count": 0,
+            "alerts": ["Repo 'repo1' has 1 dirty linked worktree(s) with uncommitted files."],
+            "items": [],
+        }
+
+        with patch("git_sync.engine.git.inspect_repo"):
+            sanity = check_credentials_sanity(self.root, test_remotes=True)
+
+        self.assertIn("multi_remote_matrix", sanity)
+        self.assertIn("worktree_health", sanity)
+        self.assertEqual(sanity["multi_remote_matrix"]["multi_remote_repos"], 1)
+        self.assertEqual(sanity["worktree_health"]["total_dirty_worktrees"], 1)
+        self.assertTrue(any("git-sync worktree prune --all" in s for s in sanity["suggestions"]))
+        self.assertTrue(any("dirty linked worktree" in w for w in sanity["warnings"]))
+
+    @patch("git_sync.cli.check_credentials_sanity")
+    def test_cli_doctor_renders_matrix_and_worktree_tables(self, mock_sanity):
+        """Verify cli doctor command prints formatted Multi-Remote Matrix and Worktree tables."""
+        mock_sanity.return_value = {
+            "ok": True,
+            "ssh_agent": {"status": "ACTIVE", "identities_count": 1, "identities": ["id_ed25519"]},
+            "ssh_keys": ["id_ed25519"],
+            "ssh_multiplexing": {"is_enabled": False},
+            "github_cli": {"installed": False},
+            "credential_helpers": [],
+            "credential_helper_diagnostics": {},
+            "has_token_env": False,
+            "remotes": {
+                "https://github.com/org/repo.git": {"ok": True, "protocol": "https", "host": "github.com", "latency_seconds": 0.15, "grade": "A"}
+            },
+            "multi_remote_matrix": {
+                "total_repos_audited": 1,
+                "multi_remote_repos": 1,
+                "total_unique_remotes_tested": 2,
+                "total_endpoints_tested": 2,
+                "healthy_endpoints": 2,
+                "unreachable_endpoints": 0,
+                "grade_distribution": {"A": 2, "B": 0, "C": 0, "F": 0},
+                "matrix": [
+                    {
+                        "repo": "app/core",
+                        "multi_remote": True,
+                        "remotes_count": 2,
+                        "remotes": {
+                            "origin": {"ok": True, "grade": "A", "latency_seconds": 0.12},
+                            "upstream": {"ok": True, "grade": "A", "latency_seconds": 0.18},
+                        },
+                        "has_unreachable": False,
+                    }
+                ],
+            },
+            "worktree_health": {
+                "total_repos_audited": 1,
+                "repos_with_linked_worktrees": 1,
+                "total_dirty_worktrees": 1,
+                "total_stale_worktrees": 0,
+                "total_detached_worktrees": 0,
+                "items": [
+                    {
+                        "repo": "app/core",
+                        "is_healthy": False,
+                        "total_worktrees": 2,
+                        "dirty_worktrees_count": 1,
+                        "stale_worktrees_count": 0,
+                        "detached_worktrees_count": 0,
+                    }
+                ],
+            },
+            "locked_repos": [],
+            "warnings": [],
+            "suggestions": [],
+        }
+
+        captured = []
+        with patch("sys.stdout.write", side_effect=captured.append):
+            exit_code = main(["doctor"])
+            self.assertEqual(exit_code, 0)
+
+        out_text = "".join(captured)
+        self.assertIn("MATRIZ DE CONECTIVIDADE MULTI-REMOTE", out_text)
+        self.assertIn("app/core", out_text)
+        self.assertIn("origin:✅A (0.12s)", out_text)
+        self.assertIn("AUDITORIA DE WORKTREES VINCULADOS", out_text)
+        self.assertIn("1 sujo(s)", out_text)
 
 
 if __name__ == "__main__":
