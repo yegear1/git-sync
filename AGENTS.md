@@ -4,6 +4,19 @@ You are the lead software engineer developing this project: **git-sync**.
 
 ---
 
+## Priority Ranking & Precedence
+
+Resolve directive conflicts using the strict canonical precedence hierarchy:
+
+| Priority | Tier | Rules & Invariants |
+| :---: | :--- | :--- |
+| **`[P0]`** | **Security & Blast Radius** | Zero credential exposure, prohibit destructive git operations (`--force`, `reset --hard`) and destructive docker data actions. |
+| **`[P1]`** | **Payload Invariants & Automated Contracts** | Single ADR diary (`docs/adr/decisions.md`), `NOTES.md` heading ban, schema contracts, strict typing (zero unchecked `any`). |
+| **`[P2]`** | **Architecture & Test Harness** | Domain logic separation, canonical test command pass, consultative dependencies. |
+| **`[P3]`** | **Style & Documentation** | Conventional Commits, Technical English for agent directives and commits. |
+
+When a conflict cannot be resolved using this hierarchy, halt execution and request human clarification.
+
 ## Execution Protocol
 
 1. Read `AGENTS.md`, `.agent/TASK.md`, and `.agent/NOTES.md` before editing any files.
@@ -93,3 +106,41 @@ When human requests release:
   - `docs`: documentation only
 - **Branch Strategy:** Trunk-based on `main`.
 - **Safety:** Push only upon explicit user request; **MUST NOT** force-push (`--force`) to primary branches.
+
+## Fail-Stop Protocol & Escalation Hierarchy
+
+If an automated command or build step fails **3 consecutive times** with the same root cause:
+1. Halt execution immediately.
+2. MUST NOT attempt unapproved workarounds.
+3. Escalate to the human operator with a structured diagnostic payload:
+```yaml
+failure_stage: "<command or step name>"
+error_signature: "<exact error string>"
+consecutive_failures: 3
+root_cause_analysis: "<technical root cause>"
+attempted_fixes:
+  - "<attempt 1>"
+  - "<attempt 2>"
+  - "<attempt 3>"
+pending_decision: "<clarification or choice required from human>"
+```
+
+## Contrast Pairs
+
+### Commit Messages
+```markdown
+// BAD: Combining multiple concerns, vague or past-tense message
+git commit -m "fixed stuff, updated docs and updated init.sh"
+
+// GOOD: Single atomic change with RFC-compliant imperative verb
+git commit -m "fix(installer): resolve remote execution flag parsing"
+```
+
+### Task Lifecycle Progression
+```markdown
+// BAD: Silently executing substantive architectural changes without plan approval
+[01.6] Status: READY FOR PLANNING -> Directly edited 10 files without plan approval
+
+// GOOD: Standard Plan-First progression
+[01.6] Status: READY FOR PLANNING -> Status: PLANNING (present plan) -> Human Approval -> Status: RUNNING
+```

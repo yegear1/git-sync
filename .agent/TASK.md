@@ -5,20 +5,31 @@
 
 ---
 
-## Active Task
+## Active Wave 1 `[PARALLEL: W1]`
 
-### 📌 Task [00.18]: Parallel Batch Worktree Health Audit and Multi-Remote Connectivity Matrix
-
-- **Description:** Provide parallel cross-remote reachability matrix and worktree health audit across multi-origin upstream setups in Doctor and status.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
-- **Action Type:**
-  - [x] Read-only / Documentation
-  - [x] Source code changes
+### 📌 Task [00.20]: Setuptools PEP 639 License Warning Suppression and Distribution Validator Completeness `[PARALLEL: W1]`
 - **Status:** RUNNING
+- **Type:** code
+- Read: `scripts/build.py`, `pyproject.toml`, `tests/test_packaging.py`
+- Paths: `scripts/build.py`, `pyproject.toml`, `tests/test_packaging.py`
+- Verify: `python3 -m unittest tests/test_packaging.py`
+- **Description:** Resolve `SetuptoolsDeprecationWarning` (`project.license` table deprecation on `setuptools >= 77.0`) during sdist/wheel builds so `test_build_distribution_and_archive_hygiene` passes cleanly across all setuptools versions, and add `git_sync/ui/dashboard.py` and `git_sync/ui/style.py` to `validate_sdist` and `validate_wheel` required member manifests in `scripts/build.py`.
+- **Systems Involved:** `scripts/build.py`, `pyproject.toml`, `tests/test_packaging.py`
+- **Acceptance Criteria:**
+  - [ ] `python3 -m unittest discover -s tests` passes all 297+ tests with 0 failures and 0 unhandled deprecation warnings.
+  - [ ] `scripts/build.py` validates presence of `ui/dashboard.py` and `ui/style.py` in both sdist and wheel archives.
 
-### Acceptance Criteria
-- [ ] Matrix visualization of multi-remote reachability and latency grades in doctor and status.
-- [ ] Canonical test suite passes with exit code 0.
+### 📌 Task [00.21]: CI Pipeline Recursive Bytecode Compilation, Strict Mypy Gate, and Python Version Alignment `[PARALLEL: W1]`
+- **Status:** RUNNING
+- **Type:** code
+- Read: `.github/workflows/ci.yml`, `AGENTS.md`, `pyproject.toml`
+- Paths: `.github/workflows/ci.yml`, `AGENTS.md`
+- Verify: `python3 -m py_compile src/git_sync/*.py tests/*.py`
+- **Description:** Expand `py_compile` in `.github/workflows/ci.yml` and `AGENTS.md` to compile nested subpackages (`src/git_sync/engine/*.py`, `src/git_sync/ui/*.py`), add a strict `mypy src/git_sync` verification step to the CI workflow, and align Python version documentation across `AGENTS.md` and `pyproject.toml`.
+- **Systems Involved:** `.github/workflows/ci.yml`, `AGENTS.md`
+- **Acceptance Criteria:**
+  - [ ] CI workflow compiles all `src/git_sync/**/*.py` modules and runs `mypy --strict src/git_sync`.
+  - [ ] Validation commands in `AGENTS.md` match the recursive package layout.
 
 ---
 
@@ -51,13 +62,86 @@
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
 
+### 📌 Task [00.18]: Parallel Batch Worktree Health Audit and Multi-Remote Connectivity Matrix
+- **Status:** READY FOR PLANNING
+- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
+- **Description:** Provide parallel cross-remote reachability matrix and worktree health audit across multi-origin upstream setups in Doctor and status.
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
+- **Acceptance Criteria:**
+  - [ ] Matrix visualization of multi-remote reachability and latency grades in doctor and status.
+  - [ ] Canonical test suite passes with exit code 0.
 
 ### 📌 Task [00.19]: Automated Git LFS Object Tracking and Bandwidth-Aware Fetch Controls
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Description:** Detect Git LFS pointer files and `.gitattributes` filters during repository inspection, surface LFS status in `status` and `doctor`, and provide `--lfs` / `--no-lfs` controls during `pull`.
 - **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_git_sync.py`
 - **Acceptance Criteria:**
   - [ ] Repositories using Git LFS are identified with pointer/object hygiene and optional fetch controls.
   - [ ] Canonical test suite passes with exit code 0.
+
+### 📌 Task [00.22]: Public Facade Re-Export Parity (`__all__`) and Dynamic `GIT_ENV` Construction
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/core.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/engine/git.py`, `tests/test_packaging.py`
+- **Description:** Synchronize `__all__` exports across `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, and `src/git_sync/core.py` (including `get_sparse_checkout_info`, `is_path_in_cone`, `is_shallow_repository`, `reapply_sparse_checkout`, `unshallow_submodule`, `update_submodules`, `ClassifiedCommit`, `classify_commit`, `inspect_credential_helpers`, `inspect_token_env`), add an automated export-parity unit test in `tests/test_packaging.py`, and build the Git subprocess environment dynamically in `_real_run_git` (`{**os.environ, ...}`) instead of freezing `GIT_ENV` at module import time.
+- **Systems Involved:** `src/git_sync/core.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/engine/git.py`, `tests/test_packaging.py`
+- **Acceptance Criteria:**
+  - [ ] Automated test verifies 100% symbol parity between `git_sync.engine` and `git_sync.core`.
+  - [ ] Runtime mutations to `os.environ` (e.g., `SSH_AUTH_SOCK`, `GITHUB_TOKEN`, `HOME`) propagate to `_real_run_git` while preserving `GIT_TERMINAL_PROMPT=0` and `PAGER=cat`.
+
+### 📌 Task [00.23]: Engine Modularization Phase 1 — Extract SSH Multiplexing & Credential Diagnostics (`engine/ssh.py`, `engine/credentials.py`)
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/engine/ssh.py`, `src/git_sync/engine/credentials.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Description:** Extract SSH ControlMaster auditing, socket lifecycle pruning, and handshake benchmarking into `src/git_sync/engine/ssh.py`, and extract credential helper chain inspection, `gh` CLI auth diagnostics, token environment checks, and remote reachability probing into `src/git_sync/engine/credentials.py`, preserving full re-export compatibility in `engine/git.py`, `engine/__init__.py`, and `core.py`.
+- **Systems Involved:** `src/git_sync/engine/ssh.py`, `src/git_sync/engine/credentials.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Acceptance Criteria:**
+  - [ ] SSH and credential functions reside in dedicated cohesive modules with zero circular imports.
+  - [ ] All existing imports from `git_sync.engine` and `git_sync.core` remain 100% backward-compatible.
+
+### 📌 Task [00.24]: Engine Modularization Phase 2 — Extract Changelog Classifier & Diff Chunker (`engine/changelog.py`, `engine/diff.py`)
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/engine/changelog.py`, `src/git_sync/engine/diff.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Description:** Extract `ClassifiedCommit`, Conventional Commit parsing, and Keep-a-Changelog summarization into `src/git_sync/engine/changelog.py`, and extract token-budget aware diff splitting/truncation (`split_diff_files`, `truncate_diff`, `get_divergence_diff`) into `src/git_sync/engine/diff.py`.
+- **Systems Involved:** `src/git_sync/engine/changelog.py`, `src/git_sync/engine/diff.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Acceptance Criteria:**
+  - [ ] Changelog and diff chunking logic are isolated into standalone testable modules.
+  - [ ] Full unit test suite passes with zero regressions.
+
+### 📌 Task [00.25]: Engine Modularization Phase 3 — Extract Worktree, Submodule & Sparse-Checkout Managers (`engine/topology.py`)
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/engine/topology.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Description:** Extract linked worktree inspection/pruning, submodule status/update/unshallow operations, sparse-checkout cone diagnostics, and stale lock recovery into `src/git_sync/engine/topology.py`, reducing `src/git_sync/engine/git.py` to core runner, discovery, status inspection, and pull/push/resolve orchestration.
+- **Systems Involved:** `src/git_sync/engine/topology.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Acceptance Criteria:**
+  - [ ] `src/git_sync/engine/git.py` line count is reduced by >45% with clear domain boundaries.
+  - [ ] Full unit test suite passes with zero regressions.
+
+### 📌 Task [00.26]: Test Mock Decoupling and Elimination of Runtime `sys.modules` Dispatch (`_dispatch_fn`)
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/engine/`, `tests/`
+- **Description:** Replace the 32 dynamic `_dispatch_fn` runtime `sys.modules["git_sync.core"]` lookups with a clean, lightweight dependency/runner hook and standardized mock targets across `tests/`, removing runtime reflection overhead and simplifying static analysis.
+- **Systems Involved:** `src/git_sync/engine/`, `tests/`
+- **Acceptance Criteria:**
+  - [ ] `_dispatch_fn` is removed from the engine while all unit tests and mock patches pass cleanly.
+  - [ ] Zero runtime `sys.modules` reflection in hot execution paths.
+
+### 📌 Task [00.27]: Strict Domain Payload Contracts (`TypedDict` / `@dataclass`) and Mypy Strict Compliance
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/engine/types.py`, `src/git_sync/engine/`, `src/git_sync/cli.py`, `src/git_sync/ui/`
+- **Description:** Define standard library `TypedDict` and `@dataclass` contracts in `src/git_sync/engine/types.py` for repository inspection (`RepoStatusRecord`), doctor diagnostics (`DoctorSanityReport`), and sync results (`PullResult`, `PushResult`, `ResolveResult`), replacing unchecked `Dict[str, Any]` signatures and ensuring 0 errors under `mypy --strict`.
+- **Systems Involved:** `src/git_sync/engine/types.py`, `src/git_sync/engine/`, `src/git_sync/cli.py`, `src/git_sync/ui/`
+- **Acceptance Criteria:**
+  - [ ] Core engine and CLI functions use explicit typed contracts instead of `Dict[str, Any]`.
+  - [ ] `mypy --strict src/git_sync` exits with code 0.
+
+### 📌 Task [00.28]: CLI Subcommand Modularization and Output Language Standardization
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/`, `tests/`
+- **Description:** Split monolithic formatting/rendering helpers out of `src/git_sync/cli.py` into `src/git_sync/ui/formatters.py` and standardize CLI human-facing terminal output language (with consistent Technical English defaults and optional locale/PT-BR support) while preserving all existing test assertions and JSON contracts.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/`, `tests/`
+- **Acceptance Criteria:**
+  - [ ] `src/git_sync/cli.py` is focused on argument parsing and command dispatch (<1,200 lines).
+  - [ ] All CLI and UI unit tests pass with exit code 0.
 
 ---
 
