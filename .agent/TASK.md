@@ -7,13 +7,13 @@
 
 ## Active Task
 
-### 📌 Task [00.23]: Engine Modularization Phase 1 — Extract SSH Multiplexing & Credential Diagnostics (`engine/ssh.py`, `engine/credentials.py`)
+### 📌 Task [00.24]: Engine Modularization Phase 2 — Extract Changelog Classifier & Diff Chunker (`engine/changelog.py`, `engine/diff.py`)
 - **Status:** RUNNING
-- **Paths:** `src/git_sync/engine/ssh.py`, `src/git_sync/engine/credentials.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
-- **Description:** Extract SSH ControlMaster auditing, socket lifecycle pruning, and handshake benchmarking into `src/git_sync/engine/ssh.py`, and extract credential helper chain inspection, `gh` CLI auth diagnostics, token environment checks, and remote reachability probing into `src/git_sync/engine/credentials.py`, preserving full re-export compatibility in `engine/git.py`, `engine/__init__.py`, and `core.py`.
-- **Systems Involved:** `src/git_sync/engine/ssh.py`, `src/git_sync/engine/credentials.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Paths:** `src/git_sync/engine/changelog.py`, `src/git_sync/engine/diff.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Description:** Extract `ClassifiedCommit`, Conventional Commit parsing, and Keep-a-Changelog summarization into `src/git_sync/engine/changelog.py`, and extract token-budget aware diff splitting/truncation (`split_diff_files`, `truncate_diff`, `get_divergence_diff`) into `src/git_sync/engine/diff.py`.
+- **Systems Involved:** `src/git_sync/engine/changelog.py`, `src/git_sync/engine/diff.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
 - **Acceptance Criteria:**
-  - [ ] SSH and credential functions reside in dedicated cohesive modules with zero circular imports.
+  - [ ] Changelog and diff chunking logic are isolated into standalone testable modules.
   - [ ] All existing imports from `git_sync.engine` and `git_sync.core` remain 100% backward-compatible.
   - [ ] Full packaging symbol parity and unit test suite pass with exit code 0.
 
@@ -46,21 +46,13 @@
 | [00.20] | Setuptools PEP 639 License Warning Suppression and Distribution Validator Completeness | [9ef3ab8] | 2026-11-08 |
 | [00.21] | CI Pipeline Recursive Bytecode Compilation, Strict Mypy Gate, and Python Version Alignment | [f838659] | 2026-11-08 |
 | [00.22] | Public Facade Re-Export Parity (`__all__`) and Dynamic `GIT_ENV` Construction | [ecc14c5] | 2026-11-08 |
+| [00.23] | Engine Modularization Phase 1 — Extract SSH Multiplexing & Credential Diagnostics | [2c2a2d5] | 2026-11-08 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-### 📌 Task [00.24]: Engine Modularization Phase 2 — Extract Changelog Classifier & Diff Chunker (`engine/changelog.py`, `engine/diff.py`)
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/engine/changelog.py`, `src/git_sync/engine/diff.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
-- **Description:** Extract `ClassifiedCommit`, Conventional Commit parsing, and Keep-a-Changelog summarization into `src/git_sync/engine/changelog.py`, and extract token-budget aware diff splitting/truncation (`split_diff_files`, `truncate_diff`, `get_divergence_diff`) into `src/git_sync/engine/diff.py`.
-- **Systems Involved:** `src/git_sync/engine/changelog.py`, `src/git_sync/engine/diff.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
-- **Acceptance Criteria:**
-  - [ ] Changelog and diff chunking logic are isolated into standalone testable modules.
-  - [ ] Full unit test suite passes with zero regressions.
 
 ### 📌 Task [00.25]: Engine Modularization Phase 3 — Extract Worktree, Submodule & Sparse-Checkout Managers (`engine/topology.py`)
 - **Status:** APPROVED
