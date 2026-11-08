@@ -8,7 +8,7 @@
 ## Active Task
 
 ### 📌 Task [00.22]: Public Facade Re-Export Parity (`__all__`) and Dynamic `GIT_ENV` Construction
-- **Status:** APPROVED
+- **Status:** RUNNING
 - **Paths:** `src/git_sync/core.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/engine/git.py`, `tests/test_packaging.py`
 - **Description:** Synchronize `__all__` exports across `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, and `src/git_sync/core.py` (including `get_sparse_checkout_info`, `is_path_in_cone`, `is_shallow_repository`, `reapply_sparse_checkout`, `unshallow_submodule`, `update_submodules`, `ClassifiedCommit`, `classify_commit`, `inspect_credential_helpers`, `inspect_token_env`), add an automated export-parity unit test in `tests/test_packaging.py`, and build the Git subprocess environment dynamically in `_real_run_git` (`{**os.environ, ...}`) instead of freezing `GIT_ENV` at module import time.
 - **Systems Involved:** `src/git_sync/core.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/engine/git.py`, `tests/test_packaging.py`
