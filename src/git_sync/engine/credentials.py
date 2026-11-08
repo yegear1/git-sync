@@ -27,7 +27,14 @@ def _dispatch_fn(name: str, fallback_fn: Any = None) -> Any:
     """
     Look up symbol dynamically from git_sync.core or git_sync.engine.git to respect unit test mocks.
     """
-    for mod_name in ("git_sync.engine.git", "git_sync.core", "git_sync.engine.credentials", "git_sync.engine.ssh"):
+    for mod_name in (
+        "git_sync.engine.git",
+        "git_sync.core",
+        "git_sync.engine.credentials",
+        "git_sync.engine.ssh",
+        "git_sync.engine.changelog",
+        "git_sync.engine.diff",
+    ):
         mod = sys.modules.get(mod_name)
         if mod and hasattr(mod, name):
             val = getattr(mod, name)
