@@ -63,7 +63,7 @@ class TestPackagingAndDistributionHygiene(unittest.TestCase):
         self.assertIn('name = "git-sync-cli"', content)
         self.assertIn(f'version = "{__version__}"', content)
         self.assertIn('git-sync = "git_sync.cli:main"', content)
-        self.assertTrue('license = "MIT"' in content or 'license = { text = "MIT" }' in content)
+        self.assertIn('license = "MIT"', content)
         self.assertIn('requires = ["setuptools>=61.0"]', content)
         self.assertIn('build-backend = "setuptools.build_meta"', content)
 
@@ -79,7 +79,7 @@ class TestPackagingAndDistributionHygiene(unittest.TestCase):
             data = tomllib.loads(content)
             self.assertEqual(data["project"]["name"], "git-sync-cli")
             self.assertEqual(data["project"]["version"], __version__)
-            self.assertIn(data["project"]["license"], ("MIT", {"text": "MIT"}))
+            self.assertEqual(data["project"]["license"], "MIT")
             self.assertEqual(
                 data["project"]["scripts"]["git-sync"],
                 "git_sync.cli:main",

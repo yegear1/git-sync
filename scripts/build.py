@@ -84,7 +84,9 @@ def validate_sdist(sdist_path: Path) -> List[str]:
         "src/git_sync/engine/concurrency.py",
         "src/git_sync/engine/git.py",
         "src/git_sync/ui/__init__.py",
+        "src/git_sync/ui/dashboard.py",
         "src/git_sync/ui/progress.py",
+        "src/git_sync/ui/style.py",
         "PKG-INFO",
     ]
 
@@ -139,7 +141,9 @@ def validate_wheel(wheel_path: Path) -> List[str]:
         "git_sync/engine/concurrency.py",
         "git_sync/engine/git.py",
         "git_sync/ui/__init__.py",
+        "git_sync/ui/dashboard.py",
         "git_sync/ui/progress.py",
+        "git_sync/ui/style.py",
     ]
 
     for req in required_members:
