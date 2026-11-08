@@ -317,6 +317,17 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     else:
         print("  GitHub CLI (gh):    ℹ️  Não instalado no PATH")
 
+    lfs_cli = sanity.get("git_lfs", {})
+    lfs_repos = sanity.get("lfs_repos", [])
+    if lfs_cli.get("installed"):
+        ver = lfs_cli.get("version") or "instalado"
+        repo_note = f" ({len(lfs_repos)} repositório(s) com LFS)" if lfs_repos else ""
+        print(f"  Git LFS:            ✅ {ver}{repo_note}")
+    elif lfs_repos:
+        print(f"  Git LFS:            ⚠️  Não instalado ({len(lfs_repos)} repositório(s) com LFS; execute 'git lfs install')")
+    else:
+        print("  Git LFS:            ℹ️  Não instalado no PATH")
+
     if ssh_audit:
         _print_ssh_audit_output(ssh_audit)
 
@@ -419,6 +430,12 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             stale_str = "⚠️  STALE" if lk.get("stale") else "ℹ️  ATIVO"
             print(f"  {lk.get('rel_path', lk['repo']):<35} {lk['lock_name']:<18} {stale_str} ({lk['age_seconds']}s)")
 
+    if lfs_repos:
+        print(f"\n📦 REPOSITÓRIOS COM GIT LFS ({len(lfs_repos)}):")
+        print("-" * 70)
+        for repo_slug in lfs_repos:
+            print(f"  • {repo_slug}")
+
     if sanity["warnings"]:
         print("\n⚠️  AVISOS:")
         for w in sanity["warnings"]:
@@ -493,6 +510,8 @@ def cmd_status(args: argparse.Namespace) -> int:
                     "diverged": [],
                     "worktrees": [],
                     "has_submodules": [],
+                    "has_lfs": [],
+                    "lfs_pointers": [],
                     "no_remote": [],
                     "errors": [],
                 }
@@ -610,6 +629,9 @@ def cmd_status(args: argparse.Namespace) -> int:
             "has_submodules": [r["rel_path"] for r in results if r.get("submodules")],
             "submodule_drift": [r["rel_path"] for r in results if any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", []))],
             "shallow_submodules": [r["rel_path"] for r in results if any(s.get("is_shallow") for s in r.get("submodules", []))],
+            "has_lfs": [r["rel_path"] for r in results if r.get("has_lfs") or r.get("lfs", {}).get("has_lfs")],
+            "lfs_pointers": [r["rel_path"] for r in results if r.get("lfs", {}).get("pointers_count", 0) > 0],
+            "lfs_warnings": [r["rel_path"] for r in results if r.get("lfs", {}).get("warning")],
             "sparse_checkout": [r["rel_path"] for r in results if r.get("sparse_checkout", {}).get("enabled")],
             "sparse_cone_warnings": [r["rel_path"] for r in results if r.get("sparse_checkout", {}).get("warning")],
             "no_remote": [r["rel_path"] for r in results if r["status"] == "NO_REMOTE"],
@@ -677,6 +699,16 @@ def cmd_status(args: argparse.Namespace) -> int:
                         "remediation": f"git -C '{dr['path']}' sparse-checkout reapply --cone",
                     })
                     existing_remed_pairs.add((dr["rel_path"], "reapply_sparse_checkout"))
+            if dr.get("lfs", {}).get("missing_objects", 0) > 0:
+                if (dr["rel_path"], "pull_lfs") not in existing_remed_pairs:
+                    summary["remediations"].append({
+                        "repo": dr["rel_path"],
+                        "status": "LFS_OBJECTS_MISSING",
+                        "network_state": dr.get("network_state", "healthy"),
+                        "action_required": "pull_lfs",
+                        "remediation": f"git -C '{dr['path']}' lfs pull",
+                    })
+                    existing_remed_pairs.add((dr["rel_path"], "pull_lfs"))
         if changelog_enabled:
             summary["changelogs"] = {
                 r["rel_path"]: {
@@ -783,6 +815,19 @@ def cmd_status(args: argparse.Namespace) -> int:
             cone_tag = "cone" if sc.get("cone_mode") else "full"
             warn_flag = "⚠️" if sc.get("warning") else ""
             details.append(f"{warn_flag}sparse({cone_tag}:{sc.get('pattern_count', 0)})")
+        lfs_d = r.get("lfs") or {}
+        if r.get("has_lfs") or lfs_d.get("has_lfs"):
+            warn_flag = "⚠️" if lfs_d.get("warning") else ""
+            if lfs_d.get("missing_objects", 0) > 0:
+                details.append(f"{warn_flag}lfs({lfs_d['missing_objects']} unsmudged)")
+            elif lfs_d.get("pointers_count", 0) > 0:
+                details.append(f"{warn_flag}lfs({lfs_d['pointers_count']} pointers)")
+            elif lfs_d.get("files_count", 0) > 0:
+                details.append(f"lfs({lfs_d['files_count']} files)")
+            elif lfs_d.get("pattern_count", 0) > 0:
+                details.append(f"lfs({lfs_d['pattern_count']} patterns)")
+            else:
+                details.append("lfs")
         if r.get("multi_remote") or len(r.get("remotes", {})) > 1:
             remote_names = ", ".join(sorted(r.get("remotes", {}).keys()))
             details.append(f"remotes[{remote_names}]")
@@ -1042,6 +1087,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
             or (getattr(args, "submodules", False) and any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", [])))
             or (getattr(args, "unshallow", False) and (r.get("is_shallow") or any(s.get("is_shallow") for s in r.get("submodules", []))))
             or (getattr(args, "reapply_sparse", False) and r.get("sparse_checkout", {}).get("enabled"))
+            or (getattr(args, "lfs", False) and (r.get("has_lfs") or r.get("lfs", {}).get("has_lfs")))
         ]
         if not targets:
             benchmark.stop()
@@ -1104,6 +1150,9 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 warnings.append(f"{len(info['aux_branches_behind'])} branch(es) secundária(s) pendente(s)")
             if info.get("is_shallow"):
                 warnings.append("Repositório raso (shallow)")
+            lfs_d = info.get("lfs") or {}
+            if (info.get("has_lfs") or lfs_d.get("has_lfs")) and lfs_d.get("missing_objects", 0) > 0:
+                warnings.append(f"Git LFS: {lfs_d['missing_objects']} objeto(s) pendente(s) de download")
             action_label = f"PULL ({strategy})" if strategy else "PULL (ff-only)"
             preview_items.append(
                 BulkActionItem(
@@ -1161,6 +1210,8 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 submodules=getattr(args, "submodules", False),
                 unshallow=getattr(args, "unshallow", False),
                 reapply_sparse=getattr(args, "reapply_sparse", False),
+                lfs=getattr(args, "lfs", False),
+                no_lfs=getattr(args, "no_lfs", False),
             )
             res["repo_rel"] = rel
 
@@ -1232,6 +1283,16 @@ def cmd_pull(args: argparse.Namespace) -> int:
                     sp_icon = "  ↳ ✅" if sp_res.get("success") else "  ↳ ❌"
                     sp_action = "filtros cone de sparse-checkout reaplicados" if sp_res.get("success") else f"falha ao reaplicar sparse-checkout: {sp_res.get('stderr')}"
                     print(f"{sp_icon} Sparse-checkout: {sp_action}")
+                if res.get("lfs"):
+                    lfs_r = res["lfs"]
+                    if lfs_r.get("skipped"):
+                        lfs_icon = "  ↳ ℹ️ [DRY-RUN]" if dry_run else "  ↳ 📦"
+                        print(f"{lfs_icon} Git LFS: download de payloads ignorado (--no-lfs / GIT_LFS_SKIP_SMUDGE=1)")
+                    elif lfs_r.get("fetched"):
+                        lfs_pull_ok = lfs_r.get("pull_result", {}).get("success", True) if not dry_run else True
+                        lfs_icon = "  ↳ ℹ️ [DRY-RUN]" if dry_run else ("  ↳ ✅" if lfs_pull_ok else "  ↳ ❌")
+                        lfs_st = "sincronização de objetos prevista ('git lfs pull')" if dry_run else ("objetos sincronizados via 'git lfs pull'" if lfs_pull_ok else "falha ao sincronizar objetos LFS")
+                        print(f"{lfs_icon} Git LFS: {lfs_st}")
 
     t_pull = time.perf_counter() - t2
     benchmark.record_stage("pull", t_pull)
@@ -2275,6 +2336,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     common.add_argument("--no-submodules", dest="submodules", action="store_false", default=argparse.SUPPRESS, help="Do not update or inspect submodules")
     common.add_argument("--unshallow", action="store_true", default=argparse.SUPPRESS, help="Fetch full history for shallow submodules and repositories")
     common.add_argument("--reapply-sparse", action="store_true", default=argparse.SUPPRESS, help="Reapply sparse-checkout cone patterns to prevent unbounded checkout conflicts")
+    common.add_argument("--lfs", dest="lfs", action="store_true", default=argparse.SUPPRESS, help="Explicitly pull Git LFS objects for repositories utilizing Git LFS")
+    common.add_argument("--no-lfs", dest="no_lfs", action="store_true", default=argparse.SUPPRESS, help="Skip downloading large Git LFS binary payloads (GIT_LFS_SKIP_SMUDGE=1) for bandwidth savings")
 
     parser = argparse.ArgumentParser(
         prog="git-sync",

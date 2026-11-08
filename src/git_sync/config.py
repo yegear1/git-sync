@@ -52,6 +52,8 @@ DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
         "autostash": True,
         "strategy": "abort",
         "confirm": False,
+        "lfs": False,
+        "no_lfs": False,
     },
     "push": {
         "dry_run": False,

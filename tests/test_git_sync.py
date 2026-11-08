@@ -22,18 +22,23 @@ from git_sync.core import (
     classify_commit,
     discover_repos,
     find_push_pending_repos,
+    format_bytes_human,
     format_changelog_summary,
+    get_lfs_info,
     get_repo_commits,
     get_repo_pending_changelog,
     get_submodules_status,
     get_worktree_info,
+    inspect_git_lfs,
     inspect_repo,
     is_branch_protected,
+    is_lfs_pointer_file,
     is_shallow_repository,
     match_repo,
     parse_commit_log,
     preflight_push_check,
     prune_repo_worktrees,
+    pull_lfs_objects,
     pull_repo,
     push_repo,
     run_git,
@@ -1720,6 +1725,196 @@ class TestProtectedBranchAndPushPreflight(unittest.TestCase):
         self.assertTrue(res_allow[0]["success"])
         self.assertTrue(res_allow[0]["dry_run"])
 
+
+
+class TestGitLFSSupport(unittest.TestCase):
+    """
+    Test suite for Git LFS object tracking, bandwidth-aware fetch controls,
+    and diagnostics across core engine, CLI status/doctor/pull commands.
+    """
+
+    def setUp(self):
+        self.test_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.test_dir.name)
+
+    def tearDown(self):
+        self.test_dir.cleanup()
+
+    def _init_repo(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        run_git(str(path), ["init", "-b", "main"])
+        run_git(str(path), ["config", "user.email", "test@example.com"])
+        run_git(str(path), ["config", "user.name", "Test User"])
+        (path / "README.md").write_text("# Test Repo\n", encoding="utf-8")
+        run_git(str(path), ["add", "README.md"])
+        run_git(str(path), ["commit", "-m", "chore: initial commit"])
+        return path
+
+    def test_is_lfs_pointer_file(self):
+        from git_sync.core import is_lfs_pointer_file
+        repo = self._init_repo(self.root / "lfs_detect")
+        ptr_file = repo / "weights.bin"
+        ptr_content = (
+            "version https://git-lfs.github.com/spec/v1\n"
+            "oid sha256:4d7a214614ab2935c943f9e0ff69d22ecd5421d0fecf22c92494617723297f3c\n"
+            "size 1234567\n"
+        )
+        ptr_file.write_text(ptr_content, encoding="utf-8")
+        self.assertTrue(is_lfs_pointer_file(str(ptr_file)))
+
+        regular_file = repo / "notes.txt"
+        regular_file.write_text("Just some notes\n", encoding="utf-8")
+        self.assertFalse(is_lfs_pointer_file(str(regular_file)))
+
+        self.assertFalse(is_lfs_pointer_file(str(repo / "nonexistent.bin")))
+
+    def test_format_bytes_human(self):
+        from git_sync.core import format_bytes_human
+        self.assertEqual(format_bytes_human(500), "500 B")
+        self.assertEqual(format_bytes_human(1024), "1.0 KB")
+        self.assertEqual(format_bytes_human(1024 * 512), "512.0 KB")
+        self.assertEqual(format_bytes_human(1024 * 1024 * 15), "15.0 MB")
+        self.assertEqual(format_bytes_human(1024 * 1024 * 1024 * 2), "2.00 GB")
+
+    def test_get_lfs_info_no_lfs(self):
+        from git_sync.core import get_lfs_info
+        repo = self._init_repo(self.root / "no_lfs")
+        info = get_lfs_info(str(repo))
+        self.assertFalse(info["has_lfs"])
+        self.assertEqual(info["files_count"], 0)
+        self.assertEqual(info["pointers_count"], 0)
+        self.assertEqual(info["patterns"], [])
+
+    def test_get_lfs_info_with_gitattributes(self):
+        from git_sync.core import get_lfs_info
+        repo = self._init_repo(self.root / "with_lfs")
+        (repo / ".gitattributes").write_text("*.onnx filter=lfs diff=lfs merge=lfs -text\n", encoding="utf-8")
+
+        model_file = repo / "model.onnx"
+        model_file.write_text(
+            "version https://git-lfs.github.com/spec/v1\n"
+            "oid sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n"
+            "size 9876543\n",
+            encoding="utf-8"
+        )
+        run_git(str(repo), ["add", ".gitattributes", "model.onnx"])
+        run_git(str(repo), ["commit", "-m", "feat: add lfs model pointer"])
+
+        info = get_lfs_info(str(repo))
+        self.assertTrue(info["has_lfs"])
+        self.assertIn("*.onnx", info["patterns"])
+        self.assertGreaterEqual(info["files_count"], 1)
+        self.assertGreaterEqual(info["pointers_count"], 1)
+
+    def test_bulk_cache_lfs_info(self):
+        from git_sync.telemetry import BulkCache
+        repo = self._init_repo(self.root / "cached_lfs_repo")
+        (repo / ".gitattributes").write_text("*.psd filter=lfs\n", encoding="utf-8")
+
+        cache = BulkCache(enabled=True)
+        info1 = cache.get_lfs_info(str(repo))
+        self.assertTrue(info1["has_lfs"])
+        self.assertEqual(cache.stats["cached_lfs"], 1)
+
+        info2 = cache.get_lfs_info(str(repo))
+        self.assertEqual(info2["pattern_count"], 1)
+        self.assertGreaterEqual(cache.stats["hits"], 1)
+
+        cache.invalidate(str(repo))
+        self.assertEqual(cache.stats["cached_lfs"], 0)
+
+    def test_inspect_git_lfs_probe(self):
+        from git_sync.core import inspect_git_lfs
+        with patch("subprocess.run") as mock_subproc:
+            mock_subproc.return_value.returncode = 0
+            mock_subproc.return_value.stdout = "git-lfs/3.4.0 (GitHub; linux amd64; go 1.20.5)\n"
+            res = inspect_git_lfs(timeout=5)
+            self.assertTrue(res["installed"])
+            self.assertIn("git-lfs/3.4.0", res["version"])
+
+        with patch("subprocess.run", side_effect=FileNotFoundError):
+            res = inspect_git_lfs(timeout=5)
+            self.assertFalse(res["installed"])
+            self.assertIsNone(res["version"])
+
+    def test_inspect_repo_integrates_lfs(self):
+        from git_sync.core import inspect_repo
+        repo = self._init_repo(self.root / "inspect_lfs_repo")
+        (repo / ".gitattributes").write_text("*.bin filter=lfs\n", encoding="utf-8")
+        run_git(str(repo), ["add", ".gitattributes"])
+        run_git(str(repo), ["commit", "-m", "chore: add lfs tracking"])
+
+        status = inspect_repo(str(repo), str(self.root))
+        self.assertTrue(status.get("has_lfs"))
+        self.assertIn("lfs", status)
+        self.assertTrue(status["lfs"]["has_lfs"])
+        self.assertIn("*.bin", status["lfs"]["patterns"])
+
+    def test_pull_repo_bandwidth_controls(self):
+        from git_sync.core import pull_repo
+        remote = self.root / "remote_lfs.git"
+        remote.mkdir(parents=True, exist_ok=True)
+        run_git(str(remote), ["init", "--bare", "-b", "main"])
+
+        repo = self._init_repo(self.root / "pull_lfs_repo")
+        run_git(str(repo), ["remote", "add", "origin", str(remote)])
+        run_git(str(repo), ["push", "-u", "origin", "main"])
+
+        (repo / ".gitattributes").write_text("*.bin filter=lfs\n", encoding="utf-8")
+        run_git(str(repo), ["add", ".gitattributes"])
+        run_git(str(repo), ["commit", "-m", "chore: add gitattributes"])
+        run_git(str(repo), ["push", "origin", "main"])
+
+        res_no_lfs = pull_repo(str(repo), no_lfs=True)
+        self.assertTrue(res_no_lfs["success"])
+        self.assertIn("lfs", res_no_lfs)
+        self.assertTrue(res_no_lfs["lfs"]["skipped"])
+
+        res_lfs = pull_repo(str(repo), lfs=True, dry_run=True)
+        self.assertTrue(res_lfs["success"])
+        self.assertTrue(res_lfs["dry_run"])
+        self.assertTrue(res_lfs["lfs"]["fetched"])
+
+    def test_cli_status_and_doctor_lfs_json(self):
+        repo = self._init_repo(self.root / "cli_lfs_repo")
+        (repo / ".gitattributes").write_text("*.weights filter=lfs\n", encoding="utf-8")
+        run_git(str(repo), ["add", ".gitattributes"])
+        run_git(str(repo), ["commit", "-m", "chore: add gitattributes"])
+
+        buf_status = io.StringIO()
+        with patch("sys.stdout", buf_status):
+            code = main(["status", "--root", str(self.root), "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(buf_status.getvalue())
+        items = data.get("items", [])
+        lfs_repo_entry = next((r for r in items if r["rel_path"] == "cli_lfs_repo"), None)
+        self.assertIsNotNone(lfs_repo_entry)
+        self.assertTrue(lfs_repo_entry.get("has_lfs"))
+        self.assertIn("lfs", lfs_repo_entry)
+        self.assertIn("has_lfs", data)
+        self.assertIn("cli_lfs_repo", data["has_lfs"])
+
+        # Table output check
+        buf_table = io.StringIO()
+        with patch("sys.stdout", buf_table):
+            code_tbl = main(["status", "--root", str(self.root), "--no-fetch"])
+        self.assertEqual(code_tbl, 0)
+        self.assertIn("lfs", buf_table.getvalue())
+
+        buf_doc = io.StringIO()
+        with patch("sys.stdout", buf_doc):
+            code_doc = main(["doctor", "--root", str(self.root), "--json"])
+        self.assertEqual(code_doc, 0)
+        doc_data = json.loads(buf_doc.getvalue())
+        self.assertIn("git_lfs", doc_data)
+        self.assertIn("lfs_repos", doc_data)
+        self.assertIn("cli_lfs_repo", doc_data["lfs_repos"])
+
+        # Doctor text output check
+        buf_doc_txt = io.StringIO()
+        with patch("sys.stdout", buf_doc_txt):
+            main(["doctor", "--root", str(self.root)])
+        self.assertIn("Git LFS", buf_doc_txt.getvalue())
 
 
 if __name__ == "__main__":

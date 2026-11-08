@@ -272,6 +272,7 @@ class BulkCache:
         self._remotes: Dict[str, Dict[str, str]] = {}
         self._submodules: Dict[str, List[Dict[str, Any]]] = {}
         self._sparse_checkout: Dict[str, Dict[str, Any]] = {}
+        self._lfs: Dict[str, Dict[str, Any]] = {}
         self._hits = 0
         self._misses = 0
 
@@ -380,12 +381,30 @@ class BulkCache:
             self._sparse_checkout[norm] = dict(info)
         return info
 
+    def get_lfs_info(self, repo_path: str, timeout: int = 5) -> Dict[str, Any]:
+        norm = os.path.abspath(repo_path)
+        get_lfs_fn = _get_git_fn("get_lfs_info")
+        if not self.enabled:
+            return get_lfs_fn(repo_path, timeout=timeout)
+
+        with self._lock:
+            if norm in self._lfs:
+                self._hits += 1
+                return self._lfs[norm]
+            self._misses += 1
+
+        info = get_lfs_fn(repo_path, timeout=timeout)
+        with self._lock:
+            self._lfs[norm] = info
+        return info
+
     def invalidate(self, repo_path: str) -> None:
         """Invalidate all cached data for a repository and its linked worktrees."""
         norm = os.path.abspath(repo_path)
         with self._lock:
             self._remotes.pop(norm, None)
             self._sparse_checkout.pop(norm, None)
+            self._lfs.pop(norm, None)
             matching_sub_keys = [k for k in self._submodules if k == norm or k.startswith(f"{norm}:")]
             for k in matching_sub_keys:
                 self._submodules.pop(k, None)
@@ -403,6 +422,7 @@ class BulkCache:
             self._remotes.clear()
             self._submodules.clear()
             self._sparse_checkout.clear()
+            self._lfs.clear()
             self._hits = 0
             self._misses = 0
 
@@ -416,6 +436,7 @@ class BulkCache:
                 "cached_remotes": len(self._remotes),
                 "cached_submodules": len(self._submodules),
                 "cached_sparse_checkout": len(self._sparse_checkout),
+                "cached_lfs": len(self._lfs),
             }
 
 

@@ -111,13 +111,16 @@ TOOL_DIR_PREFIXES = (
     ".gemini",
 )
 
-def get_git_env() -> Dict[str, str]:
+def get_git_env(extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """
     Dynamically build subprocess execution environment inheriting active os.environ while enforcing safety invariants.
     # INVARIANT: GIT_TERMINAL_PROMPT=0 guarantees git never blocks on interactive auth/passphrase prompts.
     # INVARIANT: PAGER=cat prevents paginated output hangs.
     """
-    return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "PAGER": "cat"}
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "PAGER": "cat"}
+    if extra_env:
+        env.update(extra_env)
+    return env
 
 
 # INVARIANT: GIT_TERMINAL_PROMPT=0 guarantees git never blocks on interactive auth/passphrase prompts
@@ -125,7 +128,12 @@ def get_git_env() -> Dict[str, str]:
 GIT_ENV = get_git_env()
 
 
-def _real_run_git(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess[str]:
+def _real_run_git(
+    repo_path: str,
+    args: List[str],
+    timeout: int = DEFAULT_TIMEOUT,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> subprocess.CompletedProcess[str]:
     cmd = ["git", "-C", repo_path] + args
     return subprocess.run(
         cmd,
@@ -133,22 +141,35 @@ def _real_run_git(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOU
         stderr=subprocess.PIPE,
         text=True,
         timeout=timeout,
-        env=get_git_env(),
+        env=get_git_env(extra_env=extra_env),
     )
 
 
-def run_git(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess[str]:
+def run_git(
+    repo_path: str,
+    args: List[str],
+    timeout: int = DEFAULT_TIMEOUT,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> subprocess.CompletedProcess[str]:
     """Execute a git command within a repository directory with safe timeouts and environment."""
-    return _run_git(repo_path, args, timeout=timeout)
+    return _run_git(repo_path, args, timeout=timeout, extra_env=extra_env)
 
 
-def _run_git(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess[str]:
+def _run_git(
+    repo_path: str,
+    args: List[str],
+    timeout: int = DEFAULT_TIMEOUT,
+    extra_env: Optional[Dict[str, str]] = None,
+) -> subprocess.CompletedProcess[str]:
     core = sys.modules.get("git_sync.core")
     if core is not None:
         target = getattr(core, "run_git", None)
         if target is not None and target is not run_git:
-            return target(repo_path, args, timeout=timeout)
-    return _real_run_git(repo_path, args, timeout=timeout)
+            try:
+                return target(repo_path, args, timeout=timeout, extra_env=extra_env)
+            except TypeError:
+                return target(repo_path, args, timeout=timeout)
+    return _real_run_git(repo_path, args, timeout=timeout, extra_env=extra_env)
 
 
 def _dispatch_fn(name: str, fallback: Any) -> Any:
@@ -398,6 +419,7 @@ def run_git_with_retry(
     max_backoff: float = DEFAULT_MAX_BACKOFF,
     benchmark: Optional[TelemetryBenchmark] = None,
     sleep_func: Any = time.sleep,
+    extra_env: Optional[Dict[str, str]] = None,
 ) -> subprocess.CompletedProcess[str]:
     """
     Execute a Git command with safe timeout, environment, and bounded exponential backoff
@@ -409,7 +431,7 @@ def run_git_with_retry(
 
     for attempt in range(retries + 1):
         try:
-            proc = run_git(repo_path, args, timeout=timeout)
+            proc = run_git(repo_path, args, timeout=timeout, extra_env=extra_env)
             if proc.returncode == 0:
                 if attempt > 0 and benchmark:
                     benchmark.record_retry(recovered=True)
@@ -616,6 +638,224 @@ def reapply_sparse_checkout(
         "cone": cone,
         "stdout": p.stdout.strip(),
         "stderr": p.stderr.strip(),
+    }
+
+
+def is_lfs_pointer_file(file_path: str | Path) -> bool:
+    """
+    Check if a file on disk is an unsmudged Git LFS pointer text file.
+    # INVARIANT: Git LFS pointer files begin with standard specification header.
+    """
+    try:
+        p = Path(file_path)
+        if not p.is_file() or p.stat().st_size > 1024:
+            return False
+        with open(p, "rb") as f:
+            header = f.read(200)
+            return header.startswith(b"version https://git-lfs.github.com/spec/v1")
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def inspect_git_lfs(timeout: int = 5) -> Dict[str, Any]:
+    """
+    Probe host environment for git-lfs CLI extension availability and version.
+    # INVARIANT: Uses GIT_TERMINAL_PROMPT=0 to guarantee probing never hangs in automated environments.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "lfs", "version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+            env=get_git_env(),
+        )
+        if proc.returncode == 0:
+            version_line = proc.stdout.splitlines()[0].strip() if proc.stdout else ""
+            return {
+                "installed": True,
+                "version": version_line,
+                "ok": True,
+            }
+    except Exception:
+        pass
+    return {
+        "installed": False,
+        "version": None,
+        "ok": False,
+    }
+
+
+def format_bytes_human(num_bytes: int) -> str:
+    """Format byte counts into human-readable strings (B, KB, MB, GB)."""
+    if num_bytes < 1024:
+        return f"{num_bytes} B"
+    elif num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.1f} KB"
+    elif num_bytes < 1024 * 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.1f} MB"
+    return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+def get_lfs_info(repo_path: str, timeout: int = 5) -> Dict[str, Any]:
+    """
+    Inspect Git LFS tracking configuration, tracked patterns, storage size, and pointer objects.
+    # INVARIANT: Zero external dependencies; fast on-disk inspection before optional CLI queries.
+    """
+    repo = Path(repo_path)
+    git_dir = get_repo_git_dir(repo_path)
+
+    # 1. Parse .gitattributes for filter=lfs patterns
+    gitattributes_file = repo / ".gitattributes"
+    patterns: List[str] = []
+    if gitattributes_file.is_file():
+        try:
+            content = gitattributes_file.read_text(encoding="utf-8", errors="replace")
+            for line in content.splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "filter=lfs" in line:
+                    tokens = line.split()
+                    if tokens:
+                        pattern = tokens[0]
+                        if pattern not in patterns:
+                            patterns.append(pattern)
+        except Exception:
+            pass
+
+    # 2. Check on-disk .git/lfs directory and calculate storage size
+    lfs_dir = Path(git_dir) / "lfs"
+    objects_dir = lfs_dir / "objects"
+    storage_bytes = 0
+    objects_count = 0
+    if objects_dir.is_dir():
+        try:
+            for root, _, files in os.walk(objects_dir):
+                for f in files:
+                    fp = os.path.join(root, f)
+                    try:
+                        storage_bytes += os.path.getsize(fp)
+                        objects_count += 1
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+
+    lfs_env = _dispatch_fn("inspect_git_lfs", inspect_git_lfs)(timeout=timeout)
+    installed = bool(lfs_env.get("installed", False))
+
+    has_lfs = bool(patterns or objects_dir.is_dir())
+    if not has_lfs:
+        return {
+            "has_lfs": False,
+            "enabled": False,
+            "installed": installed,
+            "patterns": [],
+            "pattern_count": 0,
+            "files": [],
+            "files_count": 0,
+            "pointers_count": 0,
+            "storage_bytes": 0,
+            "storage_human": "0 B",
+            "missing_objects": 0,
+            "objects_count": 0,
+            "hygiene": "NO_LFS",
+            "warning": None,
+        }
+
+    # 3. Query git lfs ls-files if available, or fall back to scanning files matching patterns
+    files_tracked: List[str] = []
+    pointers_count = 0
+    proc = run_git(repo_path, ["lfs", "ls-files"], timeout=timeout)
+    if proc.returncode == 0:
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(maxsplit=2)
+            if len(parts) >= 3:
+                _oid, marker, f_path = parts[0], parts[1], parts[2]
+                files_tracked.append(f_path)
+                if marker == "-":
+                    pointers_count += 1
+            elif len(parts) == 2:
+                files_tracked.append(parts[1])
+            elif len(parts) == 1:
+                files_tracked.append(parts[0])
+    else:
+        # Fallback to scanning repo for pointer files matching tracked patterns or known pointer header
+        for root, dirs, f_names in os.walk(repo_path):
+            dirs[:] = [d for d in dirs if d != ".git" and not d.startswith(".")]
+            for f_name in f_names:
+                full_p = os.path.join(root, f_name)
+                rel_p = os.path.relpath(full_p, repo_path)
+                is_match = any(fnmatch.fnmatch(f_name, pat) or fnmatch.fnmatch(rel_p, pat) for pat in patterns)
+                is_ptr = is_lfs_pointer_file(full_p)
+                if is_match or is_ptr:
+                    if rel_p not in files_tracked:
+                        files_tracked.append(rel_p)
+                    if is_ptr:
+                        pointers_count += 1
+
+    if not installed:
+        hygiene = "LFS_NOT_INSTALLED"
+        warning = "Repository configures Git LFS attributes but 'git-lfs' is not installed; files remain raw pointers"
+    elif pointers_count > 0:
+        hygiene = "POINTERS_UNSMUDGED"
+        warning = f"{pointers_count} unsmudged Git LFS pointer(s) detected; local objects missing"
+    else:
+        hygiene = "HEALTHY"
+        warning = None
+
+    return {
+        "has_lfs": True,
+        "enabled": True,
+        "installed": installed,
+        "patterns": patterns,
+        "pattern_count": len(patterns),
+        "files": files_tracked,
+        "files_count": len(files_tracked),
+        "pointers_count": pointers_count,
+        "storage_bytes": storage_bytes,
+        "storage_human": format_bytes_human(storage_bytes),
+        "missing_objects": pointers_count,
+        "objects_count": objects_count,
+        "hygiene": hygiene,
+        "warning": warning,
+    }
+
+
+def pull_lfs_objects(
+    repo_path: str,
+    remote: Optional[str] = None,
+    timeout: int = DEFAULT_TIMEOUT,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    """
+    Explicitly pull Git LFS objects for the current checkout via `git lfs pull`.
+    # INVARIANT: GIT_TERMINAL_PROMPT=0 guarantees authentication failures never block the process.
+    # INVARIANT: When dry_run is True, no LFS object transfer occurs.
+    """
+    if dry_run:
+        return {
+            "success": True,
+            "stdout": "",
+            "stderr": "",
+            "dry_run": True,
+            "would_pull": True,
+        }
+    cmd = ["lfs", "pull"]
+    if remote:
+        cmd.append(remote)
+    proc = run_git(repo_path, cmd, timeout=timeout)
+    return {
+        "success": proc.returncode == 0,
+        "stdout": proc.stdout.strip(),
+        "stderr": proc.stderr.strip(),
+        "dry_run": False,
+        "would_pull": False,
     }
 
 
@@ -2825,6 +3065,22 @@ def check_credentials_sanity(
             "Clear stale lock files using 'git-sync unlock --all' or remove stale .git/*.lock files."
         )
 
+    # 8. Git LFS audit
+    git_lfs = _dispatch_fn("inspect_git_lfs", inspect_git_lfs)(timeout=timeout)
+    lfs_repos: List[str] = []
+    for r_path in target_repos:
+        l_info = _dispatch_fn("get_lfs_info", get_lfs_info)(r_path, timeout=timeout)
+        if l_info.get("has_lfs"):
+            lfs_repos.append(os.path.relpath(r_path, root_dir))
+
+    if lfs_repos and not git_lfs.get("installed"):
+        warnings.append(
+            f"{len(lfs_repos)} repository(ies) use Git LFS, but the 'git-lfs' extension is not installed."
+        )
+        suggestions.append(
+            "Install Git LFS to manage large tracked objects: 'sudo apt install git-lfs && git lfs install'"
+        )
+
     overall_ok = len(errors) == 0
 
     return {
@@ -2838,6 +3094,8 @@ def check_credentials_sanity(
         "ssh_keys": ssh_keys_found,
         "ssh_multiplexing": ssh_mux_info,
         "github_cli": gh_info,
+        "git_lfs": git_lfs,
+        "lfs_repos": lfs_repos,
         "credential_helpers": credential_helpers,
         "credential_helper_diagnostics": cred_diag,
         "has_token_env": has_token_env,
@@ -4307,6 +4565,8 @@ def inspect_repo(
         "stale_worktrees": stale_worktrees,
         "submodules": submodules,
         "is_shallow": is_shallow_repository(repo_path),
+        "has_lfs": False,
+        "lfs": None,
         "sparse_checkout": {
             "enabled": False,
             "cone_mode": False,
@@ -4338,6 +4598,11 @@ def inspect_repo(
     # 2b. Sparse-checkout status and cone diagnostics
     sc_info = cache.get_sparse_checkout_info(repo_path, dirty_files=dirty_files, timeout=5) if cache else get_sparse_checkout_info(repo_path, dirty_files=dirty_files, timeout=5)
     info["sparse_checkout"] = sc_info
+
+    # 2c. Git LFS tracking and storage diagnostics
+    lfs_info = cache.get_lfs_info(repo_path, timeout=5) if cache else get_lfs_info(repo_path, timeout=5)
+    info["has_lfs"] = lfs_info.get("has_lfs", False)
+    info["lfs"] = lfs_info
 
     # 3. Remotes
     remotes = cache.get_remotes(repo_path, timeout=5) if cache else get_repo_remotes(repo_path, timeout=5)
@@ -4596,6 +4861,8 @@ def pull_repo(
     submodules: bool = False,
     unshallow: bool = False,
     reapply_sparse: bool = False,
+    lfs: bool = False,
+    no_lfs: bool = False,
 ) -> Dict[str, Any]:
     """
     Pull updates for a single repository.
@@ -4607,6 +4874,7 @@ def pull_repo(
     # INVARIANT: If unstash encounters a conflict, the stash is preserved in stash@{0} and the conflict is isolated.
     # INVARIANT: When dry_run is True, no working tree modifications, stashes, or ref updates occur.
     # INVARIANT: When reapply_sparse is True or sparse-checkout is configured, cone patterns are safely reapplied and isolated.
+    # INVARIANT: When no_lfs is True, GIT_LFS_SKIP_SMUDGE=1 skips downloading large binary payloads for bandwidth savings.
     """
     curr_branch = run_git(repo_path, ["branch", "--show-current"]).stdout.strip()
 
@@ -4617,6 +4885,9 @@ def pull_repo(
     checked_out_branches = wt_info.get("checked_out_branches", {})
 
     sparse_info = cache.get_sparse_checkout_info(repo_path, timeout=5) if cache else get_sparse_checkout_info(repo_path, timeout=5)
+    lfs_info = cache.get_lfs_info(repo_path, timeout=5) if cache else get_lfs_info(repo_path, timeout=5)
+    repo_has_lfs = lfs_info.get("has_lfs", False)
+    pull_extra_env: Optional[Dict[str, str]] = {"GIT_LFS_SKIP_SMUDGE": "1"} if no_lfs else None
 
     if dry_run:
         is_dirty, dirty_files = check_repo_dirty(repo_path, timeout=timeout, cache=cache)
@@ -4680,6 +4951,12 @@ def pull_repo(
                 "unshallow": unshallow,
                 "sparse_checkout": sparse_info,
                 "reapply_sparse": reapply_sparse,
+                "lfs": {
+                    "has_lfs": repo_has_lfs,
+                    "skipped": no_lfs,
+                    "fetched": lfs,
+                    "objects_count": lfs_info.get("objects_count", 0),
+                },
                 "stale_refs": prune_res.get("stale_refs", []),
                 "pruned_refs": prune_res.get("pruned_refs", []),
                 "would_prune_refs": prune_res.get("would_prune_refs", []),
@@ -4741,6 +5018,20 @@ def pull_repo(
             prefix = f"[DRY-RUN] Reapplying sparse-checkout cone filters ({sc_pat_cnt} pattern(s))\n"
             stdout = (prefix + stdout).strip() if stdout else prefix.strip()
 
+        lfs_res: Dict[str, Any] = {
+            "has_lfs": repo_has_lfs,
+            "skipped": no_lfs,
+            "fetched": lfs,
+            "objects_count": lfs_info.get("objects_count", 0),
+        }
+        if repo_has_lfs:
+            if no_lfs:
+                lfs_prefix = "[DRY-RUN] Bandwidth control active: skipping Git LFS payload download (GIT_LFS_SKIP_SMUDGE=1)\n"
+                stdout = (lfs_prefix + stdout).strip() if stdout else lfs_prefix.strip()
+            elif lfs:
+                lfs_prefix = "[DRY-RUN] Bandwidth control active: would pull Git LFS objects via 'git lfs pull'\n"
+                stdout = (lfs_prefix + stdout).strip() if stdout else lfs_prefix.strip()
+
         res_dict: Dict[str, Any] = {
             "repo": repo_path,
             "branch": curr_branch,
@@ -4760,6 +5051,7 @@ def pull_repo(
             "unshallow": unshallow,
             "sparse_checkout": sparse_info,
             "reapply_sparse": reapply_sparse,
+            "lfs": lfs_res,
             "stale_refs": prune_res.get("stale_refs", []),
             "pruned_refs": prune_res.get("pruned_refs", []),
             "would_prune_refs": prune_res.get("would_prune_refs", []),
@@ -4853,7 +5145,7 @@ def pull_repo(
         cmd.extend([remote, curr_branch])
 
     t_pull = time.perf_counter()
-    proc = run_git_with_retry(repo_path, cmd, timeout=timeout, benchmark=benchmark)
+    proc = run_git_with_retry(repo_path, cmd, timeout=timeout, benchmark=benchmark, extra_env=pull_extra_env)
     if benchmark:
         benchmark.record_network_latency(time.perf_counter() - t_pull)
 
@@ -4868,7 +5160,7 @@ def pull_repo(
         if recover_stale_lock and diagnostic and diagnostic.get("category") == "INDEX_LOCKED":
             rec_ok, _ = recover_index_lock(repo_path, force=False, max_age_seconds=300.0)
             if rec_ok:
-                proc = run_git_with_retry(repo_path, cmd, timeout=timeout, benchmark=benchmark)
+                proc = run_git_with_retry(repo_path, cmd, timeout=timeout, benchmark=benchmark, extra_env=pull_extra_env)
                 success = (proc.returncode == 0)
                 stdout = proc.stdout.strip()
                 stderr = proc.stderr.strip()
@@ -4901,7 +5193,7 @@ def pull_repo(
                         # to prevent collision and git error 128 (refusing to fetch into checked out branch).
                         worktree_isolated[b_name] = checked_out_branches[b_name]
                         continue
-                    ff_p = run_git(repo_path, ["fetch", ".", f"{b_up}:{b_name}"])
+                    ff_p = run_git(repo_path, ["fetch", ".", f"{b_up}:{b_name}"], extra_env=pull_extra_env)
                     if ff_p.returncode != 0 and (
                         "Refusing to fetch into current branch" in ff_p.stderr
                         or "Cannot force update" in ff_p.stderr
@@ -4961,6 +5253,21 @@ def pull_repo(
             reapply_err = sparse_reapply_res.get("stderr") or "Failed to reapply sparse-checkout"
             stderr = f"{stderr}\n{reapply_err}".strip() if stderr else reapply_err
 
+    lfs_pull_res: Optional[Dict[str, Any]] = None
+    if success and lfs and not no_lfs and repo_has_lfs:
+        lfs_pull_res = _dispatch_fn("pull_lfs_objects", pull_lfs_objects)(repo_path, timeout=timeout)
+        if not lfs_pull_res.get("success"):
+            lfs_err = lfs_pull_res.get("stderr") or "Git LFS pull failed"
+            stderr = f"{stderr}\n{lfs_err}".strip() if stderr else lfs_err
+
+    lfs_res: Dict[str, Any] = {
+        "has_lfs": repo_has_lfs,
+        "skipped": no_lfs,
+        "fetched": (lfs and not no_lfs),
+        "pull_result": lfs_pull_res,
+        "objects_count": lfs_info.get("objects_count", 0),
+    }
+
     result_dict: Dict[str, Any] = {
         "repo": repo_path,
         "branch": curr_branch,
@@ -4980,6 +5287,7 @@ def pull_repo(
         "sparse_checkout": sparse_info,
         "reapply_sparse": reapply_sparse,
         "sparse_reapply": sparse_reapply_res,
+        "lfs": lfs_res,
         "stale_refs": prune_res.get("stale_refs", []),
         "pruned_refs": prune_res.get("pruned_refs", []),
         "would_prune_refs": prune_res.get("would_prune_refs", []),
@@ -5987,10 +6295,12 @@ __all__ = [
     "find_push_pending_repos",
     "find_repo_locks",
     "find_ssh_control_sockets",
+    "format_bytes_human",
     "format_changelog_summary",
     "get_divergence_details",
     "get_divergence_diff",
     "get_git_env",
+    "get_lfs_info",
     "get_repo_commits",
     "get_repo_git_dir",
     "get_repo_pending_changelog",
@@ -6000,11 +6310,13 @@ __all__ = [
     "get_worktree_info",
     "inspect_credential_helpers",
     "inspect_github_cli",
+    "inspect_git_lfs",
     "inspect_repo",
     "inspect_ssh_config",
     "inspect_ssh_control_socket",
     "inspect_token_env",
     "is_branch_protected",
+    "is_lfs_pointer_file",
     "is_path_in_cone",
     "is_shallow_repository",
     "is_transient_network_error",
@@ -6015,6 +6327,7 @@ __all__ = [
     "prune_repo_remotes",
     "prune_repo_worktrees",
     "prune_stale_ssh_control_sockets",
+    "pull_lfs_objects",
     "pull_repo",
     "push_repo",
     "reapply_sparse_checkout",
