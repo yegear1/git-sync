@@ -163,6 +163,99 @@ class TestPackagingAndDistributionHygiene(unittest.TestCase):
         self.assertEqual(res.returncode, 0)
         self.assertIn(f"git-sync {__version__}", res.stdout)
 
+    def test_public_facade_and_engine_symbol_parity(self) -> None:
+        """Validate 100% symbol parity across git_sync.engine, engine.git, and git_sync.core."""
+        import git_sync.core as core_mod
+        import git_sync.engine as engine_mod
+        import git_sync.engine.git as engine_git_mod
+        import git_sync.engine.concurrency as concurrency_mod
+
+        # Verify engine re-exports all symbols from engine.git and engine.concurrency
+        expected_engine_symbols = set(engine_git_mod.__all__) | set(concurrency_mod.__all__)
+        actual_engine_symbols = set(engine_mod.__all__)
+        self.assertEqual(
+            actual_engine_symbols,
+            expected_engine_symbols,
+            f"Difference in engine symbols: {actual_engine_symbols ^ expected_engine_symbols}",
+        )
+
+        # Verify 100% symbol parity: all engine symbols MUST exist in core facade
+        core_symbols = set(core_mod.__all__)
+        missing_in_core = actual_engine_symbols - core_symbols
+        self.assertEqual(
+            missing_in_core,
+            set(),
+            f"Symbols exported by git_sync.engine but missing in git_sync.core: {missing_in_core}",
+        )
+
+        # Verify object identity parity for all engine symbols
+        for sym in engine_mod.__all__:
+            engine_obj = getattr(engine_mod, sym)
+            core_obj = getattr(core_mod, sym)
+            self.assertIs(
+                core_obj,
+                engine_obj,
+                f"Symbol '{sym}' in git_sync.core is not identical to git_sync.engine",
+            )
+
+        # Specifically verify newly synchronized symbols are present
+        required_symbols = [
+            "get_sparse_checkout_info",
+            "is_path_in_cone",
+            "is_shallow_repository",
+            "reapply_sparse_checkout",
+            "unshallow_submodule",
+            "update_submodules",
+            "ClassifiedCommit",
+            "classify_commit",
+            "inspect_credential_helpers",
+            "inspect_token_env",
+            "get_git_env",
+        ]
+        for sym in required_symbols:
+            self.assertIn(sym, engine_mod.__all__, f"{sym} missing from engine.__all__")
+            self.assertIn(sym, core_mod.__all__, f"{sym} missing from core.__all__")
+            self.assertTrue(hasattr(engine_mod, sym), f"{sym} not found on engine module")
+            self.assertTrue(hasattr(core_mod, sym), f"{sym} not found on core module")
+
+    def test_dynamic_git_env_construction_and_runtime_propagation(self) -> None:
+        """Verify dynamic GIT_ENV construction propagates os.environ mutations to subprocesses."""
+        from git_sync.engine.git import _real_run_git, get_git_env
+
+        test_var_name = "GIT_SYNC_TEST_PROPAGATION_VAR"
+        test_val = "verified_dynamic_propagation_token_123"
+
+        original_val = os.environ.get(test_var_name)
+        try:
+            # Mutate os.environ at runtime
+            os.environ[test_var_name] = test_val
+            os.environ["SSH_AUTH_SOCK"] = "/tmp/mock_agent_socket.sock"
+
+            # Check get_git_env() reflects runtime mutations dynamically
+            dynamic_env = get_git_env()
+            self.assertEqual(dynamic_env.get(test_var_name), test_val)
+            self.assertEqual(dynamic_env.get("SSH_AUTH_SOCK"), "/tmp/mock_agent_socket.sock")
+            self.assertEqual(dynamic_env.get("GIT_TERMINAL_PROMPT"), "0")
+            self.assertEqual(dynamic_env.get("PAGER"), "cat")
+
+            # Verify _real_run_git passes dynamically constructed env to subprocess.run
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+                _real_run_git("/tmp", ["status"])
+
+                self.assertTrue(mock_run.called)
+                _, kwargs = mock_run.call_args
+                passed_env = kwargs.get("env", {})
+                self.assertEqual(passed_env.get(test_var_name), test_val)
+                self.assertEqual(passed_env.get("SSH_AUTH_SOCK"), "/tmp/mock_agent_socket.sock")
+                self.assertEqual(passed_env.get("GIT_TERMINAL_PROMPT"), "0")
+                self.assertEqual(passed_env.get("PAGER"), "cat")
+        finally:
+            if original_val is None:
+                os.environ.pop(test_var_name, None)
+            else:
+                os.environ[test_var_name] = original_val
+
 
 if __name__ == "__main__":
     unittest.main()

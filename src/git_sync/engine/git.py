@@ -111,10 +111,18 @@ TOOL_DIR_PREFIXES = (
     ".gemini",
 )
 
+def get_git_env() -> Dict[str, str]:
+    """
+    Dynamically build subprocess execution environment inheriting active os.environ while enforcing safety invariants.
+    # INVARIANT: GIT_TERMINAL_PROMPT=0 guarantees git never blocks on interactive auth/passphrase prompts.
+    # INVARIANT: PAGER=cat prevents paginated output hangs.
+    """
+    return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "PAGER": "cat"}
+
+
 # INVARIANT: GIT_TERMINAL_PROMPT=0 guarantees git never blocks on interactive auth/passphrase prompts
-GIT_ENV = os.environ.copy()
-GIT_ENV["GIT_TERMINAL_PROMPT"] = "0"
-GIT_ENV["PAGER"] = "cat"
+# Static mapping retained for backwards compatibility
+GIT_ENV = get_git_env()
 
 
 def _real_run_git(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOUT) -> subprocess.CompletedProcess[str]:
@@ -125,7 +133,7 @@ def _real_run_git(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOU
         stderr=subprocess.PIPE,
         text=True,
         timeout=timeout,
-        env=GIT_ENV,
+        env=get_git_env(),
     )
 
 
@@ -851,7 +859,7 @@ def inspect_ssh_config(
                 stderr=subprocess.DEVNULL,
                 text=True,
                 timeout=timeout,
-                env=GIT_ENV,
+                env=get_git_env(),
             )
             if proc.returncode == 0:
                 for line in proc.stdout.splitlines():
@@ -1126,7 +1134,7 @@ def close_ssh_control_socket(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=timeout,
-            env=GIT_ENV,
+            env=get_git_env(),
         )
     except Exception:
         pass
@@ -1551,7 +1559,7 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
             stderr=subprocess.PIPE,
             text=True,
             timeout=timeout,
-            env=GIT_ENV,
+            env=get_git_env(),
         )
         combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
         combined_lower = combined.lower()
@@ -1799,7 +1807,7 @@ def inspect_credential_helpers(
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=timeout,
-                env=GIT_ENV,
+                env=eff_env if eff_env is not None else get_git_env(),
             )
             if p_helper.returncode == 0:
                 raw_list = [h.strip() for h in p_helper.stdout.splitlines()]
@@ -2302,7 +2310,7 @@ def check_credentials_sanity(
             stderr=subprocess.PIPE,
             text=True,
             timeout=timeout,
-            env=GIT_ENV,
+            env=get_git_env(),
         )
         if p_ssh_add.returncode == 0:
             agent_status = "ACTIVE"
@@ -2336,7 +2344,7 @@ def check_credentials_sanity(
             stderr=subprocess.PIPE,
             text=True,
             timeout=timeout,
-            env=GIT_ENV,
+            env=get_git_env(),
         )
         if p_helper.returncode == 0:
             raw_helper_lines = [h.strip() for h in p_helper.stdout.splitlines()]
@@ -5660,6 +5668,9 @@ def resolve_divergence(
 
 
 __all__ = [
+    "CHANGELOG_CATEGORY_ORDER",
+    "CONVENTIONAL_CATEGORY_MAP",
+    "ClassifiedCommit",
     "DEFAULT_BACKOFF_FACTOR",
     "DEFAULT_CHARS_PER_TOKEN",
     "DEFAULT_COMPACT_DIFF_TOKENS",
@@ -5684,6 +5695,7 @@ __all__ = [
     "benchmark_ssh_multiplexing",
     "check_credentials_sanity",
     "check_repo_dirty",
+    "classify_commit",
     "close_ssh_control_socket",
     "compute_latency_grade",
     "delete_local_branches",
@@ -5694,20 +5706,29 @@ __all__ = [
     "find_push_pending_repos",
     "find_repo_locks",
     "find_ssh_control_sockets",
+    "format_changelog_summary",
     "get_divergence_details",
     "get_divergence_diff",
+    "get_git_env",
+    "get_repo_commits",
     "get_repo_git_dir",
+    "get_repo_pending_changelog",
     "get_repo_remotes",
+    "get_sparse_checkout_info",
     "get_submodules_status",
     "get_worktree_info",
+    "inspect_credential_helpers",
     "inspect_github_cli",
     "inspect_repo",
     "inspect_ssh_config",
     "inspect_ssh_control_socket",
+    "inspect_token_env",
     "is_branch_protected",
+    "is_path_in_cone",
     "is_shallow_repository",
     "is_transient_network_error",
     "match_repo",
+    "parse_commit_log",
     "preflight_push_check",
     "probe_remote_reachability",
     "prune_repo_remotes",
@@ -5715,6 +5736,7 @@ __all__ = [
     "prune_stale_ssh_control_sockets",
     "pull_repo",
     "push_repo",
+    "reapply_sparse_checkout",
     "recover_index_lock",
     "recover_repo_locks",
     "resolve_default_root",
@@ -5724,6 +5746,7 @@ __all__ = [
     "run_git_with_retry",
     "split_diff_files",
     "stash_changes",
+    "summarize_commit_categories",
     "truncate_diff",
     "unshallow_submodule",
     "update_submodules",
