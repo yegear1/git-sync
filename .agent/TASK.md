@@ -7,14 +7,14 @@
 
 ## Active Task
 
-### 📌 Task [00.24]: Engine Modularization Phase 2 — Extract Changelog Classifier & Diff Chunker (`engine/changelog.py`, `engine/diff.py`)
+### 📌 Task [00.25]: Engine Modularization Phase 3 — Extract Worktree, Submodule & Sparse-Checkout Managers (`engine/topology.py`)
 - **Status:** RUNNING
-- **Paths:** `src/git_sync/engine/changelog.py`, `src/git_sync/engine/diff.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
-- **Description:** Extract `ClassifiedCommit`, Conventional Commit parsing, and Keep-a-Changelog summarization into `src/git_sync/engine/changelog.py`, and extract token-budget aware diff splitting/truncation (`split_diff_files`, `truncate_diff`, `get_divergence_diff`) into `src/git_sync/engine/diff.py`.
-- **Systems Involved:** `src/git_sync/engine/changelog.py`, `src/git_sync/engine/diff.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Paths:** `src/git_sync/engine/topology.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
+- **Description:** Extract linked worktree inspection/pruning, submodule status/update/unshallow operations, sparse-checkout cone diagnostics, and stale lock recovery into `src/git_sync/engine/topology.py`, reducing `src/git_sync/engine/git.py` to core runner, discovery, status inspection, and pull/push/resolve orchestration.
+- **Systems Involved:** `src/git_sync/engine/topology.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
 - **Acceptance Criteria:**
-  - [ ] Changelog and diff chunking logic are isolated into standalone testable modules.
-  - [ ] All existing imports from `git_sync.engine` and `git_sync.core` remain 100% backward-compatible.
+  - [ ] Topology functions (worktrees, submodules, sparse-checkout, locks) are isolated into `engine/topology.py`.
+  - [ ] All public re-exports in `engine/git.py`, `engine/__init__.py`, and `core.py` maintain 100% backward compatibility and object identity.
   - [ ] Full packaging symbol parity and unit test suite pass with exit code 0.
 
 ---
@@ -47,21 +47,13 @@
 | [00.21] | CI Pipeline Recursive Bytecode Compilation, Strict Mypy Gate, and Python Version Alignment | [f838659] | 2026-11-08 |
 | [00.22] | Public Facade Re-Export Parity (`__all__`) and Dynamic `GIT_ENV` Construction | [ecc14c5] | 2026-11-08 |
 | [00.23] | Engine Modularization Phase 1 — Extract SSH Multiplexing & Credential Diagnostics | [2c2a2d5] | 2026-11-08 |
+| [00.24] | Engine Modularization Phase 2 — Extract Changelog Classifier & Diff Chunker | [ccbb332] | 2026-11-08 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-### 📌 Task [00.25]: Engine Modularization Phase 3 — Extract Worktree, Submodule & Sparse-Checkout Managers (`engine/topology.py`)
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/engine/topology.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
-- **Description:** Extract linked worktree inspection/pruning, submodule status/update/unshallow operations, sparse-checkout cone diagnostics, and stale lock recovery into `src/git_sync/engine/topology.py`, reducing `src/git_sync/engine/git.py` to core runner, discovery, status inspection, and pull/push/resolve orchestration.
-- **Systems Involved:** `src/git_sync/engine/topology.py`, `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/core.py`
-- **Acceptance Criteria:**
-  - [ ] `src/git_sync/engine/git.py` line count is reduced by >45% with clear domain boundaries.
-  - [ ] Full unit test suite passes with zero regressions.
 
 ### 📌 Task [00.26]: Test Mock Decoupling and Elimination of Runtime `sys.modules` Dispatch (`_dispatch_fn`)
 - **Status:** APPROVED
