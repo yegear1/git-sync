@@ -7,14 +7,13 @@
 
 ## Active Task
 
-### 📌 Task [00.22]: Public Facade Re-Export Parity (`__all__`) and Dynamic `GIT_ENV` Construction
-- **Status:** RUNNING
-- **Paths:** `src/git_sync/core.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/engine/git.py`, `tests/test_packaging.py`
-- **Description:** Synchronize `__all__` exports across `src/git_sync/engine/git.py`, `src/git_sync/engine/__init__.py`, and `src/git_sync/core.py` (including `get_sparse_checkout_info`, `is_path_in_cone`, `is_shallow_repository`, `reapply_sparse_checkout`, `unshallow_submodule`, `update_submodules`, `ClassifiedCommit`, `classify_commit`, `inspect_credential_helpers`, `inspect_token_env`), add an automated export-parity unit test in `tests/test_packaging.py`, and build the Git subprocess environment dynamically in `_real_run_git` (`{**os.environ, ...}`) instead of freezing `GIT_ENV` at module import time.
-- **Systems Involved:** `src/git_sync/core.py`, `src/git_sync/engine/__init__.py`, `src/git_sync/engine/git.py`, `tests/test_packaging.py`
+### 📌 Task [00.18]: Parallel Batch Worktree Health Audit and Multi-Remote Connectivity Matrix
+- **Status:** PLANNING
+- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
+- **Description:** Provide parallel cross-remote reachability matrix and worktree health audit across multi-origin upstream setups in Doctor and status.
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
 - **Acceptance Criteria:**
-  - [ ] Automated test verifies 100% symbol parity between `git_sync.engine` and `git_sync.core`.
-  - [ ] Runtime mutations to `os.environ` (e.g., `SSH_AUTH_SOCK`, `GITHUB_TOKEN`, `HOME`) propagate to `_real_run_git` while preserving `GIT_TERMINAL_PROMPT=0` and `PAGER=cat`.
+  - [ ] Matrix visualization of multi-remote reachability and latency grades in doctor and status.
   - [ ] Canonical test suite passes with exit code 0.
 
 ---
@@ -43,21 +42,13 @@
 | [00.17] | Fine-Grained Git Credential Helper Triage and Keychain Expiry Diagnostics | [e1e0571] | 2026-10-31 |
 | [00.20] | Setuptools PEP 639 License Warning Suppression and Distribution Validator Completeness | [9ef3ab8] | 2026-11-08 |
 | [00.21] | CI Pipeline Recursive Bytecode Compilation, Strict Mypy Gate, and Python Version Alignment | [f838659] | 2026-11-08 |
+| [00.22] | Public Facade Re-Export Parity (`__all__`) and Dynamic `GIT_ENV` Construction | [ecc14c5] | 2026-11-08 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-### 📌 Task [00.18]: Parallel Batch Worktree Health Audit and Multi-Remote Connectivity Matrix
-- **Status:** READY FOR PLANNING
-- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
-- **Description:** Provide parallel cross-remote reachability matrix and worktree health audit across multi-origin upstream setups in Doctor and status.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/cli.py`, `tests/test_credentials_and_network.py`
-- **Acceptance Criteria:**
-  - [ ] Matrix visualization of multi-remote reachability and latency grades in doctor and status.
-  - [ ] Canonical test suite passes with exit code 0.
 
 ### 📌 Task [00.19]: Automated Git LFS Object Tracking and Bandwidth-Aware Fetch Controls
 - **Status:** APPROVED
