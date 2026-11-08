@@ -31,7 +31,11 @@ jobs:
 
       - name: Syntax and bytecode compilation check
         run: |
-          python -m py_compile src/git_sync/*.py tests/*.py scripts/build.py
+          python3 -m py_compile src/git_sync/*.py src/git_sync/engine/*.py src/git_sync/ui/*.py tests/*.py
+
+      - name: Strict mypy verification
+        run: |
+          mypy --strict src/git_sync
 
       - name: Git diff and whitespace hygiene check
         run: |
