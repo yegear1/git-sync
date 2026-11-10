@@ -7,15 +7,20 @@
 
 ## Active Task
 
-### 📌 Task [00.28]: CLI Subcommand Modularization
+### 📌 Task [00.29]: Auxiliary Branch Push and Remediation Parity (`AUX_PUSH_PENDING` / `--all-branches` / `--sync-branches`)
 - **Status:** RUNNING
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/`
-- **Description:** Split monolithic formatting/rendering helpers out of `src/git_sync/cli.py` into `src/git_sync/ui/formatters.py`, keeping `src/git_sync/cli.py` focused strictly on argument parsing and command dispatch (<1,200 lines).
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/`
+- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/`
+- **Description:** Fix `AUX_PUSH_PENDING` remediation string to `git-sync push <repo> --sync-branches` (or `--all-branches`) and implement auxiliary branch push capabilities across engine (`push_repo` with `sync_branches`), configuration (`push_sync_branches`), and CLI (`--sync-branches` / `--all-branches` / `--no-sync-branches`). Add smart CLI disambiguation when repository arguments are passed with `--all` and ensure individual branch protection and divergence guards for each auxiliary branch.
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/`
 - **Acceptance Criteria:**
-  - [ ] Monolithic CLI rendering helpers extracted to `src/git_sync/ui/formatters.py`.
-  - [ ] `src/git_sync/cli.py` focused on argument parsing and dispatch.
-  - [ ] All CLI tests pass with exit code 0.
+  - [ ] `inspect_repo` sets remediation to `git-sync push {rel_path} --sync-branches` when `aux_branches_ahead` is detected.
+  - [ ] `push_repo` accepts `sync_branches: bool = True`, discovering auxiliary tracking branches ahead of upstream and pushing them safely.
+  - [ ] Safety guards (protected branch policy, force-push block on protected branches, divergence check) applied to each auxiliary branch independently.
+  - [ ] CLI `push` accepts `--sync-branches`, `--all-branches` (alias), and `--no-sync-branches`.
+  - [ ] CLI smart disambiguation: passing `git-sync push <repo> --all` treats `--all` as `--all-branches` for the specified repo rather than triggering global discovery across all repos.
+  - [ ] Bulk preview and confirmation modes display auxiliary branches pending push.
+  - [ ] Human terminal output renders auxiliary branches push results cleanly with status icons.
+  - [ ] Unit and integration tests verify auxiliary branch push, dry-run, protected branch defenses, and CLI disambiguation.
 
 ---
 
@@ -51,27 +56,13 @@
 | [00.25] | Engine Modularization Phase 3 — Extract Worktree, Submodule & Sparse-Checkout Managers | [84ea732] | 2026-11-08 |
 | [00.26] | Test Mock Decoupling and Elimination of Runtime sys.modules Dispatch (_dispatch_fn) | [1aad0a1] | 2026-11-09 |
 | [00.27] | Strict Domain Payload Contracts (`TypedDict` / `@dataclass`) and Mypy Strict Compliance | [387c626] | 2026-11-09 |
+| [00.28] | CLI Subcommand Modularization into `src/git_sync/ui/formatters.py` | [17d0f9c] | 2026-11-09 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-### 📌 Task [00.29]: Auxiliary Branch Push and Remediation Parity (`AUX_PUSH_PENDING` / `--all-branches` / `--sync-branches`)
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/`
-- **Description:** Fix `AUX_PUSH_PENDING` remediation string to `git-sync push <repo> --sync-branches` (or `--all-branches`) and implement auxiliary branch push capabilities across engine (`push_repo` with `sync_branches`), configuration (`push_sync_branches`), and CLI (`--sync-branches` / `--all-branches` / `--no-sync-branches`). Add smart CLI disambiguation when repository arguments are passed with `--all` and ensure individual branch protection and divergence guards for each auxiliary branch.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/`
-- **Acceptance Criteria:**
-  - [ ] `inspect_repo` sets remediation to `git-sync push {rel_path} --sync-branches` when `aux_branches_ahead` is detected.
-  - [ ] `push_repo` accepts `sync_branches: bool = True`, discovering auxiliary tracking branches ahead of upstream and pushing them safely.
-  - [ ] Safety guards (protected branch policy, force-push block on protected branches, divergence check) applied to each auxiliary branch independently.
-  - [ ] CLI `push` accepts `--sync-branches`, `--all-branches` (alias), and `--no-sync-branches`.
-  - [ ] CLI smart disambiguation: passing `git-sync push <repo> --all` treats `--all` as `--all-branches` for the specified repo rather than triggering global discovery across all repos.
-  - [ ] Bulk preview and confirmation modes display auxiliary branches pending push.
-  - [ ] Human terminal output renders auxiliary branches push results cleanly with status icons.
-  - [ ] Unit and integration tests verify auxiliary branch push, dry-run, protected branch defenses, and CLI disambiguation.
 
 ### 📌 Task [00.30]: CLI Output and Table English Standardization
 - **Status:** APPROVED
