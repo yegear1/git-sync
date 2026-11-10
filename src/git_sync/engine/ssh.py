@@ -11,52 +11,20 @@ import shutil
 import socket
 import stat
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 
-def _dispatch_fn(name: str, fallback_fn: Any) -> Any:
-    """
-    Look up symbol dynamically from git_sync.core or git_sync.engine.git to respect unit test mocks.
-    """
-    for mod_name in (
-        "git_sync.engine.git",
-        "git_sync.core",
-        "git_sync.engine.ssh",
-        "git_sync.engine.credentials",
-        "git_sync.engine.changelog",
-        "git_sync.engine.diff",
-        "git_sync.engine.topology",
-    ):
-        mod = sys.modules.get(mod_name)
-        if mod and hasattr(mod, name):
-            val = getattr(mod, name)
-            if hasattr(val, "mock") or hasattr(val, "assert_called") or "Mock" in type(val).__name__:
-                return val
-
-    mod = sys.modules.get("git_sync.engine.git") or sys.modules.get("git_sync.core")
-    if mod and hasattr(mod, name):
-        return getattr(mod, name)
-    return fallback_fn
-
-
 def _get_git_env() -> Dict[str, str]:
-    mod = sys.modules.get("git_sync.engine.git") or sys.modules.get("git_sync.core")
-    if mod and hasattr(mod, "get_git_env"):
-        return mod.get_git_env()
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    return env
+    from git_sync.engine.git import get_git_env
+    return get_git_env()
 
 
 def _diagnose_git_error(err_text: str, remote_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    mod = sys.modules.get("git_sync.engine.git") or sys.modules.get("git_sync.core")
-    if mod and hasattr(mod, "diagnose_git_error"):
-        return mod.diagnose_git_error(err_text, remote_url)
-    return None
+    from git_sync.engine.git import diagnose_git_error
+    return diagnose_git_error(err_text, remote_url)
 
 
 def _parse_ssh_config_content(
@@ -312,7 +280,7 @@ def find_ssh_control_sockets(
             dirs_to_check.append(p)
     else:
         # Inquire ssh config for configured ControlPath directory
-        cfg_info = _dispatch_fn("inspect_ssh_config", inspect_ssh_config)(
+        cfg_info = inspect_ssh_config(
             config_path=config_path, query_ssh_g=False
         )
         cp = cfg_info.get("control_path")
@@ -362,8 +330,6 @@ def find_ssh_control_sockets(
     found_sockets: List[Dict[str, Any]] = []
     seen_paths: set[str] = set()
 
-    inspect_fn = _dispatch_fn("inspect_ssh_control_socket", inspect_ssh_control_socket)
-
     for d in dirs_to_check:
         try:
             entries = list(d.iterdir())
@@ -402,11 +368,11 @@ def find_ssh_control_sockets(
             if is_sock:
                 if is_dedicated_sockets_dir or matches_pattern:
                     seen_paths.add(canonical)
-                    found_sockets.append(inspect_fn(entry))
+                    found_sockets.append(inspect_ssh_control_socket(entry))
             elif st.st_size == 0 and matches_pattern:
                 # 0-byte corrupted stub file in socket directory
                 seen_paths.add(canonical)
-                found_sockets.append(inspect_fn(entry))
+                found_sockets.append(inspect_ssh_control_socket(entry))
 
     return found_sockets
 
@@ -433,8 +399,7 @@ def close_ssh_control_socket(
         pass
 
     if os.path.exists(path_str):
-        inspect_fn = _dispatch_fn("inspect_ssh_control_socket", inspect_ssh_control_socket)
-        info = inspect_fn(path_str)
+        info = inspect_ssh_control_socket(path_str)
         if info.get("status") != "ACTIVE":
             try:
                 os.unlink(path_str)
@@ -455,8 +420,7 @@ def prune_stale_ssh_control_sockets(
     # INVARIANT: Preserves ACTIVE sockets unless force=True.
     # INVARIANT: Only removes verified unix domain sockets or 0-byte corrupted socket stubs.
     """
-    find_fn = _dispatch_fn("find_ssh_control_sockets", find_ssh_control_sockets)
-    sockets = find_fn(socket_dir=socket_dir, config_path=config_path)
+    sockets = find_ssh_control_sockets(socket_dir=socket_dir, config_path=config_path)
 
     active = [s for s in sockets if s.get("status") == "ACTIVE"]
     stale = [s for s in sockets if s.get("status") == "STALE"]
@@ -464,9 +428,8 @@ def prune_stale_ssh_control_sockets(
 
     to_prune: List[Dict[str, Any]] = list(stale) + list(corrupted)
     if force:
-        close_fn = _dispatch_fn("close_ssh_control_socket", close_ssh_control_socket)
         for act in active:
-            close_fn(act["path"])
+            close_ssh_control_socket(act["path"])
             to_prune.append(act)
 
     pruned: List[str] = []
@@ -649,8 +612,7 @@ def benchmark_ssh_multiplexing(
                     if os.path.exists(os.path.join(tmp_dir, f))
                 ]
                 for s in actual_socks:
-                    close_fn = _dispatch_fn("close_ssh_control_socket", close_ssh_control_socket)
-                    close_fn(s, host=host, timeout=1)
+                    close_ssh_control_socket(s, host=host, timeout=1)
             except Exception:
                 pass
 
@@ -695,24 +657,17 @@ def audit_ssh_multiplexing(
     effective_root = root_dir or DEFAULT_ROOT
     target_repos = repos
     if target_repos is None:
-        disc_fn = _dispatch_fn("discover_repos", None)
-        if disc_fn:
-            target_repos = disc_fn(effective_root)
-        else:
-            from git_sync.engine.git import discover_repos
-            target_repos = discover_repos(effective_root)
+        from git_sync.engine.git import discover_repos
+        target_repos = discover_repos(effective_root)
         if group:
             target_repos = [r for r in target_repos if os.path.relpath(r, effective_root).startswith(group)]
 
     # Collect unique SSH remotes
     ssh_remotes: Dict[str, Tuple[str, str]] = {}  # host -> (remote_url, sample_repo)
-    remotes_fn = _dispatch_fn("get_repo_remotes", None)
-    if not remotes_fn:
-        from git_sync.engine.git import get_repo_remotes
-        remotes_fn = get_repo_remotes
+    from git_sync.engine.git import get_repo_remotes
 
     for r_path in target_repos:
-        r_map = remotes_fn(r_path, timeout=timeout)
+        r_map = get_repo_remotes(r_path, timeout=timeout)
         for _, r_url in r_map.items():
             if r_url and ("@" in r_url or r_url.startswith("ssh://")):
                 host = ""
@@ -725,10 +680,10 @@ def audit_ssh_multiplexing(
                     ssh_remotes[host] = (r_url, r_path)
 
     primary_host = target_host or (list(ssh_remotes.keys())[0] if ssh_remotes else "github.com")
-    config_info = _dispatch_fn("inspect_ssh_config", inspect_ssh_config)(
+    config_info = inspect_ssh_config(
         config_path=config_path, host=primary_host
     )
-    socket_report = _dispatch_fn("prune_stale_ssh_control_sockets", prune_stale_ssh_control_sockets)(
+    socket_report = prune_stale_ssh_control_sockets(
         socket_dir=config_info.get("socket_dir"),
         config_path=config_path,
         dry_run=False,
@@ -742,7 +697,7 @@ def audit_ssh_multiplexing(
                 if primary_host in ssh_remotes
                 else next(iter(ssh_remotes.values()))
             )
-            benchmark_result = _dispatch_fn("benchmark_ssh_multiplexing", benchmark_ssh_multiplexing)(
+            benchmark_result = benchmark_ssh_multiplexing(
                 remote_url=sample_url,
                 host=primary_host,
                 sample_repo=sample_repo,

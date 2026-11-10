@@ -149,6 +149,16 @@ def _real_run_git(
     )
 
 
+GitRunner = Any
+_git_runner: Optional[Any] = None
+
+
+def set_git_runner(runner: Optional[Any]) -> None:
+    """Set custom git execution runner hook (for dependency injection or testing)."""
+    global _git_runner
+    _git_runner = runner
+
+
 def run_git(
     repo_path: str,
     args: List[str],
@@ -156,35 +166,9 @@ def run_git(
     extra_env: Optional[Dict[str, str]] = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute a git command within a repository directory with safe timeouts and environment."""
-    return _run_git(repo_path, args, timeout=timeout, extra_env=extra_env)
-
-
-def _run_git(
-    repo_path: str,
-    args: List[str],
-    timeout: int = DEFAULT_TIMEOUT,
-    extra_env: Optional[Dict[str, str]] = None,
-) -> subprocess.CompletedProcess[str]:
-    core = sys.modules.get("git_sync.core")
-    if core is not None:
-        target = getattr(core, "run_git", None)
-        if target is not None and target is not run_git:
-            try:
-                return target(repo_path, args, timeout=timeout, extra_env=extra_env)
-            except TypeError:
-                return target(repo_path, args, timeout=timeout)
+    if _git_runner is not None:
+        return _git_runner(repo_path, args, timeout=timeout, extra_env=extra_env)
     return _real_run_git(repo_path, args, timeout=timeout, extra_env=extra_env)
-
-
-def _dispatch_fn(name: str, fallback: Any) -> Any:
-    if hasattr(fallback, "_mock_return_value") or hasattr(fallback, "_mock_wraps") or hasattr(fallback, "mock_calls"):
-        return fallback
-    core = sys.modules.get("git_sync.core")
-    if core is not None:
-        target = getattr(core, name, None)
-        if target is not None and target is not fallback:
-            return target
-    return fallback
 
 
 def diagnose_git_error(error_text: str, remote_url: Optional[str] = None) -> Optional[Dict[str, str]]:
@@ -448,7 +432,7 @@ def run_git_with_retry(
                     or ("controlpath" in proc.stderr.lower() and "connection refused" in proc.stderr.lower())
                 ):
                     try:
-                        _dispatch_fn("prune_stale_ssh_control_sockets", prune_stale_ssh_control_sockets)()
+                        prune_stale_ssh_control_sockets()
                     except Exception:
                         pass
                 if benchmark:
@@ -588,7 +572,7 @@ def get_lfs_info(repo_path: str, timeout: int = 5) -> Dict[str, Any]:
         except Exception:
             pass
 
-    lfs_env = _dispatch_fn("inspect_git_lfs", inspect_git_lfs)(timeout=timeout)
+    lfs_env = inspect_git_lfs(timeout=timeout)
     installed = bool(lfs_env.get("installed", False))
 
     has_lfs = bool(patterns or objects_dir.is_dir())
@@ -754,8 +738,7 @@ def audit_multi_remote_matrix(
     eff_workers = max(1, min(32, workers if isinstance(workers, int) else 8))
     target_repos = repos
     if target_repos is None:
-        discover_fn = _dispatch_fn("discover_repos", discover_repos)
-        target_repos = discover_fn(root_dir)
+        target_repos = discover_repos(root_dir)
         if group:
             target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
 
@@ -763,9 +746,8 @@ def audit_multi_remote_matrix(
     repo_remotes_map: Dict[str, Dict[str, str]] = {}
     unique_remotes_to_sample: Dict[str, str] = {}  # url -> sample_repo
 
-    get_remotes_fn = _dispatch_fn("get_repo_remotes", get_repo_remotes)
     for r_path in target_repos:
-        r_map = get_remotes_fn(r_path, timeout=timeout)
+        r_map = get_repo_remotes(r_path, timeout=timeout)
         if r_map:
             repo_remotes_map[r_path] = r_map
             for _, r_url in r_map.items():
@@ -774,7 +756,7 @@ def audit_multi_remote_matrix(
                         unique_remotes_to_sample[r_url] = r_path
 
     # 2. Probe unique remotes concurrently
-    probe_fn = _dispatch_fn("probe_remote_reachability", probe_remote_reachability)
+    probe_fn = probe_remote_reachability
 
     def _probe_worker(item: Tuple[str, str]) -> Tuple[str, Dict[str, Any]]:
         url, sample_repo = item
@@ -1673,7 +1655,7 @@ def inspect_repo(
 
     if not info["fetch_ok"]:
         err_text = info.get("fetch_error") or ""
-        diag = _dispatch_fn("diagnose_git_error", diagnose_git_error)(err_text, info.get("remote_url"))
+        diag = diagnose_git_error(err_text, info.get("remote_url"))
         info["diagnostic"] = diag
         if diag:
             info["action_required"] = diag["action_required"]
@@ -1890,7 +1872,7 @@ def pull_repo(
         repo_is_shallow = is_shallow_repository(repo_path)
         submodules_res: Optional[Dict[str, Any]] = None
         if submodules or unshallow:
-            submodules_res = _dispatch_fn("update_submodules", update_submodules)(
+            submodules_res = update_submodules(
                 repo_path,
                 recursive=True,
                 init=True,
@@ -2201,7 +2183,7 @@ def pull_repo(
 
     submodules_res: Optional[Dict[str, Any]] = None
     if (submodules or unshallow) and success:
-        submodules_res = _dispatch_fn("update_submodules", update_submodules)(
+        submodules_res = update_submodules(
             repo_path,
             recursive=True,
             init=True,
@@ -2217,7 +2199,7 @@ def pull_repo(
 
     sparse_reapply_res: Optional[Dict[str, Any]] = None
     if reapply_sparse and sparse_info.get("enabled") and success:
-        sparse_reapply_res = _dispatch_fn("reapply_sparse_checkout", reapply_sparse_checkout)(
+        sparse_reapply_res = reapply_sparse_checkout(
             repo_path,
             cone=sparse_info.get("cone_mode", True),
             timeout=timeout,
@@ -2228,7 +2210,7 @@ def pull_repo(
 
     lfs_pull_res: Optional[Dict[str, Any]] = None
     if success and lfs and not no_lfs and repo_has_lfs:
-        lfs_pull_res = _dispatch_fn("pull_lfs_objects", pull_lfs_objects)(repo_path, timeout=timeout)
+        lfs_pull_res = pull_lfs_objects(repo_path, timeout=timeout)
         if not lfs_pull_res.get("success"):
             lfs_err = lfs_pull_res.get("stderr") or "Git LFS pull failed"
             stderr = f"{stderr}\n{lfs_err}".strip() if stderr else lfs_err
@@ -3089,6 +3071,7 @@ __all__ = [
     "restore_stash",
     "run_git",
     "run_git_with_retry",
+    "set_git_runner",
     "split_diff_files",
     "stash_changes",
     "summarize_commit_categories",

@@ -5,34 +5,8 @@ Commit categorization, Conventional Commit parsing, and Keep-a-Changelog summari
 from __future__ import annotations
 
 import re
-import sys
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
-
-
-def _dispatch_fn(name: str, fallback_fn: Any = None) -> Any:
-    """
-    Look up symbol dynamically from git_sync.core or git_sync.engine.git to respect unit test mocks.
-    """
-    for mod_name in (
-        "git_sync.engine.git",
-        "git_sync.core",
-        "git_sync.engine.changelog",
-        "git_sync.engine.diff",
-        "git_sync.engine.ssh",
-        "git_sync.engine.credentials",
-        "git_sync.engine.topology",
-    ):
-        mod = sys.modules.get(mod_name)
-        if mod and hasattr(mod, name):
-            val = getattr(mod, name)
-            if hasattr(val, "mock") or hasattr(val, "assert_called") or "Mock" in type(val).__name__:
-                return val
-
-    mod = sys.modules.get("git_sync.engine.git") or sys.modules.get("git_sync.core")
-    if mod and hasattr(mod, name):
-        return getattr(mod, name)
-    return fallback_fn
 
 
 @dataclass
@@ -194,8 +168,6 @@ def parse_commit_log(log_output: str) -> List[ClassifiedCommit]:
     if not log_output or not log_output.strip():
         return []
 
-    classify_fn = _dispatch_fn("classify_commit", classify_commit)
-
     commits: List[ClassifiedCommit] = []
     records = log_output.split("\x1f")
     for rec in records:
@@ -208,9 +180,9 @@ def parse_commit_log(log_output: str) -> List[ClassifiedCommit]:
             s = parts[1].strip()
             b = parts[2].strip() if len(parts) > 2 else ""
             if h or s:
-                commits.append(classify_fn(h, s, b))
+                commits.append(classify_commit(h, s, b))
         elif len(parts) == 1 and parts[0].strip():
-            commits.append(classify_fn("", parts[0].strip(), ""))
+            commits.append(classify_commit("", parts[0].strip(), ""))
     return commits
 
 
@@ -245,16 +217,13 @@ def format_changelog_summary(categories: Dict[str, int]) -> str:
 
 def get_repo_commits(repo_path: str, revision_range: str, timeout: int = 5) -> List[ClassifiedCommit]:
     """Retrieve and classify commits in the specified revision range using git log formatting."""
-    run_git_fn = _dispatch_fn("run_git")
-    if run_git_fn is None:
-        from git_sync.engine.git import run_git as run_git_fn
+    from git_sync.engine.git import run_git
 
-    proc = run_git_fn(repo_path, ["log", revision_range, "--format=%h%x00%s%x00%b%x1f"], timeout=timeout)
+    proc = run_git(repo_path, ["log", revision_range, "--format=%h%x00%s%x00%b%x1f"], timeout=timeout)
     if proc.returncode != 0:
         return []
 
-    parse_fn = _dispatch_fn("parse_commit_log", parse_commit_log)
-    return parse_fn(proc.stdout)
+    return parse_commit_log(proc.stdout)
 
 
 def get_repo_pending_changelog(
@@ -271,23 +240,20 @@ def get_repo_pending_changelog(
     incoming_commits: List[ClassifiedCommit] = []
     outgoing_commits: List[ClassifiedCommit] = []
 
-    commits_fn = _dispatch_fn("get_repo_commits", get_repo_commits)
-    summarize_fn = _dispatch_fn("summarize_commit_categories", summarize_commit_categories)
-
     up_ref = upstream or "@{u}"
 
     if behind > 0:
-        incoming_commits = commits_fn(repo_path, f"HEAD..{up_ref}", timeout=timeout)
+        incoming_commits = get_repo_commits(repo_path, f"HEAD..{up_ref}", timeout=timeout)
     elif upstream is None and ahead == 0 and behind == 0:
-        incoming_commits = commits_fn(repo_path, f"HEAD..{up_ref}", timeout=timeout)
+        incoming_commits = get_repo_commits(repo_path, f"HEAD..{up_ref}", timeout=timeout)
 
     if ahead > 0:
-        outgoing_commits = commits_fn(repo_path, f"{up_ref}..HEAD", timeout=timeout)
+        outgoing_commits = get_repo_commits(repo_path, f"{up_ref}..HEAD", timeout=timeout)
     elif upstream is None and ahead == 0 and behind == 0:
-        outgoing_commits = commits_fn(repo_path, f"{up_ref}..HEAD", timeout=timeout)
+        outgoing_commits = get_repo_commits(repo_path, f"{up_ref}..HEAD", timeout=timeout)
 
-    inc_cats = summarize_fn(incoming_commits)
-    out_cats = summarize_fn(outgoing_commits)
+    inc_cats = summarize_commit_categories(incoming_commits)
+    out_cats = summarize_commit_categories(outgoing_commits)
     inc_breaking = sum(1 for c in incoming_commits if c.is_breaking)
     out_breaking = sum(1 for c in outgoing_commits if c.is_breaking)
 

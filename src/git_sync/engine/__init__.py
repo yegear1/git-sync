@@ -107,6 +107,7 @@ from git_sync.engine.git import (
     restore_stash,
     run_git,
     run_git_with_retry,
+    set_git_runner,
     stash_changes,
 )
 
@@ -196,6 +197,7 @@ __all__ = [
     "restore_stash",
     "run_git",
     "run_git_with_retry",
+    "set_git_runner",
     "split_diff_files",
     "stash_changes",
     "summarize_commit_categories",

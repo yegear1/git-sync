@@ -437,7 +437,7 @@ class TestFaultInjectionAndHardening(unittest.TestCase):
 
         # Mock run_git to fail once with EOF, then succeed
         call_count = 0
-        def fake_run_git(path, args, timeout):
+        def fake_run_git(path, args, timeout=None, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
@@ -454,7 +454,7 @@ class TestFaultInjectionAndHardening(unittest.TestCase):
                 stderr=""
             )
 
-        with patch("git_sync.core.run_git", side_effect=fake_run_git):
+        with patch("git_sync.engine.git.run_git", side_effect=fake_run_git):
             proc = run_git_with_retry(
                 str(self.repo),
                 ["fetch"],

@@ -5,11 +5,18 @@ Performance benchmarking, telemetry tracking, and in-memory bulk cache for git-s
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+from git_sync.engine.git import get_lfs_info as _engine_get_lfs_info, get_repo_remotes as _engine_get_repo_remotes
+from git_sync.engine.topology import (
+    get_sparse_checkout_info as _engine_get_sparse_checkout_info,
+    get_submodules_status as _engine_get_submodules_status,
+    get_worktree_info as _engine_get_worktree_info,
+    is_path_in_cone as _engine_is_path_in_cone,
+)
 
 if TYPE_CHECKING:
     from git_sync.engine.concurrency import AdaptiveConcurrencyController
@@ -17,15 +24,6 @@ if TYPE_CHECKING:
 DEFAULT_WORKERS = 12
 DEFAULT_DISK_LATENCY_THRESHOLD = 0.20
 DEFAULT_NETWORK_LATENCY_THRESHOLD = 2.0
-
-
-def _get_git_fn(name: str) -> Any:
-    """Helper to dynamically resolve git functions respecting monkeypatching on git_sync.core."""
-    core = sys.modules.get("git_sync.core")
-    if core is not None and hasattr(core, name):
-        return getattr(core, name)
-    from git_sync.engine import git
-    return getattr(git, name)
 
 
 @dataclass
@@ -278,7 +276,7 @@ class BulkCache:
 
     def get_worktree_info(self, repo_path: str, timeout: int = 5) -> Dict[str, Any]:
         norm = os.path.abspath(repo_path)
-        get_wt_info = _get_git_fn("get_worktree_info")
+        get_wt_info = _engine_get_worktree_info
         if not self.enabled:
             return get_wt_info(repo_path, timeout=timeout)
 
@@ -308,7 +306,7 @@ class BulkCache:
 
     def get_remotes(self, repo_path: str, timeout: int = 5) -> Dict[str, str]:
         norm = os.path.abspath(repo_path)
-        get_remotes_fn = _get_git_fn("get_repo_remotes")
+        get_remotes_fn = _engine_get_repo_remotes
         if not self.enabled:
             return get_remotes_fn(repo_path, timeout=timeout)
 
@@ -336,7 +334,7 @@ class BulkCache:
 
         norm = os.path.abspath(repo_path)
         cache_key = f"{norm}:{recursive}:{detailed}"
-        get_submodules_fn = _get_git_fn("get_submodules_status")
+        get_submodules_fn = _engine_get_submodules_status
         if not self.enabled:
             return get_submodules_fn(repo_path, timeout=timeout, recursive=recursive, detailed=detailed)
 
@@ -358,7 +356,7 @@ class BulkCache:
         timeout: int = 5,
     ) -> Dict[str, Any]:
         norm = os.path.abspath(repo_path)
-        get_sc_fn = _get_git_fn("get_sparse_checkout_info")
+        get_sc_fn = _engine_get_sparse_checkout_info
         if not self.enabled:
             return get_sc_fn(repo_path, dirty_files=dirty_files, timeout=timeout)
 
@@ -367,7 +365,7 @@ class BulkCache:
                 base_info = dict(self._sparse_checkout[norm])
                 self._hits += 1
                 if base_info.get("enabled") and base_info.get("cone_mode") and dirty_files is not None:
-                    is_in_cone_fn = _get_git_fn("is_path_in_cone")
+                    is_in_cone_fn = _engine_is_path_in_cone
                     patterns = base_info.get("patterns", [])
                     out_of_cone = [f for f in dirty_files if not is_in_cone_fn(f, patterns)]
                     base_info["out_of_cone_files"] = out_of_cone
@@ -383,7 +381,7 @@ class BulkCache:
 
     def get_lfs_info(self, repo_path: str, timeout: int = 5) -> Dict[str, Any]:
         norm = os.path.abspath(repo_path)
-        get_lfs_fn = _get_git_fn("get_lfs_info")
+        get_lfs_fn = _engine_get_lfs_info
         if not self.enabled:
             return get_lfs_fn(repo_path, timeout=timeout)
 

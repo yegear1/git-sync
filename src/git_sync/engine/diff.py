@@ -4,33 +4,7 @@ Token-budget aware diff chunking, truncation, and divergence diff inspection.
 
 from __future__ import annotations
 
-import sys
 from typing import Any, Dict, List, Optional
-
-
-def _dispatch_fn(name: str, fallback_fn: Any = None) -> Any:
-    """
-    Look up symbol dynamically from git_sync.core or git_sync.engine.git to respect unit test mocks.
-    """
-    for mod_name in (
-        "git_sync.engine.git",
-        "git_sync.core",
-        "git_sync.engine.diff",
-        "git_sync.engine.changelog",
-        "git_sync.engine.ssh",
-        "git_sync.engine.credentials",
-        "git_sync.engine.topology",
-    ):
-        mod = sys.modules.get(mod_name)
-        if mod and hasattr(mod, name):
-            val = getattr(mod, name)
-            if hasattr(val, "mock") or hasattr(val, "assert_called") or "Mock" in type(val).__name__:
-                return val
-
-    mod = sys.modules.get("git_sync.engine.git") or sys.modules.get("git_sync.core")
-    if mod and hasattr(mod, name):
-        return getattr(mod, name)
-    return fallback_fn
 
 
 DEFAULT_COMPACT_DIFF_TOKENS = 1000
@@ -78,8 +52,7 @@ def truncate_diff(
     if len(diff) <= max_chars:
         return diff
 
-    split_fn = _dispatch_fn("split_diff_files", split_diff_files)
-    chunks = split_fn(diff)
+    chunks = split_diff_files(diff)
     if not chunks:
         return diff
 
@@ -137,9 +110,7 @@ def get_divergence_diff(
     # INVARIANT: When max_tokens is provided and stat_only is False, applies deterministic
     # file-boundary aware diff truncation to protect LLM context windows and CLI outputs.
     """
-    run_git_fn = _dispatch_fn("run_git")
-    if run_git_fn is None:
-        from git_sync.engine.git import run_git as run_git_fn
+    from git_sync.engine.git import run_git as run_git_fn
 
     curr_branch = branch or run_git_fn(repo_path, ["branch", "--show-current"], timeout=5).stdout.strip()
     if not curr_branch:
@@ -158,8 +129,7 @@ def get_divergence_diff(
     p_diff = run_git_fn(repo_path, cmd, timeout=timeout)
     diff_text = p_diff.stdout.strip()
     if max_tokens is not None and not stat_only and diff_text:
-        truncate_fn = _dispatch_fn("truncate_diff", truncate_diff)
-        diff_text = truncate_fn(diff_text, max_tokens=max_tokens)
+        diff_text = truncate_diff(diff_text, max_tokens=max_tokens)
     return diff_text
 
 
@@ -173,9 +143,7 @@ def get_divergence_details(
     Returns ahead/behind counts, commit logs (local and remote), merge-base, diffstat, and dirty status.
     # INVARIANT: GIT_TERMINAL_PROMPT=0 prevents interactive prompts when querying git refs.
     """
-    run_git_fn = _dispatch_fn("run_git")
-    if run_git_fn is None:
-        from git_sync.engine.git import run_git as run_git_fn
+    from git_sync.engine.git import run_git as run_git_fn
 
     curr_branch = branch or run_git_fn(repo_path, ["branch", "--show-current"], timeout=5).stdout.strip()
     if not curr_branch:

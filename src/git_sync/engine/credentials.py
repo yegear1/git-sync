@@ -23,43 +23,9 @@ GRADE_B_THRESHOLD_SECONDS: float = 1.50
 GRADE_C_THRESHOLD_SECONDS: float = 3.00
 
 
-def _dispatch_fn(name: str, fallback_fn: Any = None) -> Any:
-    """
-    Look up symbol dynamically from git_sync.core or git_sync.engine.git to respect unit test mocks.
-    """
-    for mod_name in (
-        "git_sync.engine.git",
-        "git_sync.core",
-        "git_sync.engine.credentials",
-        "git_sync.engine.ssh",
-        "git_sync.engine.changelog",
-        "git_sync.engine.diff",
-        "git_sync.engine.topology",
-    ):
-        mod = sys.modules.get(mod_name)
-        if mod and hasattr(mod, name):
-            val = getattr(mod, name)
-            if hasattr(val, "mock") or hasattr(val, "assert_called") or "Mock" in type(val).__name__:
-                return val
-
-    mod = sys.modules.get("git_sync.engine.git") or sys.modules.get("git_sync.core")
-    if mod and hasattr(mod, name):
-        return getattr(mod, name)
-    if fallback_fn is not None:
-        return fallback_fn
-    cur_mod = sys.modules.get(__name__)
-    if cur_mod and hasattr(cur_mod, name):
-        return getattr(cur_mod, name)
-    raise AttributeError(f"Function {name} not found in dispatch modules")
-
-
 def _get_git_env() -> Dict[str, str]:
-    mod = sys.modules.get("git_sync.engine.git") or sys.modules.get("git_sync.core")
-    if mod and hasattr(mod, "get_git_env"):
-        return mod.get_git_env()
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    return env
+    from git_sync.engine.git import get_git_env
+    return get_git_env()
 
 
 def compute_latency_grade(rtt_seconds: Optional[float], ok: bool = True) -> str:
@@ -588,7 +554,7 @@ def inspect_credential_helpers(
         # 3. GitHub CLI credential helper (!gh auth git-credential or gh)
         elif "gh auth git-credential" in h_low or h_low == "gh" or h_low.endswith("/gh"):
             entry["type"] = "gh"
-            eff_gh = gh_info if gh_info is not None else _dispatch_fn("inspect_github_cli", inspect_github_cli)(timeout=timeout)
+            eff_gh = gh_info if gh_info is not None else inspect_github_cli(timeout=timeout)
             if not eff_gh.get("installed"):
                 entry["status"] = "MISSING_BINARY"
                 entry["ok"] = False
@@ -763,7 +729,7 @@ def probe_remote_reachability(
             ):
                 try:
                     from git_sync.engine.ssh import prune_stale_ssh_control_sockets
-                    _dispatch_fn("prune_stale_ssh_control_sockets", prune_stale_ssh_control_sockets)()
+                    prune_stale_ssh_control_sockets()
                     proc_retry = run_git(sample_repo or ".", ["ls-remote", "--heads", remote_url], timeout=timeout)
                     if proc_retry.returncode == 0:
                         rtt = round(time.perf_counter() - t0, 3)
@@ -904,8 +870,8 @@ def check_credentials_sanity(
     )
 
     # 3.5 GitHub CLI (gh) Status & Fine-Grained Credential Helper Triage
-    gh_info = _dispatch_fn("inspect_github_cli", inspect_github_cli)(timeout=timeout)
-    cred_diag = _dispatch_fn("inspect_credential_helpers", inspect_credential_helpers)(
+    gh_info = inspect_github_cli(timeout=timeout)
+    cred_diag = inspect_credential_helpers(
         helpers=raw_helper_lines,
         timeout=timeout,
         gh_info=gh_info,
@@ -913,7 +879,7 @@ def check_credentials_sanity(
 
     target_repos = repos
     if target_repos is None:
-        target_repos = _dispatch_fn("discover_repos", discover_repos)(root_dir)
+        target_repos = discover_repos(root_dir)
         if group:
             target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
 
@@ -921,8 +887,7 @@ def check_credentials_sanity(
     multi_remote_matrix: Dict[str, Any] = {}
     remotes_tested: Dict[str, Dict[str, Any]] = {}
     if test_remotes:
-        multi_matrix_fn = _dispatch_fn("audit_multi_remote_matrix", audit_multi_remote_matrix)
-        multi_remote_matrix = multi_matrix_fn(
+        multi_remote_matrix = audit_multi_remote_matrix(
             root_dir=root_dir,
             repos=target_repos,
             group=group,
@@ -933,8 +898,7 @@ def check_credentials_sanity(
         remotes_tested = multi_remote_matrix.get("probed_remotes", {})
 
     # 5. Worktree Health Audit
-    wt_batch_fn = _dispatch_fn("audit_worktree_health_batch", audit_worktree_health_batch)
-    worktree_health = wt_batch_fn(
+    worktree_health = audit_worktree_health_batch(
         root_dir=root_dir,
         repos=target_repos,
         group=group,
@@ -958,8 +922,8 @@ def check_credentials_sanity(
             ssh_mux_host = u.split("://", 1)[1].split("/", 1)[0]
             break
 
-    ssh_mux_info = _dispatch_fn("inspect_ssh_config", inspect_ssh_config)(host=ssh_mux_host)
-    socket_report = _dispatch_fn("prune_stale_ssh_control_sockets", prune_stale_ssh_control_sockets)(
+    ssh_mux_info = inspect_ssh_config(host=ssh_mux_host)
+    socket_report = prune_stale_ssh_control_sockets(
         socket_dir=ssh_mux_info.get("socket_dir")
     )
     ssh_mux_info["sockets"] = socket_report
@@ -1096,10 +1060,10 @@ def check_credentials_sanity(
         )
 
     # 8. Git LFS audit
-    git_lfs = _dispatch_fn("inspect_git_lfs", inspect_git_lfs)(timeout=timeout)
+    git_lfs = inspect_git_lfs(timeout=timeout)
     lfs_repos: List[str] = []
     for r_path in target_repos:
-        l_info = _dispatch_fn("get_lfs_info", get_lfs_info)(r_path, timeout=timeout)
+        l_info = get_lfs_info(r_path, timeout=timeout)
         if l_info.get("has_lfs"):
             lfs_repos.append(os.path.relpath(r_path, root_dir))
 

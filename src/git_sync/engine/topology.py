@@ -8,7 +8,6 @@ import concurrent.futures
 import os
 import re
 import shutil
-import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -20,59 +19,22 @@ DEFAULT_TIMEOUT: int = 5
 DEFAULT_WORKERS: int = 8
 
 
-def _dispatch_fn(name: str, fallback_fn: Any = None) -> Any:
-    """
-    Look up symbol dynamically from git_sync.core or git_sync.engine.git to respect unit test mocks.
-    """
-    for mod_name in (
-        "git_sync.engine.git",
-        "git_sync.core",
-        "git_sync.engine.topology",
-        "git_sync.engine.diff",
-        "git_sync.engine.changelog",
-        "git_sync.engine.ssh",
-        "git_sync.engine.credentials",
-    ):
-        mod = sys.modules.get(mod_name)
-        if mod and hasattr(mod, name):
-            val = getattr(mod, name)
-            if hasattr(val, "mock") or hasattr(val, "assert_called") or "Mock" in type(val).__name__:
-                return val
-
-    mod = sys.modules.get("git_sync.engine.git") or sys.modules.get("git_sync.core")
-    if mod and hasattr(mod, name):
-        return getattr(mod, name)
-    return fallback_fn
-
-
 def _call_run_git(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOUT) -> Any:
-    fn = _dispatch_fn("run_git")
-    if fn is not None:
-        return fn(repo_path, args, timeout=timeout)
     from git_sync.engine.git import run_git
     return run_git(repo_path, args, timeout=timeout)
 
 
 def _call_run_git_with_retry(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOUT, retries: int = 2) -> Any:
-    fn = _dispatch_fn("run_git_with_retry")
-    if fn is not None:
-        return fn(repo_path, args, timeout=timeout, retries=retries)
     from git_sync.engine.git import run_git_with_retry
     return run_git_with_retry(repo_path, args, timeout=timeout, retries=retries)
 
 
 def _call_check_repo_dirty(repo_path: str, timeout: int = DEFAULT_TIMEOUT) -> Tuple[bool, List[str]]:
-    fn = _dispatch_fn("check_repo_dirty")
-    if fn is not None:
-        return fn(repo_path, timeout=timeout)
     from git_sync.engine.git import check_repo_dirty
     return check_repo_dirty(repo_path, timeout=timeout)
 
 
 def _call_discover_repos(root_dir: str) -> List[str]:
-    fn = _dispatch_fn("discover_repos")
-    if fn is not None:
-        return fn(root_dir)
     from git_sync.engine.git import discover_repos
     return discover_repos(root_dir)
 
@@ -327,10 +289,9 @@ def find_locked_repos(
         if group:
             target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
 
-    find_locks_fn = _dispatch_fn("find_repo_locks", find_repo_locks)
     locked: List[Dict[str, Any]] = []
     for r in target_repos:
-        repo_locks = find_locks_fn(r, stale_threshold_seconds=stale_threshold_seconds)
+        repo_locks = find_repo_locks(r, stale_threshold_seconds=stale_threshold_seconds)
         if repo_locks:
             for lk in repo_locks:
                 lk["rel_path"] = os.path.relpath(r, root_dir)
@@ -373,8 +334,7 @@ def recover_repo_locks(
     Remove all stale or forced Git lock files in a repository.
     # INVARIANT: Prevents stale lock contention while respecting recent active operations.
     """
-    find_locks_fn = _dispatch_fn("find_repo_locks", find_repo_locks)
-    locks = find_locks_fn(repo_path, stale_threshold_seconds=max_age_seconds)
+    locks = find_repo_locks(repo_path, stale_threshold_seconds=max_age_seconds)
     if not locks:
         return True, ["No locks found"]
 
@@ -555,8 +515,7 @@ def prune_repo_worktrees(
     rel_path = os.path.relpath(repo_path, root_dir) if root_dir else os.path.basename(repo_path)
 
     # 1. Audit worktree topology and warn on dirty linked worktrees
-    wt_info_fn = _dispatch_fn("get_worktree_info", get_worktree_info)
-    wt_info = wt_info_fn(repo_path, timeout=timeout)
+    wt_info = get_worktree_info(repo_path, timeout=timeout)
     worktrees = wt_info.get("worktrees", [])
     dirty_linked: List[Dict[str, Any]] = []
     warnings: List[str] = []
@@ -686,11 +645,9 @@ def audit_worktree_health_batch(
         if group:
             target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
 
-    wt_info_fn = _dispatch_fn("get_worktree_info", get_worktree_info)
-
     def _audit_repo_worktrees(r_path: str) -> Dict[str, Any]:
         rel_p = os.path.relpath(r_path, root_dir) if root_dir else os.path.basename(r_path)
-        info = wt_info_fn(r_path, timeout=timeout)
+        info = get_worktree_info(r_path, timeout=timeout)
         raw_wts = info.get("worktrees", [])
         stale_wts = info.get("stale_worktrees", [])
         is_secondary = info.get("is_worktree", False)
@@ -902,9 +859,6 @@ def unshallow_submodule(
     #            'fatal: --unshallow on a complete repository does not make sense'.
     # INVARIANT: GIT_TERMINAL_PROMPT=0 prevents interactive credential hangs.
     """
-    target = _dispatch_fn("unshallow_submodule")
-    if target is not None and target is not unshallow_submodule:
-        return target(repo_path, sub_path, timeout=timeout, remote=remote)
     return _real_unshallow_submodule(repo_path, sub_path, timeout=timeout, remote=remote)
 
 
@@ -972,9 +926,6 @@ def update_submodules(
     # INVARIANT: When dry_run is True, no submodule checkout or unshallow fetch occurs.
     # INVARIANT: Unshallow is only applied to repositories where is_shallow_repository is True.
     """
-    target = _dispatch_fn("update_submodules")
-    if target is not None and target is not update_submodules:
-        return target(repo_path, recursive=recursive, init=init, timeout=timeout, dry_run=dry_run, unshallow=unshallow, cache=cache)
     return _real_update_submodules(repo_path, recursive=recursive, init=init, timeout=timeout, dry_run=dry_run, unshallow=unshallow, cache=cache)
 
 

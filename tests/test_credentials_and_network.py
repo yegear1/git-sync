@@ -152,7 +152,7 @@ class TestTransientNetworkRetry(unittest.TestCase):
         self.assertFalse(is_transient_network_error(None, "Repository not found."))
         self.assertFalse(is_transient_network_error(None, ""))
 
-    @patch("git_sync.core.run_git")
+    @patch("git_sync.engine.git.run_git")
     def test_run_git_with_retry_success_first_try(self, mock_run_git):
         mock_proc = subprocess.CompletedProcess(args=["git", "fetch"], returncode=0, stdout="ok", stderr="")
         mock_run_git.return_value = mock_proc
@@ -167,7 +167,7 @@ class TestTransientNetworkRetry(unittest.TestCase):
         self.assertEqual(bench.retries_count, 0)
         self.assertEqual(bench.retries_recovered, 0)
 
-    @patch("git_sync.core.run_git")
+    @patch("git_sync.engine.git.run_git")
     def test_run_git_with_retry_recovers_after_transient(self, mock_run_git):
         proc_fail = subprocess.CompletedProcess(
             args=["git", "fetch"], returncode=128, stdout="", stderr="fatal: Connection timed out"
@@ -194,7 +194,7 @@ class TestTransientNetworkRetry(unittest.TestCase):
         self.assertEqual(bench.retries_count, 2)  # 1 failure + 1 recovery recorded
         self.assertEqual(bench.retries_recovered, 1)
 
-    @patch("git_sync.core.run_git")
+    @patch("git_sync.engine.git.run_git")
     def test_run_git_with_retry_fails_fast_on_auth_error(self, mock_run_git):
         proc_auth_fail = subprocess.CompletedProcess(
             args=["git", "fetch"], returncode=128, stdout="", stderr="Permission denied (publickey)."
@@ -217,7 +217,7 @@ class TestTransientNetworkRetry(unittest.TestCase):
         self.assertEqual(len(slept), 0)
         self.assertEqual(bench.retries_count, 0)
 
-    @patch("git_sync.core.run_git")
+    @patch("git_sync.engine.git.run_git")
     def test_run_git_with_retry_timeout_expired_exhausts(self, mock_run_git):
         mock_run_git.side_effect = subprocess.TimeoutExpired(cmd=["git", "fetch"], timeout=2)
 
@@ -243,8 +243,8 @@ class TestTransientNetworkRetry(unittest.TestCase):
 class TestCredentialSanityChecks(unittest.TestCase):
     """Test proactive pre-flight sanity checks for SSH agent, keys, and remote probing."""
 
-    @patch("git_sync.core.get_repo_remotes")
-    @patch("git_sync.core.discover_repos")
+    @patch("git_sync.engine.git.get_repo_remotes")
+    @patch("git_sync.engine.git.discover_repos")
     @patch("subprocess.run")
     def test_check_credentials_sanity_healthy_agent(self, mock_run, mock_discover, mock_remotes):
         mock_discover.return_value = ["/dummy/repo1"]
@@ -274,8 +274,8 @@ class TestCredentialSanityChecks(unittest.TestCase):
         self.assertTrue(sanity["remotes"]["git@github.com:org/repo1.git"]["ok"])
         self.assertEqual(len(sanity["errors"]), 0)
 
-    @patch("git_sync.core.get_repo_remotes")
-    @patch("git_sync.core.discover_repos")
+    @patch("git_sync.engine.git.get_repo_remotes")
+    @patch("git_sync.engine.git.discover_repos")
     @patch("subprocess.run")
     def test_check_credentials_sanity_unauthenticated_remote(self, mock_run, mock_discover, mock_remotes):
         mock_discover.return_value = ["/dummy/repo1"]
@@ -501,9 +501,9 @@ Host *
         self.assertIsNotNone(res["diagnostic"])
         self.assertEqual(res["diagnostic"]["category"], "NETWORK_TIMEOUT")
 
-    @patch("git_sync.core.get_repo_remotes")
-    @patch("git_sync.core.discover_repos")
-    @patch("git_sync.core.benchmark_ssh_multiplexing")
+    @patch("git_sync.engine.git.get_repo_remotes")
+    @patch("git_sync.engine.git.discover_repos")
+    @patch("git_sync.engine.ssh.benchmark_ssh_multiplexing")
     def test_audit_ssh_multiplexing_end_to_end(self, mock_bench, mock_discover, mock_remotes):
         mock_discover.return_value = ["/dummy/repo"]
         mock_remotes.return_value = {"origin": "git@github.com:org/repo.git"}
@@ -1027,8 +1027,8 @@ class TestRemoteLatencyGradingAndDoctor(unittest.TestCase):
         self.assertEqual(res["diagnostic"]["category"], "NETWORK_TIMEOUT")
 
     @patch("git_sync.engine.git.probe_remote_reachability")
-    @patch("git_sync.core.get_repo_remotes")
-    @patch("git_sync.core.discover_repos")
+    @patch("git_sync.engine.git.get_repo_remotes")
+    @patch("git_sync.engine.git.discover_repos")
     @patch("subprocess.run")
     def test_check_credentials_sanity_concurrent_grading(self, mock_run, mock_discover, mock_remotes, mock_probe):
         mock_discover.return_value = ["/dummy/repo1", "/dummy/repo2"]
@@ -1080,8 +1080,8 @@ class TestRemoteLatencyGradingAndDoctor(unittest.TestCase):
         self.assertTrue(any("DNS lookup latency" in s for s in sanity["suggestions"]))
 
     @patch("git_sync.engine.git.probe_remote_reachability")
-    @patch("git_sync.core.get_repo_remotes")
-    @patch("git_sync.core.discover_repos")
+    @patch("git_sync.engine.git.get_repo_remotes")
+    @patch("git_sync.engine.git.discover_repos")
     @patch("subprocess.run")
     def test_check_credentials_sanity_slow_ssh_diagnostics(self, mock_run, mock_discover, mock_remotes, mock_probe):
         mock_discover.return_value = ["/dummy/repo1"]
@@ -1098,12 +1098,12 @@ class TestRemoteLatencyGradingAndDoctor(unittest.TestCase):
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
 
         # 1. Slow SSH without multiplexing
-        with patch("git_sync.engine.git.inspect_ssh_config", return_value={"is_enabled": False, "socket_dir_exists": False}):
+        with patch("git_sync.engine.ssh.inspect_ssh_config", return_value={"is_enabled": False, "socket_dir_exists": False}):
             sanity_no_mux = check_credentials_sanity("/dummy/root", timeout=5, test_remotes=True)
             self.assertTrue(any("SSH multiplexing is disabled" in w for w in sanity_no_mux["warnings"]))
 
         # 2. Slow SSH with multiplexing enabled
-        with patch("git_sync.engine.git.inspect_ssh_config", return_value={"is_enabled": True, "socket_dir": "/tmp/ssh", "socket_dir_exists": True}):
+        with patch("git_sync.engine.ssh.inspect_ssh_config", return_value={"is_enabled": True, "socket_dir": "/tmp/ssh", "socket_dir_exists": True}):
             sanity_mux = check_credentials_sanity("/dummy/root", timeout=5, test_remotes=True)
             self.assertTrue(any("despite SSH multiplexing" in w for w in sanity_mux["warnings"]))
             self.assertTrue(any("recreate SSH control sockets" in s for s in sanity_mux["suggestions"]))
@@ -1558,7 +1558,7 @@ class TestMultiRemoteMatrixAndWorktreeHealthAudit(unittest.TestCase):
         self.assertTrue(r3_entry["has_unreachable"])
         self.assertEqual(r3_entry["primary_grade"], "F")
 
-    @patch("git_sync.engine.git.get_worktree_info")
+    @patch("git_sync.engine.topology.get_worktree_info")
     @patch("git_sync.engine.git.check_repo_dirty")
     def test_audit_worktree_health_batch_dirty_and_stale_detection(self, mock_dirty, mock_wt_info):
         """Verify parallel batch worktree audit detects dirty working copies and stale metadata."""
