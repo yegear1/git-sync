@@ -7,18 +7,16 @@
 
 ## Active Task
 
-### 📌 Task [00.35]: Token-Budget Optimization and Structured Diffstat Summarization in `--compact` Pull & Push JSON
+### 📌 Task [00.36]: Anomaly-Only Compact Mode for `git-sync doctor` and `git-sync worktree list`
 - **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/diff.py`, `src/git_sync/ui/formatters.py`, `tests/`
-- **Description:** Optimize token consumption in `git-sync pull` and `git-sync push` when `--compact` is active (the default) by summarizing verbose raw `git pull`/`git push` `stdout`, diffstats, and uncommitted file listings into concise structured metrics (`files_changed`, `insertions`, `deletions`) and pruning empty/null fields (`stderr: ""`, `stale_refs: []`, `pruned_refs: []`, `would_prune_refs: []`, `worktree_isolated: {}`, empty `submodules` / `aux_branches`) to guarantee <150 tokens per repository entry while preserving full raw output under `--full` (`--no-compact`). Also provide single-line summary reporting in `--human --compact` mode.
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/diff.py`, `src/git_sync/ui/formatters.py`, `tests/`
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `tests/`
+- **Description:** Optimize `git-sync doctor` and `git-sync worktree list` in default `--compact` JSON mode so that healthy repository entries (`Grade A`/`B` reachable remotes in `multi_remote_matrix.matrix` and healthy repositories in `worktree_health.items` or clean main worktrees in `worktree list`) are omitted, surfacing only aggregate health metrics plus actionable anomalies (`unreachable`, `warnings`, `errors`, `suggestions`, `stale_worktrees`, `dirty_worktrees`, `locked_repos`), while `--full` (`--no-compact`) retains the complete per-repository matrices.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `tests/`
 - **Acceptance Criteria:**
-  - [ ] `git-sync pull` and `git-sync push` in `--compact` JSON mode (default) emit concise structured payloads omitting raw bloated diffs/stdout and empty collections (`stale_refs`, `pruned_refs`, `would_prune_refs`, `worktree_isolated`, empty `submodules`, empty `stderr`).
-  - [ ] Fast-forward and update outputs are parsed into consolidated diffstat metrics (`files_changed`, `insertions`, `deletions`).
-  - [ ] Passing `--full` (`--no-compact`) preserves the full raw `stdout`, `stderr`, and all collection keys.
-  - [ ] Strict token budget: each repository entry in compact JSON consumes <150 tokens.
-  - [ ] Human text mode with `--human --compact` renders a concise single-line summary (`Total: N repos | Updated: X | Up-to-date: Y | Errors: Z`).
-  - [ ] Unit tests verify token-budget bounds, `--compact` vs `--full` JSON schema parity, and `--human --compact` summary output.
+  - [ ] `git-sync doctor` (default `--compact --json`) omits healthy per-repository entries from `multi_remote_matrix.matrix` and `worktree_health.items`, retaining aggregate counts (`total_repos_audited`, `healthy_endpoints`, `unreachable_endpoints`, `grade_distribution`) and only anomalous repo entries (`has_unreachable=True` or `is_healthy=False`).
+  - [ ] `git-sync doctor --full` includes the complete unfiltered `matrix` and `items` arrays.
+  - [ ] `git-sync worktree list` (default `--compact --json`) filters to repositories that have linked worktrees, stale/prunable worktrees, or locked worktrees, while `--full` lists every single-worktree repository.
+  - [ ] Unit tests verify compact vs full JSON payloads for both `doctor` and `worktree list`.
 
 ---
 
@@ -61,24 +59,13 @@
 | [00.32] | Test Suite English Assertion Alignment and Regression Gate | [7e123a9] | 2026-11-09 |
 | [00.33] | Agent-First CLI Defaults (`--json` & `--compact` by Default) and Configurable Human/Full Overrides | [cdee860] | 2026-11-10 |
 | [00.34] | Concurrent Multi-Repository `git-sync push` Parallelization | [2d0431e] | 2026-11-10 |
+| [00.35] | Token-Budget Optimization and Structured Diffstat Summarization in `--compact` Pull & Push JSON | [75f70a4] | 2026-11-10 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-
-### 📌 Task [00.36]: Anomaly-Only Compact Mode for `git-sync doctor` and `git-sync worktree list`
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `tests/`
-- **Description:** Optimize `git-sync doctor` and `git-sync worktree list` in default `--compact` JSON mode so that healthy repository entries (`Grade A`/`B` reachable remotes in `multi_remote_matrix.matrix` and healthy repositories in `worktree_health.items` or clean main worktrees in `worktree list`) are omitted, surfacing only aggregate health metrics plus actionable anomalies (`unreachable`, `warnings`, `errors`, `suggestions`, `stale_worktrees`, `dirty_worktrees`, `locked_repos`), while `--full` (`--no-compact`) retains the complete per-repository matrices.
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `tests/`
-- **Acceptance Criteria:**
-  - [ ] `git-sync doctor` (default `--compact --json`) omits healthy per-repository entries from `multi_remote_matrix.matrix` and `worktree_health.items`, retaining aggregate counts (`total_repos_audited`, `healthy_endpoints`, `unreachable_endpoints`, `grade_distribution`) and only anomalous repo entries (`has_unreachable=True` or `is_healthy=False`).
-  - [ ] `git-sync doctor --full` includes the complete unfiltered `matrix` and `items` arrays.
-  - [ ] `git-sync worktree list` (default `--compact --json`) filters to repositories that have linked worktrees, stale/prunable worktrees, or locked worktrees, while `--full` lists every single-worktree repository.
-  - [ ] Unit tests verify compact vs full JSON payloads for both `doctor` and `worktree list`.
 
 
 ### 📌 Task [00.37]: Structured `REPO_NOT_FOUND` JSON Diagnostics and Non-Zero Exit Code on Unmatched Repository Targets
