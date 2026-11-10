@@ -65,14 +65,59 @@
   - [ ] Core engine and CLI functions use explicit typed contracts instead of `Dict[str, Any]`.
   - [ ] `mypy --strict src/git_sync` exits with code 0.
 
-### 📌 Task [00.28]: CLI Subcommand Modularization and Output Language Standardization
+### 📌 Task [00.28]: CLI Subcommand Modularization
 - **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/`, `tests/`
-- **Description:** Split monolithic formatting/rendering helpers out of `src/git_sync/cli.py` into `src/git_sync/ui/formatters.py` and standardize CLI human-facing terminal output language (with consistent Technical English defaults and optional locale/PT-BR support) while preserving all existing test assertions and JSON contracts.
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/`, `tests/`
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/`
+- **Description:** Split monolithic formatting/rendering helpers out of `src/git_sync/cli.py` into `src/git_sync/ui/formatters.py`, keeping `src/git_sync/cli.py` focused strictly on argument parsing and command dispatch (<1,200 lines).
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/`
 - **Acceptance Criteria:**
-  - [ ] `src/git_sync/cli.py` is focused on argument parsing and command dispatch (<1,200 lines).
-  - [ ] All CLI and UI unit tests pass with exit code 0.
+  - [ ] Monolithic CLI rendering helpers extracted to `src/git_sync/ui/formatters.py`.
+  - [ ] `src/git_sync/cli.py` focused on argument parsing and dispatch.
+  - [ ] All CLI tests pass with exit code 0.
+
+### 📌 Task [00.29]: Auxiliary Branch Push and Remediation Parity (`push_aux` / `--all-branches`)
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/`
+- **Description:** Fix `AUX_PUSH_PENDING` remediation string to `git-sync push <repo> --all-branches` and implement auxiliary branch push capabilities across engine (`push_repo` with `push_aux`), configuration (`push_all_branches`), and CLI (`--all-branches` / `--push-aux` flags).
+- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/`
+- **Acceptance Criteria:**
+  - [ ] `inspect_repo` sets remediation to `git-sync push {rel_path} --all-branches` when `aux_branches_ahead` is detected.
+  - [ ] `push_repo` accepts `push_aux: bool = False`, discovering auxiliary tracking branches ahead of upstream and pushing them safely.
+  - [ ] Safety guards (protected branch policy and divergence check) applied to each auxiliary branch.
+  - [ ] CLI `push` accepts `--all-branches` (alias `--push-aux`) and `--no-all-branches`.
+  - [ ] Bulk preview and confirmation modes display auxiliary branches pending push.
+  - [ ] Unit and integration tests verify auxiliary branch push, dry-run, and safety guards.
+
+### 📌 Task [00.30]: CLI Output and Table English Standardization
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/cli.py`
+- **Description:** Eliminate all hardcoded Portuguese strings in `src/git_sync/cli.py` and standardize human-facing terminal output exclusively in Technical English, aligning CLI tables, status details, doctor diagnostics, SSH multiplexing audits, worktree pruning, and lock recovery with existing JSON enums.
+- **Systems Involved:** `src/git_sync/cli.py`
+- **Acceptance Criteria:**
+  - [ ] Zero hardcoded Portuguese strings remaining in `src/git_sync/cli.py`.
+  - [ ] Table headers (`STATUS`, `REPOSITORY`, `BRANCH`, `DETAILS`) and status descriptions (`no remote configured`, `synced`, `N behind`, `N ahead`, `dirty(N files)`) standardized in English.
+  - [ ] Doctor, SSH audit, Worktree prune, Unlock, and Config outputs rendered in English.
+  - [ ] All JSON output contracts remain unchanged and strictly in English.
+
+### 📌 Task [00.31]: Interactive Dashboard TUI and Progress Indicators English Standardization
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/ui/dashboard.py`, `src/git_sync/ui/progress.py`
+- **Description:** Eliminate hardcoded Portuguese strings in the interactive dashboard TUI (`dashboard.py`) and progress/confirmation helpers (`progress.py`), standardizing all status badges, navigation hints, diff inspection reports, changelog views, and bulk confirmation prompts in Technical English.
+- **Systems Involved:** `src/git_sync/ui/dashboard.py`, `src/git_sync/ui/progress.py`
+- **Acceptance Criteria:**
+  - [ ] Zero hardcoded Portuguese strings in `src/git_sync/ui/dashboard.py` and `src/git_sync/ui/progress.py`.
+  - [ ] TUI keybindings bar, status messages, and feedback rendered in English.
+  - [ ] Bulk action preview headers and interactive confirmation prompts (`[y/N]`) rendered in English.
+
+### 📌 Task [00.32]: Test Suite English Assertion Alignment and Regression Gate
+- **Status:** APPROVED
+- **Paths:** `tests/test_git_sync.py`, `tests/test_progress_telemetry_dryrun.py`, `tests/test_ui_dashboard_and_style.py`
+- **Description:** Update legacy unit test assertions that check Portuguese string fragments (`sem remote configurado`, `Total: 1 repositórios`, `commit(s) atrás`, `commit(s) à frente`, `Pull concluído`, etc.) to assert the standardized English strings, ensuring hermetic pass across the entire test suite.
+- **Systems Involved:** `tests/`
+- **Acceptance Criteria:**
+  - [ ] All test assertions checking textual output match the new English CLI and TUI output.
+  - [ ] `uv run --with pytest --with setuptools pytest` passes with 100% success (312+ tests passing).
+  - [ ] `mypy --strict src/git_sync` exits with code 0.
 
 ---
 
