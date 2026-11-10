@@ -653,7 +653,7 @@ def audit_ssh_multiplexing(
     Execute full SSH multiplexing diagnostic audit and latency benchmark.
     # INVARIANT: Probing strictly respects GIT_TERMINAL_PROMPT=0 and never blocks.
     """
-    from git_sync.config import DEFAULT_ROOT
+    from git_sync.engine.git import DEFAULT_ROOT
     effective_root = root_dir or DEFAULT_ROOT
     target_repos = repos
     if target_repos is None:

@@ -19,9 +19,23 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 from typing import TYPE_CHECKING
 from git_sync.engine.concurrency import AdaptiveConcurrencyController
+from git_sync.engine.types import (
+    DoctorSanityReport,
+    GitLfsStatusDict,
+    GithubCliStatusDict,
+    LfsInfoDict,
+    PreflightPushCheckResult,
+    PullResult,
+    PushResult,
+    RepoStatusRecord,
+    ResolveResult,
+    SparseCheckoutInfoDict,
+    SshAgentStatusDict,
+    SshMultiplexInfoDict,
+)
 
 if TYPE_CHECKING:
     from git_sync.telemetry import BulkCache, TelemetryBenchmark
@@ -167,7 +181,8 @@ def run_git(
 ) -> subprocess.CompletedProcess[str]:
     """Execute a git command within a repository directory with safe timeouts and environment."""
     if _git_runner is not None:
-        return _git_runner(repo_path, args, timeout=timeout, extra_env=extra_env)
+        res = _git_runner(repo_path, args, timeout=timeout, extra_env=extra_env)
+        return cast(subprocess.CompletedProcess[str], res)
     return _real_run_git(repo_path, args, timeout=timeout, extra_env=extra_env)
 
 
@@ -1474,7 +1489,7 @@ def inspect_repo(
     prune: bool = False,
     audit_hygiene: bool = False,
     changelog: bool = False,
-) -> Dict[str, Any]:
+) -> RepoStatusRecord:
     """Audit single repository sync state, working tree cleanliness, worktrees, and submodules."""
     t_start_disk = time.perf_counter()
     rel_path = os.path.relpath(repo_path, root_dir)
@@ -1490,7 +1505,7 @@ def inspect_repo(
 
     submodules = cache.get_submodules_status(repo_path, timeout=5) if cache else get_submodules_status(repo_path, timeout=5)
 
-    info: Dict[str, Any] = {
+    info: RepoStatusRecord = {
         "name": os.path.basename(repo_path),
         "path": repo_path,
         "rel_path": rel_path,
@@ -1818,7 +1833,7 @@ def pull_repo(
     reapply_sparse: bool = False,
     lfs: bool = False,
     no_lfs: bool = False,
-) -> Dict[str, Any]:
+) -> PullResult:
     """
     Pull updates for a single repository.
     # INVARIANT: Atomic fast-forward for auxiliary branches uses `fetch . origin/b:b` without working tree switch.
@@ -1927,7 +1942,7 @@ def pull_repo(
             ahead_count = 0
             behind_count = 0
 
-        resolved_info: Optional[Dict[str, Any]] = None
+        resolved_info: Optional[ResolveResult | Dict[str, Any]] = None
         if ahead_count == 0 and behind_count > 0:
             success = True
             stdout = f"[DRY-RUN] Fast-forward update possible ({behind_count} commit(s) behind {upstream})"
@@ -1987,7 +2002,7 @@ def pull_repo(
                 lfs_prefix = "[DRY-RUN] Bandwidth control active: would pull Git LFS objects via 'git lfs pull'\n"
                 stdout = (lfs_prefix + stdout).strip() if stdout else lfs_prefix.strip()
 
-        res_dict: Dict[str, Any] = {
+        res_dict: PullResult = {
             "repo": repo_path,
             "branch": curr_branch,
             "remote": remote,
@@ -2016,7 +2031,7 @@ def pull_repo(
             res_dict["resolved"] = resolved_info
         return res_dict
 
-    prune_res: Dict[str, Any] = {"stale_refs": [], "pruned_refs": [], "would_prune_refs": []}
+    prune_res = {"stale_refs": [], "pruned_refs": [], "would_prune_refs": []}
     if prune:
         prune_res = prune_repo_remotes(
             repo_path,
@@ -2030,7 +2045,7 @@ def pull_repo(
 
     stashed = False
     stash_tag: Optional[str] = None
-    autostash_info: Dict[str, Any] = {
+    autostash_info = {
         "stashed": False,
         "restored": False,
         "conflict": False,
@@ -2107,7 +2122,7 @@ def pull_repo(
     success = (proc.returncode == 0)
     stdout = proc.stdout.strip()
     stderr = proc.stderr.strip()
-    resolved_info: Optional[Dict[str, Any]] = None
+    resolved_info = None
     diagnostic: Optional[Dict[str, str]] = None
 
     if not success:
@@ -2132,8 +2147,8 @@ def pull_repo(
             else:
                 stderr = resolve_res.get("stderr", stderr)
 
-    aux_results: Dict[str, bool] = {}
-    worktree_isolated: Dict[str, str] = {}
+    aux_results = {}
+    worktree_isolated = {}
     if sync_branches and success:
         repo_abs = os.path.abspath(repo_path)
 
@@ -2181,7 +2196,7 @@ def pull_repo(
     if success and cache:
         cache.invalidate(repo_path)
 
-    submodules_res: Optional[Dict[str, Any]] = None
+    submodules_res = None
     if (submodules or unshallow) and success:
         submodules_res = update_submodules(
             repo_path,
@@ -2215,7 +2230,7 @@ def pull_repo(
             lfs_err = lfs_pull_res.get("stderr") or "Git LFS pull failed"
             stderr = f"{stderr}\n{lfs_err}".strip() if stderr else lfs_err
 
-    lfs_res: Dict[str, Any] = {
+    lfs_res = {
         "has_lfs": repo_has_lfs,
         "skipped": no_lfs,
         "fetched": (lfs and not no_lfs),
@@ -2223,7 +2238,7 @@ def pull_repo(
         "objects_count": lfs_info.get("objects_count", 0),
     }
 
-    result_dict: Dict[str, Any] = {
+    result_dict: PullResult = {
         "repo": repo_path,
         "branch": curr_branch,
         "remote": remote,
@@ -2671,7 +2686,7 @@ def push_repo(
     cache: Optional[BulkCache] = None,
     benchmark: Optional[TelemetryBenchmark] = None,
     retries: int = DEFAULT_RETRIES,
-) -> Dict[str, Any]:
+) -> PushResult:
     """
     Push committed changes for a repository with pre-flight telemetry and branch protection safeguards.
     # INVARIANT: Force push to protected branches is strictly prohibited to prevent data loss across satellite repositories.
@@ -2774,7 +2789,7 @@ def find_push_pending_repos(
     timeout: int = DEFAULT_TIMEOUT,
     cache: Optional[BulkCache] = None,
     remote: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> List[RepoStatusRecord]:
     """Find all repositories with pending commits to push (ahead > 0 or aux_branches_ahead)."""
     ctrl = AdaptiveConcurrencyController()
     eff_workers = ctrl.determine_workers(len(all_repos), is_fetch=do_fetch, configured_workers=workers)
@@ -2791,7 +2806,7 @@ def find_diverged_repos(
     timeout: int = DEFAULT_TIMEOUT,
     cache: Optional[BulkCache] = None,
     remote: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+) -> List[RepoStatusRecord]:
     """Find all repositories with divergent branches (ahead > 0 and behind > 0)."""
     ctrl = AdaptiveConcurrencyController()
     eff_workers = ctrl.determine_workers(len(all_repos), is_fetch=do_fetch, configured_workers=workers)
@@ -2815,7 +2830,7 @@ def resolve_divergence(
     branch: Optional[str] = None,
     timeout: int = DEFAULT_TIMEOUT,
     dry_run: bool = False,
-) -> Dict[str, Any]:
+) -> ResolveResult:
     """
     Execute resolution strategy for diverged repository branch.
     Supported strategies:
@@ -3005,10 +3020,14 @@ __all__ = [
     "DEFAULT_ROOT",
     "DEFAULT_TIMEOUT",
     "DEFAULT_WORKERS",
+    "DoctorSanityReport",
     "GIT_ENV",
+    "GitLfsStatusDict",
+    "GithubCliStatusDict",
     "GRADE_A_THRESHOLD_SECONDS",
     "GRADE_B_THRESHOLD_SECONDS",
     "GRADE_C_THRESHOLD_SECONDS",
+    "LfsInfoDict",
     "TOOL_DIR_PREFIXES",
     "audit_branch_hygiene",
     "audit_multi_remote_matrix",
@@ -3055,6 +3074,7 @@ __all__ = [
     "is_transient_network_error",
     "match_repo",
     "parse_commit_log",
+    "PreflightPushCheckResult",
     "preflight_push_check",
     "probe_remote_reachability",
     "prune_repo_remotes",
@@ -3062,17 +3082,24 @@ __all__ = [
     "prune_stale_ssh_control_sockets",
     "pull_lfs_objects",
     "pull_repo",
+    "PullResult",
     "push_repo",
+    "PushResult",
     "reapply_sparse_checkout",
     "recover_index_lock",
     "recover_repo_locks",
+    "RepoStatusRecord",
     "resolve_default_root",
     "resolve_divergence",
+    "ResolveResult",
     "restore_stash",
     "run_git",
     "run_git_with_retry",
     "set_git_runner",
+    "SparseCheckoutInfoDict",
     "split_diff_files",
+    "SshAgentStatusDict",
+    "SshMultiplexInfoDict",
     "stash_changes",
     "summarize_commit_categories",
     "truncate_diff",

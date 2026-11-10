@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import os
 import sys
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from git_sync.ui.style import AnsiStyler
 
@@ -110,7 +110,7 @@ class BulkActionItem:
     is_protected: bool = False
     submodules_count: int = 0
     warnings: List[str] = field(default_factory=list)
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert item to structured dictionary."""
@@ -131,7 +131,7 @@ class BulkActionItem:
 
 
 def format_bulk_action_preview(
-    items: List[BulkActionItem | Dict[str, Any]],
+    items: Sequence[BulkActionItem | Dict[str, Any]],
     title: str = "PRÉVIA DE AÇÕES EM LOTE (BULK ACTION PREVIEW)",
     stream: Optional[Any] = None,
     color: Optional[bool] = None,
@@ -235,7 +235,7 @@ def format_bulk_action_preview(
 
 
 def prompt_bulk_confirmation(
-    items: List[BulkActionItem | Dict[str, Any]],
+    items: Sequence[BulkActionItem | Dict[str, Any]],
     title: str = "PRÉVIA DE AÇÕES EM LOTE (BULK ACTION PREVIEW)",
     prompt_text: Optional[str] = None,
     stream: Optional[Any] = None,

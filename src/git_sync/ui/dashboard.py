@@ -10,13 +10,15 @@ from __future__ import annotations
 import concurrent.futures
 import os
 import sys
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from git_sync.engine import (
     DEFAULT_RETRIES,
     DEFAULT_TIMEOUT,
     DEFAULT_WORKERS,
     AdaptiveConcurrencyController,
+    PullResult,
+    RepoStatusRecord,
     discover_repos,
     format_changelog_summary,
     get_divergence_diff,
@@ -138,7 +140,7 @@ class InteractiveDashboard:
     def __init__(
         self,
         root: str,
-        repos: Optional[List[Dict[str, Any]]] = None,
+        repos: Optional[Sequence[RepoStatusRecord | Dict[str, Any]]] = None,
         do_fetch: bool = False,
         workers: int | str = DEFAULT_WORKERS,
         timeout: int = DEFAULT_TIMEOUT,
@@ -154,9 +156,9 @@ class InteractiveDashboard:
         stream: Optional[Any] = None,
         color_enabled: Optional[bool] = None,
         key_reader: Optional[Callable[[], str]] = None,
-        inspect_fn: Optional[Callable[..., List[Dict[str, Any]]]] = None,
-        pull_fn: Optional[Callable[..., Dict[str, Any]]] = None,
-        diff_stat_fn: Optional[Callable[[Dict[str, Any]], str]] = None,
+        inspect_fn: Optional[Callable[..., List[RepoStatusRecord | Dict[str, Any]]]] = None,
+        pull_fn: Optional[Callable[..., PullResult | Dict[str, Any]]] = None,
+        diff_stat_fn: Optional[Callable[[RepoStatusRecord | Dict[str, Any]], str]] = None,
         config: Optional[Any] = None,
         active_profile: Optional[str] = None,
         available_profiles: Optional[List[str]] = None,
@@ -183,7 +185,7 @@ class InteractiveDashboard:
         self._pull_fn = pull_fn
         self._diff_stat_fn = diff_stat_fn
         self._has_initial_repos = repos is not None
-        self.repos: List[Dict[str, Any]] = list(repos) if repos is not None else []
+        self.repos: List[RepoStatusRecord | Dict[str, Any]] = list(repos) if repos is not None else []
         self.selected_idx: int = 0
         self.last_message: str = ""
 
@@ -205,7 +207,7 @@ class InteractiveDashboard:
         self.stream.write(text + "\n")
         self.stream.flush()
 
-    def refresh_repos(self, do_fetch: Optional[bool] = None) -> List[Dict[str, Any]]:
+    def refresh_repos(self, do_fetch: Optional[bool] = None) -> List[RepoStatusRecord | Dict[str, Any]]:
         """Inspect all workspace repositories concurrently and update dashboard state."""
         fetch_flag = self.do_fetch if do_fetch is None else do_fetch
         if self._inspect_fn is not None:
@@ -231,7 +233,7 @@ class InteractiveDashboard:
                 is_fetch=fetch_flag,
                 configured_workers=configured_w,
             )
-            inspected: List[Dict[str, Any]] = []
+            inspected: List[RepoStatusRecord | Dict[str, Any]] = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=eff_workers) as executor:
                 futures = [
                     executor.submit(
@@ -339,7 +341,7 @@ class InteractiveDashboard:
         success = self.switch_profile(target)
         return target if success else None
 
-    def format_row(self, repo: Dict[str, Any], selected: bool = False) -> str:
+    def format_row(self, repo: RepoStatusRecord | Dict[str, Any], selected: bool = False) -> str:
         """Render a single compact repository row for the dashboard table."""
         pointer = self.styler.bold(self.styler.cyan("▸")) if selected else " "
         raw_status = repo.get("status", "UNKNOWN")
@@ -367,8 +369,8 @@ class InteractiveDashboard:
             details.append(self.styler.cyan(f"↓{repo['behind']}"))
         if repo.get("ahead", 0) > 0:
             details.append(self.styler.magenta(f"↑{repo['ahead']}"))
-        if repo.get("changelog"):
-            cl = repo["changelog"]
+        cl = repo.get("changelog")
+        if cl:
             if cl.get("has_breaking"):
                 details.append(self.styler.red("!BREAKING"))
             if cl.get("incoming_categories"):
@@ -459,7 +461,7 @@ class InteractiveDashboard:
         self._write(output)
         return output
 
-    def _execute_pull(self, target_repo: Dict[str, Any]) -> Dict[str, Any]:
+    def _execute_pull(self, target_repo: RepoStatusRecord | Dict[str, Any]) -> PullResult | Dict[str, Any]:
         if self._pull_fn is not None:
             return self._pull_fn(target_repo)
         return pull_repo(
@@ -473,7 +475,7 @@ class InteractiveDashboard:
             retries=self.retries,
         )
 
-    def action_pull_pending(self) -> List[Dict[str, Any]]:
+    def action_pull_pending(self) -> List[PullResult | Dict[str, Any]]:
         """Pull all repositories that have pending upstream changes."""
         pending = [
             r for r in self.repos
@@ -483,7 +485,7 @@ class InteractiveDashboard:
             self.last_message = self.styler.green("✅ Nenhum repositório pendente de pull.")
             return []
 
-        results: List[Dict[str, Any]] = []
+        results: List[PullResult | Dict[str, Any]] = []
         ok_count = 0
         for r in pending:
             res = self._execute_pull(r)
@@ -501,7 +503,7 @@ class InteractiveDashboard:
             )
         return results
 
-    def action_pull_selected(self) -> Optional[Dict[str, Any]]:
+    def action_pull_selected(self) -> Optional[PullResult | Dict[str, Any]]:
         """Pull the currently selected repository."""
         if not self.repos:
             self.last_message = self.styler.yellow("⚠️ Nenhum repositório selecionado.")

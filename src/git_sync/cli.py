@@ -29,6 +29,11 @@ from git_sync.engine import (
     DEFAULT_TIMEOUT,
     DEFAULT_WORKERS,
     AdaptiveConcurrencyController,
+    DoctorSanityReport,
+    PullResult,
+    PushResult,
+    RepoStatusRecord,
+    ResolveResult,
     audit_ssh_multiplexing,
     benchmark_ssh_multiplexing,
     calculate_optimal_workers,
@@ -560,12 +565,13 @@ def cmd_status(args: argparse.Namespace) -> int:
     )
 
     t1 = time.perf_counter()
-    results: List[Dict[str, Any]] = []
+    results: List[RepoStatusRecord | Dict[str, Any]] = []
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
     retries = getattr(args, "retries", DEFAULT_RETRIES)
     is_fetch = not args.no_fetch
     changelog_flag = getattr(args, "changelog", None)
-    changelog_enabled = bool(changelog_flag if changelog_flag is not None else getattr(config, "status_changelog", False))
+    config_obj = getattr(args, "_config", None)
+    changelog_enabled = bool(changelog_flag if changelog_flag is not None else getattr(config_obj, "status_changelog", False))
     configured_w = None if auto_tuned else args.workers
     effective_workers = controller.determine_workers(
         len(all_repos),
@@ -629,9 +635,9 @@ def cmd_status(args: argparse.Namespace) -> int:
             "has_submodules": [r["rel_path"] for r in results if r.get("submodules")],
             "submodule_drift": [r["rel_path"] for r in results if any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", []))],
             "shallow_submodules": [r["rel_path"] for r in results if any(s.get("is_shallow") for s in r.get("submodules", []))],
-            "has_lfs": [r["rel_path"] for r in results if r.get("has_lfs") or r.get("lfs", {}).get("has_lfs")],
-            "lfs_pointers": [r["rel_path"] for r in results if r.get("lfs", {}).get("pointers_count", 0) > 0],
-            "lfs_warnings": [r["rel_path"] for r in results if r.get("lfs", {}).get("warning")],
+            "has_lfs": [r["rel_path"] for r in results if r.get("has_lfs") or bool((r.get("lfs") or {}).get("has_lfs"))],
+            "lfs_pointers": [r["rel_path"] for r in results if int((r.get("lfs") or {}).get("pointers_count", 0)) > 0],
+            "lfs_warnings": [r["rel_path"] for r in results if bool((r.get("lfs") or {}).get("warning"))],
             "sparse_checkout": [r["rel_path"] for r in results if r.get("sparse_checkout", {}).get("enabled")],
             "sparse_cone_warnings": [r["rel_path"] for r in results if r.get("sparse_checkout", {}).get("warning")],
             "no_remote": [r["rel_path"] for r in results if r["status"] == "NO_REMOTE"],
@@ -699,7 +705,7 @@ def cmd_status(args: argparse.Namespace) -> int:
                         "remediation": f"git -C '{dr['path']}' sparse-checkout reapply --cone",
                     })
                     existing_remed_pairs.add((dr["rel_path"], "reapply_sparse_checkout"))
-            if dr.get("lfs", {}).get("missing_objects", 0) > 0:
+            if int((dr.get("lfs") or {}).get("missing_objects", 0)) > 0:
                 if (dr["rel_path"], "pull_lfs") not in existing_remed_pairs:
                     summary["remediations"].append({
                         "repo": dr["rel_path"],
@@ -719,7 +725,7 @@ def cmd_status(args: argparse.Namespace) -> int:
                     "has_breaking": (r.get("changelog") or {}).get("has_breaking", False),
                 }
                 for r in results
-                if r.get("changelog") and (r["changelog"].get("incoming") or r["changelog"].get("outgoing"))
+                if r.get("changelog") and ((r.get("changelog") or {}).get("incoming") or (r.get("changelog") or {}).get("outgoing"))
             }
         if not getattr(args, "compact", False):
             summary["items"] = results
@@ -736,8 +742,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         print(f"Total: {len(results)} repositórios | Pendentes de Pull: {pending_pull} | Pendentes de Push: {pending_push} | Divergidos: {diverged_count} | Modificados (Dirty): {dirty_count}\n")
         if changelog_enabled:
             for r in results:
-                if r.get("changelog") and (r["changelog"].get("incoming") or r["changelog"].get("outgoing")):
-                    cl = r["changelog"]
+                cl = r.get("changelog")
+                if cl and (cl.get("incoming") or cl.get("outgoing")):
                     inc_s = format_changelog_summary(cl.get("incoming_categories", {})) or "-"
                     out_s = format_changelog_summary(cl.get("outgoing_categories", {})) or "-"
                     brk = " ⚠️ BREAKING" if cl.get("has_breaking") else ""
@@ -835,8 +841,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             details.append(f"{r['behind']} atrás")
         if r["ahead"] > 0:
             details.append(f"{r['ahead']} à frente")
-        if changelog_enabled and r.get("changelog"):
-            cl = r["changelog"]
+        cl = r.get("changelog")
+        if changelog_enabled and cl:
             if cl.get("has_breaking"):
                 details.append("⚠️ BREAKING")
             if cl.get("incoming_categories"):
@@ -854,8 +860,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         if r["is_dirty"]:
             details.append(f"dirty({len(r['dirty_files'])} arquivos)")
         if r["fetch_error"]:
-            if r.get("diagnostic"):
-                diag = r["diagnostic"]
+            diag = r.get("diagnostic")
+            if diag:
                 remed_str = f" (💡 {r['remediation']})" if r.get("remediation") else f" (💡 {diag['suggestion']})"
                 details.append(f"erro[{diag['category']}]: {r['fetch_error']}{remed_str}")
             else:
@@ -873,8 +879,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
         detail_str = "; ".join(details)
         print(f"{sym:<15} {r['rel_path']:<40} {r['branch']:<12} {detail_str}")
-        if changelog_enabled and r.get("changelog"):
-            cl = r["changelog"]
+        if changelog_enabled and cl:
             if cl.get("incoming"):
                 print(f"    ⬇️ incoming ({len(cl['incoming'])}):")
                 for c in cl["incoming"]:
@@ -924,7 +929,7 @@ def _prompt_resolution_choice(
     timeout: int = DEFAULT_TIMEOUT,
     input_func: Any = input,
     max_tokens: Optional[int] = None,
-) -> Dict[str, Any]:
+) -> ResolveResult:
     """
     Prompt user interactively to choose a conflict or divergence resolution strategy.
     # INVARIANT: Abort is the safe default when user cancels, enters empty choice, or inputs EOF/SIGINT.
@@ -1056,7 +1061,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
             mode_prefix = "[DRY-RUN] " if dry_run else ""
             print(f"🔍 {mode_prefix}Identificando repositórios com atualizações pendentes...")
         t1 = time.perf_counter()
-        inspections = []
+        inspections: List[RepoStatusRecord] = []
         configured_w = None if auto_tuned else args.workers
         effective_workers = controller.determine_workers(
             len(all_repos),
@@ -1080,14 +1085,25 @@ def cmd_pull(args: argparse.Namespace) -> int:
                     progress.advance(prog_label)
         t_insp = time.perf_counter() - t1
         benchmark.record_stage("inspection", t_insp)
+
+        def _submodule_out_of_sync(r: RepoStatusRecord) -> bool:
+            sub = r.get("submodules")
+            sub_list = sub if isinstance(sub, list) else (sub.get("submodules", []) if isinstance(sub, dict) else [])
+            return any(isinstance(s, dict) and (s.get("status") != "UP_TO_DATE" or s.get("out_of_sync")) for s in sub_list)
+
+        def _submodule_is_shallow(r: RepoStatusRecord) -> bool:
+            sub = r.get("submodules")
+            sub_list = sub if isinstance(sub, list) else (sub.get("submodules", []) if isinstance(sub, dict) else [])
+            return any(isinstance(s, dict) and s.get("is_shallow") for s in sub_list)
+
         targets = [
             r["path"] for r in inspections
-            if "PULL" in r["status"]
-            or r["aux_branches_behind"]
-            or (getattr(args, "submodules", False) and any(s.get("status") != "UP_TO_DATE" or s.get("out_of_sync") for s in r.get("submodules", [])))
-            or (getattr(args, "unshallow", False) and (r.get("is_shallow") or any(s.get("is_shallow") for s in r.get("submodules", []))))
-            or (getattr(args, "reapply_sparse", False) and r.get("sparse_checkout", {}).get("enabled"))
-            or (getattr(args, "lfs", False) and (r.get("has_lfs") or r.get("lfs", {}).get("has_lfs")))
+            if "PULL" in r.get("status", "")
+            or r.get("aux_branches_behind")
+            or (getattr(args, "submodules", False) and _submodule_out_of_sync(r))
+            or (getattr(args, "unshallow", False) and (r.get("is_shallow") or _submodule_is_shallow(r)))
+            or (getattr(args, "reapply_sparse", False) and bool((r.get("sparse_checkout") or {}).get("enabled")))
+            or (getattr(args, "lfs", False) and (r.get("has_lfs") or bool((r.get("lfs") or {}).get("has_lfs"))))
         ]
         if not targets:
             benchmark.stop()
@@ -1234,8 +1250,9 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 detail_msg = "OK" if res["success"] else (res["stderr"] or res["stdout"])
                 if dry_run and res["success"] and res.get("stdout"):
                     detail_msg = res["stdout"]
-                if res.get("resolved"):
-                    strat_applied = res["resolved"].get("strategy")
+                res_resolved = res.get("resolved")
+                if res_resolved:
+                    strat_applied = res_resolved.get("strategy")
                     detail_msg = f"{detail_msg} (resolvido via {strat_applied})"
                 elif res.get("autostash", {}).get("would_stash"):
                     detail_msg = f"{detail_msg} (autostash de {len(res['autostash']['dirty_files'])} arquivos seria realizado)"
@@ -1244,8 +1261,9 @@ def cmd_pull(args: argparse.Namespace) -> int:
                         detail_msg = f"{detail_msg} (conflito ao restaurar stash mantido em {res['autostash'].get('stash_ref')})"
                     elif res["autostash"].get("restored"):
                         detail_msg = f"{detail_msg} (autostash restaurado com sucesso)"
-                if not res["success"] and res.get("diagnostic"):
-                    detail_msg += f" (💡 {res['diagnostic']['suggestion']})"
+                res_diag = res.get("diagnostic")
+                if not res["success"] and res_diag:
+                    detail_msg += f" (💡 {res_diag.get('suggestion')})"
                 remote_tag = f" [{res['remote']}]" if res.get("remote") else ""
                 wt_tag = " [worktree]" if res.get("is_worktree") else ""
                 print(f"{icon} {mode_str}[{rel}]{wt_tag}{remote_tag} ({res['branch']}): {detail_msg}")
@@ -1278,8 +1296,8 @@ def cmd_pull(args: argparse.Namespace) -> int:
                         sub_icon = "  ↳ ℹ️ [DRY-RUN]" if dry_run else ("  ↳ ✅" if sub_info.get("success") else "  ↳ ❌")
                         sub_action = "atualização recursiva prevista" if dry_run else ("submódulo atualizado" if sub_st == "UP_TO_DATE" else f"submódulo {sub_st}")
                         print(f"{sub_icon} Submódulo '{sub_path}': {sub_action} [{sub_commit}{sub_desc}]{sub_shallow}")
-                if res.get("sparse_reapply"):
-                    sp_res = res["sparse_reapply"]
+                sp_res = res.get("sparse_reapply")
+                if sp_res:
                     sp_icon = "  ↳ ✅" if sp_res.get("success") else "  ↳ ❌"
                     sp_action = "filtros cone de sparse-checkout reaplicados" if sp_res.get("success") else f"falha ao reaplicar sparse-checkout: {sp_res.get('stderr')}"
                     print(f"{sp_icon} Sparse-checkout: {sp_action}")
@@ -1377,7 +1395,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                 if not args.json:
                     print(f"❌ Repositório não encontrado para a busca: '{q}'")
 
-    results: List[Dict[str, Any]] = []
+    results: List[ResolveResult | Dict[str, Any]] = []
     strategy = getattr(args, "strategy", None)
     show_diff_only = getattr(args, "diff", False)
     preview_mode = getattr(args, "preview", False)
@@ -1456,6 +1474,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                 progress.advance(rel)
                 continue
 
+            res: ResolveResult | Dict[str, Any]
             if strategy:
                 res = resolve_divergence(r, strategy=strategy, branch=details.get("branch"), timeout=args.timeout, dry_run=dry_run)
                 res["repo_rel"] = rel
@@ -1468,7 +1487,8 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                     status_msg = res.get("message") or res.get("stderr") or "OK"
                     print(f"{icon} {mode_str}[{rel}] ({details.get('branch')} -> {strategy}): {status_msg}")
             elif is_interactive:
-                max_tokens = getattr(args, "max_tokens", None) or getattr(config, "max_tokens", None)
+                config_obj = getattr(args, "_config", None)
+                max_tokens = getattr(args, "max_tokens", None) or getattr(config_obj, "max_tokens", None)
                 res = _prompt_resolution_choice(r, rel, details, timeout=args.timeout, max_tokens=max_tokens)
                 res["repo_rel"] = rel
                 res["details"] = details
@@ -1584,7 +1604,7 @@ def cmd_push(args: argparse.Namespace) -> int:
                 if not args.json:
                     print(f"❌ Repositório não encontrado para a busca: '{q}'")
 
-    push_results = []
+    push_results: List[PushResult | Dict[str, Any]] = []
     preview_mode = getattr(args, "preview", False)
     confirm_mode = getattr(args, "confirm", False)
     force = getattr(args, "force", False)
@@ -1597,13 +1617,14 @@ def cmd_push(args: argparse.Namespace) -> int:
         preview_items: List[BulkActionItem] = []
         for r in targets:
             rel = os.path.relpath(r, root)
+            chk_info: Dict[str, Any]
             if r in pending_map:
-                info = pending_map[r]
+                chk_info = dict(pending_map[r])
             else:
                 chk = preflight_push_check(r, branch=args.branch, remote=remote, timeout=args.timeout)
-                info = {"branch": chk.get("branch"), "ahead": chk.get("ahead", 0)}
-            branch = info.get("branch") or args.branch
-            ahead = int(info.get("ahead", 0))
+                chk_info = {"branch": chk.get("branch") or "", "ahead": chk.get("ahead", 0)}
+            branch = str(chk_info.get("branch") or args.branch or "")
+            ahead = int(chk_info.get("ahead", 0))
             is_prot = is_branch_protected(branch, prot_branches) if branch else False
             warnings: List[str] = []
             if is_prot:
@@ -1620,7 +1641,7 @@ def cmd_push(args: argparse.Namespace) -> int:
                     ahead=ahead,
                     is_protected=is_prot,
                     warnings=warnings,
-                    details=info,
+                    details=chk_info,
                 )
             )
 
@@ -1671,7 +1692,8 @@ def cmd_push(args: argparse.Namespace) -> int:
 
             if not args.json:
                 mode_str = "[DRY-RUN] " if res["dry_run"] else ""
-                diag_cat = res.get("diagnostic", {}).get("category") if res.get("diagnostic") else ""
+                res_diag = res.get("diagnostic")
+                diag_cat = res_diag.get("category") if res_diag else ""
                 if res["success"]:
                     icon = "✅"
                 elif diag_cat in ("PROTECTED_BRANCH_FORCE_PUSH", "PROTECTED_BRANCH_DIRECT_PUSH"):
@@ -1679,8 +1701,8 @@ def cmd_push(args: argparse.Namespace) -> int:
                 else:
                     icon = "❌"
                 status_detail = "OK" if res["success"] else (res["stderr"] or res["stdout"])
-                if not res["success"] and res.get("diagnostic"):
-                    status_detail += f" (💡 {res['diagnostic']['suggestion']})"
+                if not res["success"] and res_diag:
+                    status_detail += f" (💡 {res_diag.get('suggestion')})"
                 ahead_info = f" ({res['ahead']} commit(s) à frente)" if res.get("ahead", 0) > 0 else ""
                 remote_tag = f" -> {res['remote']}" if res.get("remote") else ""
                 wt_tag = " [worktree]" if res.get("is_worktree") else ""

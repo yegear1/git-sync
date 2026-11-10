@@ -433,7 +433,8 @@ def resolve_config(
         raise ValueError(f"Invalid 'groups' setting: expected list of strings, got {type(groups_val).__name__}")
 
     # Parse pull section & flags
-    pull_cfg = combined.get("pull") if isinstance(combined.get("pull"), dict) else {}
+    pull_raw = combined.get("pull")
+    pull_cfg: Dict[str, Any] = pull_raw if isinstance(pull_raw, dict) else {}
     pull_ff_only = bool(pull_cfg.get("ff_only", combined.get("ff_only", True)))
     pull_sync_branches = bool(pull_cfg.get("sync_branches", combined.get("sync_branches", True)))
     pull_all = bool(pull_cfg.get("all", combined.get("pull_all", False)))
@@ -455,7 +456,8 @@ def resolve_config(
     pull_remote = str(pull_remote_raw) if pull_remote_raw is not None else None
 
     # Parse push section & flags
-    push_cfg = combined.get("push") if isinstance(combined.get("push"), dict) else {}
+    push_raw = combined.get("push")
+    push_cfg: Dict[str, Any] = push_raw if isinstance(push_raw, dict) else {}
     push_dry_run = bool(push_cfg.get("dry_run", combined.get("dry_run", False)))
     push_confirm = bool(push_cfg.get("confirm", combined.get("push_confirm", confirm)))
     push_all = bool(push_cfg.get("all", combined.get("push_all", False)))
@@ -478,7 +480,8 @@ def resolve_config(
         push_protected_branches = ["main", "master", "release/*", "production", "prod"]
 
     # Parse status section & flags
-    status_cfg = combined.get("status") if isinstance(combined.get("status"), dict) else {}
+    status_raw = combined.get("status")
+    status_cfg: Dict[str, Any] = status_raw if isinstance(status_raw, dict) else {}
     status_no_fetch = bool(status_cfg.get("no_fetch", combined.get("no_fetch", False)))
     status_pending = bool(status_cfg.get("pending", combined.get("pending", False)))
     status_compact = bool(status_cfg.get("compact", combined.get("compact", False)))
@@ -698,3 +701,22 @@ def load_config(
         config_path=last_file_path,
         sources=sources,
     )
+
+
+__all__ = [
+    "CONFIG_FILENAME",
+    "DEFAULT_CONFIG_TEMPLATE",
+    "DEFAULT_DISK_LATENCY_THRESHOLD",
+    "DEFAULT_NETWORK_LATENCY_THRESHOLD",
+    "DEFAULT_ROOT",
+    "DEFAULT_TIMEOUT",
+    "DEFAULT_WORKERS",
+    "GitSyncConfig",
+    "deep_merge",
+    "find_config_file",
+    "load_config",
+    "resolve_config",
+    "resolve_default_root",
+    "save_config",
+]
+

@@ -14,9 +14,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from git_sync.engine.concurrency import DEFAULT_WORKERS
+from git_sync.engine.types import DoctorSanityReport
 
 GRADE_A_THRESHOLD_SECONDS: float = 0.50
 GRADE_B_THRESHOLD_SECONDS: float = 1.50
@@ -178,7 +179,7 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
         }
 
 
-def inspect_token_env(env: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+def inspect_token_env(env: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     """
     Inspect environment variables for Git authentication tokens (GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN)
     and validate format without leaking secret token values.
@@ -791,7 +792,7 @@ def check_credentials_sanity(
     test_remotes: bool = True,
     max_remotes_to_test: int = 15,
     workers: int | str = DEFAULT_WORKERS,
-) -> Dict[str, Any]:
+) -> DoctorSanityReport:
     """
     Perform a proactive sanity check of Git credentials, SSH agent, key files,
     multi-remote reachability matrix, and worktree health across repositories in root_dir.
