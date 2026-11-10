@@ -7,16 +7,15 @@
 
 ## Active Task
 
-### 📌 Task [00.30]: CLI Output and Table English Standardization
+### 📌 Task [00.31]: Interactive Dashboard TUI and Progress Indicators English Standardization
 - **Status:** READY FOR PLANNING
-- **Paths:** `src/git_sync/cli.py`
-- **Description:** Eliminate all hardcoded Portuguese strings in `src/git_sync/cli.py` and standardize human-facing terminal output exclusively in Technical English, aligning CLI tables, status details, doctor diagnostics, SSH multiplexing audits, worktree pruning, and lock recovery with existing JSON enums.
-- **Systems Involved:** `src/git_sync/cli.py`
+- **Paths:** `src/git_sync/ui/dashboard.py`, `src/git_sync/ui/progress.py`
+- **Description:** Eliminate hardcoded Portuguese strings in the interactive dashboard TUI (`dashboard.py`) and progress/confirmation helpers (`progress.py`), standardizing all status badges, navigation hints, diff inspection reports, changelog views, and bulk confirmation prompts in Technical English.
+- **Systems Involved:** `src/git_sync/ui/dashboard.py`, `src/git_sync/ui/progress.py`
 - **Acceptance Criteria:**
-  - [ ] Zero hardcoded Portuguese strings remaining in `src/git_sync/cli.py`.
-  - [ ] Table headers (`STATUS`, `REPOSITORY`, `BRANCH`, `DETAILS`) and status descriptions (`no remote configured`, `synced`, `N behind`, `N ahead`, `dirty(N files)`) standardized in English.
-  - [ ] Doctor, SSH audit, Worktree prune, Unlock, and Config outputs rendered in English.
-  - [ ] All JSON output contracts remain unchanged and strictly in English.
+  - [ ] Zero hardcoded Portuguese strings in `src/git_sync/ui/dashboard.py` and `src/git_sync/ui/progress.py`.
+  - [ ] TUI keybindings bar, status messages, and feedback rendered in English.
+  - [ ] Bulk action preview headers and interactive confirmation prompts (`[y/N]`) rendered in English.
 
 ---
 
@@ -54,6 +53,7 @@
 | [00.27] | Strict Domain Payload Contracts (`TypedDict` / `@dataclass`) and Mypy Strict Compliance | [387c626] | 2026-11-09 |
 | [00.28] | CLI Subcommand Modularization into `src/git_sync/ui/formatters.py` | [17d0f9c] | 2026-11-09 |
 | [00.29] | Auxiliary Branch Push and Remediation Parity (`AUX_PUSH_PENDING` / `--all-branches` / `--sync-branches`) | [e064366] | 2026-11-09 |
+| [00.30] | CLI Output and Table English Standardization | [7df64a5] | 2026-11-09 |
 
 ---
 
@@ -61,16 +61,6 @@
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
 
-
-### 📌 Task [00.31]: Interactive Dashboard TUI and Progress Indicators English Standardization
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/ui/dashboard.py`, `src/git_sync/ui/progress.py`
-- **Description:** Eliminate hardcoded Portuguese strings in the interactive dashboard TUI (`dashboard.py`) and progress/confirmation helpers (`progress.py`), standardizing all status badges, navigation hints, diff inspection reports, changelog views, and bulk confirmation prompts in Technical English.
-- **Systems Involved:** `src/git_sync/ui/dashboard.py`, `src/git_sync/ui/progress.py`
-- **Acceptance Criteria:**
-  - [ ] Zero hardcoded Portuguese strings in `src/git_sync/ui/dashboard.py` and `src/git_sync/ui/progress.py`.
-  - [ ] TUI keybindings bar, status messages, and feedback rendered in English.
-  - [ ] Bulk action preview headers and interactive confirmation prompts (`[y/N]`) rendered in English.
 
 ### 📌 Task [00.32]: Test Suite English Assertion Alignment and Regression Gate
 - **Status:** APPROVED
