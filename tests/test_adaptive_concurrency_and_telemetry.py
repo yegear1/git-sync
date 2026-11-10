@@ -277,7 +277,7 @@ class TestCLIAndConfigAutoTuning(unittest.TestCase):
     def test_cli_config_displays_auto_tuned_workers(self):
         out = io.StringIO()
         with redirect_stdout(out):
-            exit_code = main(["config", "--workers", "auto"])
+            exit_code = main(["config", "--workers", "auto", "--human"])
         self.assertEqual(exit_code, 0)
         output = out.getvalue()
         self.assertIn("Workers:             auto (auto-tuned)", output)

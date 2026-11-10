@@ -435,7 +435,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 1. status --submodules text mode
         f_out = io.StringIO()
         with patch("sys.stdout", f_out):
-            ret = main(["--root", str(self.root), "status", "--no-fetch", "--submodules"])
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--submodules", "--human"])
         self.assertEqual(ret, 0)
         out = f_out.getvalue()
         self.assertIn("submodules", out)
@@ -455,7 +455,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 3. pull cli_parent --submodules updates the submodule
         f_pull = io.StringIO()
         with patch("sys.stdout", f_pull):
-            ret = main(["--root", str(self.root), "pull", "cli_parent", "--submodules"])
+            ret = main(["--root", str(self.root), "pull", "cli_parent", "--submodules", "--human"])
         self.assertEqual(ret, 0)
         pull_out = f_pull.getvalue()
         self.assertIn("Submodule 'vendor/cli_sub':", pull_out)
@@ -551,7 +551,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 1. status --submodules text mode displays [shallow]
         f_out = io.StringIO()
         with patch("sys.stdout", f_out):
-            ret = main(["--root", str(self.root), "status", "--no-fetch", "--submodules"])
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--submodules", "--human"])
         self.assertEqual(ret, 0)
         out = f_out.getvalue()
         self.assertIn("[shallow]", out)
@@ -571,7 +571,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 3. pull with --submodules --unshallow deepens submodule
         f_pull = io.StringIO()
         with patch("sys.stdout", f_pull):
-            ret = main(["--root", str(self.root), "pull", "cli_shallow_parent", "--submodules", "--unshallow"])
+            ret = main(["--root", str(self.root), "pull", "cli_shallow_parent", "--submodules", "--unshallow", "--human"])
         self.assertEqual(ret, 0)
         pull_out = f_pull.getvalue()
         self.assertIn("[unshallowed]", pull_out)
@@ -721,7 +721,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 2. Test CLI cmd_pull actual execution text output
         buf = io.StringIO()
         with patch("sys.stdout", buf):
-            ret = main(["--root", str(self.root), "pull", "--all", "--sync-branches"])
+            ret = main(["--root", str(self.root), "pull", "--all", "--sync-branches", "--human"])
         self.assertEqual(ret, 0)
         output = buf.getvalue()
         # Output must report worktree tag and branch isolation
@@ -768,10 +768,19 @@ class TestGitSyncCore(unittest.TestCase):
         run_git(str(repo), ["add", "f.txt"])
         run_git(str(repo), ["commit", "-m", "initial"])
 
-        # 1. Default --json has 'items'
+        # 0. Agent-First default (no flags) outputs compact JSON omitting 'items'
+        buf_default = io.StringIO()
+        with patch("sys.stdout", buf_default):
+            ret_def = main(["--root", str(self.root), "status", "--no-fetch"])
+        self.assertEqual(ret_def, 0)
+        data_default = json.loads(buf_default.getvalue())
+        self.assertNotIn("items", data_default)
+        self.assertEqual(data_default["total"], 1)
+
+        # 1. --json --full has 'items'
         buf_full = io.StringIO()
         with patch("sys.stdout", buf_full):
-            ret = main(["--root", str(self.root), "status", "--no-fetch", "--json"])
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--json", "--full"])
         self.assertEqual(ret, 0)
         data_full = json.loads(buf_full.getvalue())
         self.assertIn("items", data_full)
@@ -811,7 +820,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 4. Text mode with --compact outputs single summary line
         buf_text_compact = io.StringIO()
         with patch("sys.stdout", buf_text_compact):
-            ret = main(["--root", str(self.root), "status", "--no-fetch", "--compact"])
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--human", "--compact"])
         self.assertEqual(ret, 0)
         out_text = buf_text_compact.getvalue()
         self.assertIn("Total: 1 repositories", out_text)
@@ -855,7 +864,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 1. Text table formatting
         buf_text = io.StringIO()
         with patch("sys.stdout", buf_text):
-            ret = main(["--root", str(self.root), "status", "--no-fetch"])
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--human"])
         self.assertEqual(ret, 0)
         output = buf_text.getvalue()
         self.assertIn("no remote configured", output)
@@ -1076,7 +1085,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 1. Text table with --changelog
         buf_text = io.StringIO()
         with patch("sys.stdout", buf_text):
-            ret = main(["--root", str(self.root), "status", "--no-fetch", "--changelog"])
+            ret = main(["--root", str(self.root), "status", "--no-fetch", "--changelog", "--human"])
         self.assertEqual(ret, 0)
         table_output = buf_text.getvalue()
         self.assertIn("app_changelog", table_output)
@@ -1095,7 +1104,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 3. JSON full items with --changelog
         buf_items = io.StringIO()
         with patch("sys.stdout", buf_items):
-            ret_items = main(["--root", str(self.root), "status", "--no-fetch", "--changelog", "--json"])
+            ret_items = main(["--root", str(self.root), "status", "--no-fetch", "--changelog", "--json", "--full"])
         self.assertEqual(ret_items, 0)
         items_data = json.loads(buf_items.getvalue())
         app_item = next(item for item in items_data["items"] if item["rel_path"] == "app_changelog")
@@ -1254,7 +1263,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 2. Test worktree list command
         buf_list = io.StringIO()
         with patch("sys.stdout", buf_list):
-            code_list = main(["worktree", "list", "--root", str(self.root)])
+            code_list = main(["worktree", "list", "--root", str(self.root), "--human"])
         self.assertEqual(code_list, 0)
         self.assertIn("prunable", buf_list.getvalue())
 
@@ -1270,7 +1279,7 @@ class TestGitSyncCore(unittest.TestCase):
         # 4. Test worktree prune live CLI
         buf_prune_live = io.StringIO()
         with patch("sys.stdout", buf_prune_live):
-            code_live = main(["worktree", "prune", "--root", str(self.root)])
+            code_live = main(["worktree", "prune", "--root", str(self.root), "--human"])
         self.assertEqual(code_live, 0)
         self.assertIn("Pruned worktree", buf_prune_live.getvalue())
 
@@ -1494,7 +1503,7 @@ class TestSparseCheckoutSupport(unittest.TestCase):
         # Status text rendering
         buf_text = io.StringIO()
         with patch("sys.stdout", buf_text):
-            code_text = main(["status", "--root", str(self.root), "--no-fetch"])
+            code_text = main(["status", "--root", str(self.root), "--no-fetch", "--human"])
         self.assertEqual(code_text, 0)
         self.assertIn("sparse(cone:1)", buf_text.getvalue())
         self.assertIn("📐 sparse-checkout: cone mode (1 pattern(s): modules)", buf_text.getvalue())
@@ -1984,6 +1993,7 @@ class TestProtectedBranchAndPushPreflight(unittest.TestCase):
                 "cli_smart_repo",
                 "--preview",
                 "--root", str(self.root),
+                "--human",
             ])
         self.assertEqual(code_prev, 0)
         prev_out = buf_prev.getvalue()
@@ -1998,6 +2008,7 @@ class TestProtectedBranchAndPushPreflight(unittest.TestCase):
                 "--sync-branches",
                 "--dry-run",
                 "--root", str(self.root),
+                "--human",
             ])
         self.assertEqual(code_render, 0)
         render_out = buf_render.getvalue()
@@ -2156,7 +2167,7 @@ class TestGitLFSSupport(unittest.TestCase):
 
         buf_status = io.StringIO()
         with patch("sys.stdout", buf_status):
-            code = main(["status", "--root", str(self.root), "--json"])
+            code = main(["status", "--root", str(self.root), "--json", "--full"])
         self.assertEqual(code, 0)
         data = json.loads(buf_status.getvalue())
         items = data.get("items", [])
@@ -2170,7 +2181,7 @@ class TestGitLFSSupport(unittest.TestCase):
         # Table output check
         buf_table = io.StringIO()
         with patch("sys.stdout", buf_table):
-            code_tbl = main(["status", "--root", str(self.root), "--no-fetch"])
+            code_tbl = main(["status", "--root", str(self.root), "--no-fetch", "--human"])
         self.assertEqual(code_tbl, 0)
         self.assertIn("lfs", buf_table.getvalue())
 
@@ -2186,7 +2197,7 @@ class TestGitLFSSupport(unittest.TestCase):
         # Doctor text output check
         buf_doc_txt = io.StringIO()
         with patch("sys.stdout", buf_doc_txt):
-            main(["doctor", "--root", str(self.root)])
+            main(["doctor", "--root", str(self.root), "--human"])
         self.assertIn("Git LFS", buf_doc_txt.getvalue())
 
 

@@ -131,6 +131,9 @@ class TestGitSyncConfig(unittest.TestCase):
         self.assertEqual(cfg.root, DEFAULT_ROOT)
         self.assertEqual(cfg.workers, DEFAULT_WORKERS)
         self.assertEqual(cfg.timeout, DEFAULT_TIMEOUT)
+        self.assertTrue(cfg.json)
+        self.assertTrue(cfg.compact)
+        self.assertTrue(cfg.status_compact)
         self.assertEqual(cfg.exclude, [])
         self.assertEqual(cfg.groups, [])
         self.assertTrue(cfg.pull_ff_only)
@@ -343,14 +346,15 @@ class TestCliConfigurationPrecedence(unittest.TestCase):
         cli_root = self.root / "cli_root"
         self._init_repo(cli_root / "sample-repo")
 
-        # Run status with CLI override --root cli_root
+        # Run status with CLI override --root cli_root and --full to inspect items
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
             exit_code = main([
                 "--config", str(cfg_file),
                 "--root", str(cli_root),
                 "status",
-                "--json"
+                "--json",
+                "--full"
             ])
 
         self.assertEqual(exit_code, 0)
@@ -369,12 +373,13 @@ class TestCliConfigurationPrecedence(unittest.TestCase):
         }
         cfg_file.write_text(json.dumps(cfg_data), encoding="utf-8")
 
-        # Check config inspection with CLI overrides
+        # Check config inspection with CLI overrides in human mode
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
             exit_code = main([
                 "--config", str(cfg_file),
-                "config"
+                "config",
+                "--human"
             ])
         self.assertEqual(exit_code, 0)
         text_out = stdout_capture.getvalue()
@@ -453,22 +458,22 @@ class TestCliConfigurationPrecedence(unittest.TestCase):
 
     def test_config_status_compact_setting(self):
         cfg_default = GitSyncConfig()
-        self.assertFalse(cfg_default.status_compact)
-        self.assertFalse(cfg_default.to_dict()["status"]["compact"])
+        self.assertTrue(cfg_default.status_compact)
+        self.assertTrue(cfg_default.to_dict()["status"]["compact"])
 
         custom_data = {
             "status": {
-                "compact": True
+                "compact": False
             }
         }
         cfg_custom = resolve_config(custom_data)
-        self.assertTrue(cfg_custom.status_compact)
-        self.assertTrue(cfg_custom.to_dict()["status"]["compact"])
+        self.assertFalse(cfg_custom.status_compact)
+        self.assertFalse(cfg_custom.to_dict()["status"]["compact"])
 
     def test_cli_config_displays_compact_status(self):
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
-            exit_code = main(["config"])
+            exit_code = main(["config", "--human"])
         self.assertEqual(exit_code, 0)
         self.assertIn("Status (compact):", stdout_capture.getvalue())
 
@@ -644,7 +649,7 @@ class TestHierarchicalConfigMergingAndInteractiveBootstrap(unittest.TestCase):
     def test_cli_config_table_displays_sources(self):
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
-            exit_code = main(["config"])
+            exit_code = main(["config", "--human"])
         self.assertEqual(exit_code, 0)
         output = stdout_capture.getvalue()
         self.assertIn("Sources:", output)
@@ -660,7 +665,7 @@ class TestHierarchicalConfigMergingAndInteractiveBootstrap(unittest.TestCase):
             # 1. First run creates template
             stdout_create = io.StringIO()
             with patch("sys.stdout", stdout_create):
-                code_1 = main(["config", "--init"])
+                code_1 = main(["config", "--init", "--human"])
             self.assertEqual(code_1, 0)
             self.assertIn("Created configuration template", stdout_create.getvalue())
             self.assertTrue(target_cfg.is_file())
@@ -669,12 +674,15 @@ class TestHierarchicalConfigMergingAndInteractiveBootstrap(unittest.TestCase):
             content = json.loads(target_cfg.read_text(encoding="utf-8"))
             self.assertEqual(content["workers"], "auto")
             self.assertTrue(content["auto_tune"])
+            self.assertTrue(content["json"])
+            self.assertTrue(content["compact"])
+            self.assertTrue(content["status"]["compact"])
             self.assertIn("profiles", content)
 
             # 2. Second run without clobbering
             stdout_exists = io.StringIO()
             with patch("sys.stdout", stdout_exists):
-                code_2 = main(["config", "--init"])
+                code_2 = main(["config", "--init", "--human"])
             self.assertEqual(code_2, 0)
             self.assertIn("already exists", stdout_exists.getvalue())
 
@@ -887,6 +895,40 @@ class TestHierarchicalConfigMergingAndInteractiveBootstrap(unittest.TestCase):
         cfg_prof = resolve_config(profile_data, profile_name="sync_all")
         self.assertTrue(cfg_prof.push_sync_branches)
         self.assertTrue(cfg_prof.to_dict()["push"]["sync_branches"])
+
+    def test_agent_first_defaults_and_overrides(self):
+        # 1. Config keys: human=True -> json=False; full=True -> compact=False
+        cfg_human = resolve_config({"human": True, "full": True})
+        self.assertFalse(cfg_human.json)
+        self.assertFalse(cfg_human.compact)
+        self.assertFalse(cfg_human.status_compact)
+
+        # 2. Environment variables: GIT_SYNC_HUMAN=1 and GIT_SYNC_FULL=1
+        with patch.dict(os.environ, {"GIT_SYNC_HUMAN": "1", "GIT_SYNC_FULL": "1"}, clear=True):
+            with patch("pathlib.Path.home", return_value=self.root / "no_home"):
+                with patch("pathlib.Path.cwd", return_value=self.root / "no_cwd"):
+                    cfg_env = load_config()
+                    self.assertFalse(cfg_env.json)
+                    self.assertFalse(cfg_env.compact)
+                    self.assertFalse(cfg_env.status_compact)
+
+        # 3. Environment variables: GIT_SYNC_JSON=0 and GIT_SYNC_COMPACT=0
+        with patch.dict(os.environ, {"GIT_SYNC_JSON": "0", "GIT_SYNC_COMPACT": "0"}, clear=True):
+            with patch("pathlib.Path.home", return_value=self.root / "no_home"):
+                with patch("pathlib.Path.cwd", return_value=self.root / "no_cwd"):
+                    cfg_env2 = load_config()
+                    self.assertFalse(cfg_env2.json)
+                    self.assertFalse(cfg_env2.compact)
+                    self.assertFalse(cfg_env2.status_compact)
+
+        # 4. Default CLI `config` outputs valid JSON without passing --json
+        buf_default = io.StringIO()
+        with patch("sys.stdout", buf_default):
+            code = main(["config"])
+        self.assertEqual(code, 0)
+        parsed = json.loads(buf_default.getvalue())
+        self.assertTrue(parsed["json"])
+        self.assertTrue(parsed["compact"])
 
 
 if __name__ == "__main__":

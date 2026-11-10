@@ -16,27 +16,27 @@
 
 | Subcommand | Flag Options | Primary Output | Use Case |
 |---|---|---|---|
-| `git-sync status` | `--fetch`/`--no-fetch`, `--pending`, `--compact`/`--summary`, `--changelog`, `--submodules`, `--dashboard`/`--tui`, `-i`/`--interactive`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json` | Table / Dashboard / JSON | Inspection of sync states across all repos in root |
+| `git-sync status` | `--fetch`/`--no-fetch`, `--pending`, `--compact`/`--summary`, `--full`/`--no-compact`, `--changelog`, `--submodules`, `--dashboard`/`--tui`, `-i`/`--interactive`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json`/`--human` | Compact JSON (default) / Full JSON / Table / Dashboard | Inspection of sync states across all repos in root |
 | `git-sync dashboard` / `tui` | `--fetch`/`--no-fetch`, `--pending`, `--changelog`, `--group <dir>` | Interactive Dashboard | High-density terminal dashboard with single-key action loop (`Enter`, `p`, `w`/`Tab`, `r`, `c`, `d`, `j`/`k`, `q`) |
-| `git-sync doctor` | `--ssh`, `--prune-ssh`, `--group <dir>`, `--json` | Diagnostics table / JSON | Proactive credential sanity check (SSH agent, keys, credential helper, SSH multiplexing, stale socket pruning, remote reachability, locked repos) |
-| `git-sync pull` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--ff-only`/`--no-ff-only`, `--autostash`/`--no-autostash`, `--sync-branches`/`--no-sync-branches`, `--submodules`/`--no-submodules`, `--unshallow`, `--strategy <abort\|rebase\|merge>`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--recover-locks`, `-i`/`--interactive`, `--group <dir>`, `--json` | Progress logs / JSON | Fast-forward update of current branch + auxiliary branches with dirty tree autostash, divergence resolution, stale lock recovery & shallow submodule deepening |
-| `git-sync resolve` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--strategy <abort\|rebase\|merge\|stash>`, `--diff`, `--max-tokens <n>`, `-i`/`--interactive`, `--group <dir>`, `--fetch`/`--no-fetch`, `--compact`/`--summary`, `--json` | Interactive prompt / JSON | Guided diagnostics, diff inspection, and resolution for diverged branches |
-| `git-sync push` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--branch <name>`, `--remote <name>`, `--force`, `--block-protected`, `--allow-protected`, `--protected-branches <patterns>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json` | Progress logs / JSON | Push committed branches to upstream remote targets with proactive pre-flight telemetry and protected branch force-push defense |
-| `git-sync dirty` | `--group <dir>`, `--json` | List of modified files | Quick audit of uncommitted work |
-| `git-sync unlock` | `[repos...]`, `--all`, `--force`, `--group <dir>`, `--json` | Progress logs / JSON | Safely inspect and recover active or stale Git lock files (.git/*.lock) |
-| `git-sync config` | `--init`, `--edit`, `--global`, `--json` | Table / JSON / Interactive Editor | Inspect resolved configuration, trace provenance sources, or bootstrap/edit templates |
-| `git-sync install` | `--target-dir <dir>`, `--force`, `--uninstall`, `--json` | Progress logs / JSON | Safe idempotent global deployment of launcher symlink to `~/.local/bin/git-sync` |
-| `git-sync completion` | `[bash\|zsh]`, `--install`, `--target-dir <dir>`, `--json` | Script / JSON | Generate or install shell autocompletion definitions with dynamic repo lookup |
-| `git-sync worktree` | `prune`/`list`, `[repos...]`, `--all`, `--expire <time>`, `--group <dir>`, `--dry-run`, `--json` | Table / Progress logs / JSON | Inspect linked worktree topology, clean missing worktree metadata/orphaned admin dirs, and warn on dirty linked worktrees |
+| `git-sync doctor` | `--ssh`, `--prune-ssh`, `--group <dir>`, `--json`/`--human` | JSON (default) / Diagnostics table | Proactive credential sanity check (SSH agent, keys, credential helper, SSH multiplexing, stale socket pruning, remote reachability, locked repos) |
+| `git-sync pull` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--ff-only`/`--no-ff-only`, `--autostash`/`--no-autostash`, `--sync-branches`/`--no-sync-branches`, `--submodules`/`--no-submodules`, `--unshallow`, `--strategy <abort\|rebase\|merge>`, `--remote <name>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--recover-locks`, `-i`/`--interactive`, `--group <dir>`, `--json`/`--human`, `--compact`/`--full` | Compact JSON (default) / Progress logs | Fast-forward update of current branch + auxiliary branches with dirty tree autostash, divergence resolution, stale lock recovery & shallow submodule deepening |
+| `git-sync resolve` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--strategy <abort\|rebase\|merge\|stash>`, `--diff`, `--max-tokens <n>`, `-i`/`--interactive`, `--group <dir>`, `--fetch`/`--no-fetch`, `--compact`/`--summary`, `--full`/`--no-compact`, `--json`/`--human` | JSON (default) / Interactive prompt | Guided diagnostics, diff inspection, and resolution for diverged branches |
+| `git-sync push` | `[repos...]`, `--all`, `--dry-run`/`--no-dry-run`, `--branch <name>`, `--remote <name>`, `--force`, `--block-protected`, `--allow-protected`, `--protected-branches <patterns>`, `--no-cache`, `--benchmark`, `--preflight`, `--retries <n>`, `--group <dir>`, `--json`/`--human` | JSON (default) / Progress logs | Push committed branches to upstream remote targets with proactive pre-flight telemetry and protected branch force-push defense |
+| `git-sync dirty` | `--group <dir>`, `--json`/`--human` | JSON (default) / List of modified files | Quick audit of uncommitted work |
+| `git-sync unlock` | `[repos...]`, `--all`, `--force`, `--group <dir>`, `--json`/`--human` | JSON (default) / Progress logs | Safely inspect and recover active or stale Git lock files (.git/*.lock) |
+| `git-sync config` | `--init`, `--edit`, `--global`, `--json`/`--human` | JSON (default) / Table / Interactive Editor | Inspect resolved configuration, trace provenance sources, or bootstrap/edit templates |
+| `git-sync install` | `--target-dir <dir>`, `--force`, `--uninstall`, `--json`/`--human` | JSON (default) / Progress logs | Safe idempotent global deployment of launcher symlink to `~/.local/bin/git-sync` |
+| `git-sync completion` | `[bash\|zsh]`, `--install`, `--target-dir <dir>`, `--json`/`--human` | Script / JSON | Generate or install shell autocompletion definitions with dynamic repo lookup |
+| `git-sync worktree` | `prune`/`list`, `[repos...]`, `--all`, `--expire <time>`, `--group <dir>`, `--dry-run`, `--json`/`--human` | JSON (default) / Table / Progress logs | Inspect linked worktree topology, clean missing worktree metadata/orphaned admin dirs, and warn on dirty linked worktrees |
 
 Global options (usable before or after subcommands):
-`-v`, `--version`, `--config <path>`, `--profile <name>`, `--root <dir>`, `--workers <n|auto>`, `--auto-tune` / `--adaptive`, `--timeout <sec>`, `--retries <n>`, `--preflight`, `--exclude <patterns...>`, `--compact`, `--summary`, `--changelog`, `--submodules` / `--no-submodules`, `--unshallow`, `--max-tokens <n>`, `--benchmark`, `--telemetry`, `--no-cache`, `--remote <name>`, `--dry-run`, `--no-dry-run`, `--json`.
+`-v`, `--version`, `--config <path>`, `--profile <name>`, `--root <dir>`, `--workers <n|auto>`, `--auto-tune` / `--adaptive`, `--timeout <sec>`, `--retries <n>`, `--preflight`, `--exclude <patterns...>`, `--compact`, `--summary`, `--full`, `--no-compact`, `--changelog`, `--submodules` / `--no-submodules`, `--unshallow`, `--max-tokens <n>`, `--benchmark`, `--telemetry`, `--no-cache`, `--remote <name>`, `--dry-run`, `--no-dry-run`, `--json`, `--human`, `--no-json`, `--table`, `--text`.
 
-### 2. Agent JSON Schema (`--json`)
+### 2. Agent JSON Schema (Default: `--json` + `--compact`)
 
-When invoked with `--json`, `git-sync status` provides two modes:
+By default (`json=True`, `compact=True`), all `git-sync` commands emit machine-parseable, token-minimized JSON payloads. `git-sync status` provides two JSON modes:
 
-#### 2.1 Compact Mode (`--compact` or `--summary`) — Recommended for AI Agents (~90% token reduction)
+#### 2.1 Compact Mode (Default, or `--compact` / `--summary`) — Optimized for AI Agents (~90% token reduction)
 Omit the heavy `items` list and output only high-level operational triage arrays:
 
 ```json
@@ -68,7 +68,7 @@ Omit the heavy `items` list and output only high-level operational triage arrays
 }
 ```
 
-#### 2.2 Full Detail Mode (Default `--json`)
+#### 2.2 Full Detail Mode (`--full` or `--no-compact`)
 Outputs the top-level summary plus the complete array of repository metadata:
 
 ```json
@@ -240,7 +240,7 @@ Configuration layers:
 2. XDG Base Directory specification (`$XDG_CONFIG_HOME/git-sync/config.json` or `~/.config/git-sync/config.json`)
 3. User home directory (`~/.git-sync.json`)
 4. Workspace directory (`./.git-sync.json` or custom `--config <path>` / `GIT_SYNC_CONFIG`)
-5. Environment variables (`GIT_SYNC_PROFILE`, `GIT_SYNC_ROOT`, `GIT_SYNC_WORKERS`, `GIT_SYNC_TIMEOUT`, `GIT_SYNC_AUTO_TUNE`, `GIT_SYNC_REMOTE`, `GIT_SYNC_RETRIES`, `GIT_SYNC_PREFLIGHT`, `GIT_SYNC_BENCHMARK`)
+5. Environment variables (`GIT_SYNC_PROFILE`, `GIT_SYNC_ROOT`, `GIT_SYNC_WORKERS`, `GIT_SYNC_TIMEOUT`, `GIT_SYNC_AUTO_TUNE`, `GIT_SYNC_REMOTE`, `GIT_SYNC_RETRIES`, `GIT_SYNC_PREFLIGHT`, `GIT_SYNC_BENCHMARK`, `GIT_SYNC_JSON`, `GIT_SYNC_HUMAN`, `GIT_SYNC_COMPACT`, `GIT_SYNC_FULL`)
 6. Workspace profile (`--profile <name>` or `default_profile`)
 7. Explicit CLI arguments (`CLI`)
 

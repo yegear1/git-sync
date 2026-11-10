@@ -301,6 +301,7 @@ class TestDivergenceAndResolution(unittest.TestCase):
         with patch("sys.stdout", stdout_capture):
             exit_code = main([
                 "--root", str(self.root),
+                "--human",
                 "resolve", "cli-resolve-diff",
                 "--diff",
                 "--no-fetch",
@@ -457,6 +458,7 @@ class TestDivergenceAndResolution(unittest.TestCase):
         with patch("sys.stdout", stdout_capture):
             exit_code = main([
                 "--root", str(self.root),
+                "--human",
                 "resolve", "cli-diff-tokens",
                 "--diff",
                 "--max-tokens", "5",
@@ -473,6 +475,7 @@ class TestDivergenceAndResolution(unittest.TestCase):
         with patch("sys.stdout", stdout_capture):
             exit_code = main([
                 "--root", str(self.root),
+                "--human",
                 "--compact",
                 "resolve", "cli-diff-compact",
                 "--diff",

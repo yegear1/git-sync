@@ -7,19 +7,17 @@
 
 ## Active Task
 
-### 📌 Task [00.33]: Concurrent Multi-Repository `git-sync push` Parallelization
-- **Status:** READY FOR PLANNING
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/concurrency.py`, `tests/`
-- **Description:** Parallelize multi-repository `git-sync push` execution using `ThreadPoolExecutor` and dynamic worker scaling via `AdaptiveConcurrencyController` (`determine_workers` with `is_fetch=True` to account for remote network latency), eliminating sequential push bottlenecks while maintaining pre-flight safety checks and thread-safe telemetry.
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/concurrency.py`, `tests/`
+### 📌 Task [00.34]: Concurrent Multi-Repository `git-sync push` Parallelization
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/`, `tests/`
+- **Description:** Upgrade `cmd_push` in `src/git_sync/cli.py` to execute multi-repository `push_repo` targets concurrently via `ThreadPoolExecutor(max_workers=effective_workers)` controlled by `AdaptiveConcurrencyController`, while maintaining deterministic sorted result ordering, thread-safe `ProgressIndicator` updates, and single-prompt confirmation prior to concurrent execution.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/`, `tests/`
 - **Acceptance Criteria:**
-  - [ ] `cmd_push` determines `effective_push_workers` via `controller.determine_workers(len(targets), is_fetch=True, configured_workers=configured_w)` honoring `--workers` and `--auto-tune`.
-  - [ ] `benchmark.active_workers` and `benchmark.optimal_workers` accurately recorded during push phase.
-  - [ ] Multi-repository pushes execute concurrently via `ThreadPoolExecutor(max_workers=effective_push_workers)`.
-  - [ ] `ProgressIndicator` advances dynamically in real-time as each worker future completes via `as_completed`.
-  - [ ] Results sorted deterministically by `repo_rel` prior to console rendering or JSON output.
-  - [ ] Thread safety preserved across `BulkCache`, `TelemetryBenchmark`, and individual repo `preflight_push_check` runs.
-  - [ ] Unit and telemetry benchmark tests verify concurrent push execution, worker tuning, and benchmark metrics recording.
+  - [ ] Multi-repository `git-sync push` executes concurrently via `ThreadPoolExecutor(max_workers=effective_workers)`.
+  - [ ] `AdaptiveConcurrencyController` determines `effective_workers` for the push stage and records telemetry in `benchmark`.
+  - [ ] Interactive `--confirm` and `--preview` execute cleanly on the main thread before spawning worker threads.
+  - [ ] Output results are sorted deterministically by `repo_rel` (preserving predictable CLI and `--json` output order).
+  - [ ] Unit tests in `tests/` verify concurrent execution, deterministic sorting, and error propagation.
 
 ---
 
@@ -60,6 +58,7 @@
 | [00.30] | CLI Output and Table English Standardization | [7df64a5] | 2026-11-09 |
 | [00.31] | Interactive Dashboard TUI and Progress Indicators English Standardization | [7e123a9] | 2026-11-09 |
 | [00.32] | Test Suite English Assertion Alignment and Regression Gate | [7e123a9] | 2026-11-09 |
+| [00.33] | Agent-First CLI Defaults (`--json` & `--compact` by Default) and Configurable Human/Full Overrides | [HEAD] | 2026-11-10 |
 
 ---
 
@@ -68,7 +67,7 @@
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
 
 
-### 📌 Task [00.34]: Token-Budget Optimization and Structured Diffstat Summarization in `--compact` Pull JSON
+### 📌 Task [00.35]: Token-Budget Optimization and Structured Diffstat Summarization in `--compact` Pull JSON
 - **Status:** APPROVED
 - **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/diff.py`, `tests/`
 - **Description:** Optimize token consumption in `git-sync pull --compact --json` by summarizing/truncating verbose raw `git pull` stdout, diffstats, and uncommitted file listings to strict concise metrics (<150 tokens per repository) for consumption by AI agents, and provide concise single-line summary reporting in text mode.

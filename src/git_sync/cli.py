@@ -1131,6 +1131,8 @@ def cmd_config(args: argparse.Namespace, config: GitSyncConfig) -> int:
     print(f"  Push (protected):    {', '.join(getattr(config, 'push_protected_branches', DEFAULT_PROTECTED_BRANCHES))}")
     print(f"  Push (block-prot):   {getattr(config, 'push_block_protected', False)}")
     print(f"  Push (sync-branches):{getattr(args, 'push_sync_branches', getattr(config, 'push_sync_branches', False))}")
+    print(f"  Output (JSON):       {getattr(args, 'json', config.json)}")
+    print(f"  Output (compact):    {getattr(args, 'compact', config.compact)}")
     print(f"  Status (compact):    {getattr(args, 'compact', config.status_compact)}")
     print(f"  Benchmark:           {getattr(args, 'benchmark', config.benchmark)}")
     print(f"  Bulk Cache:          {not getattr(args, 'no_cache', not config.use_cache)}")
@@ -1559,9 +1561,11 @@ def main(argv: list[str] | None = None) -> int:
     common.add_argument("--retries", type=int, default=argparse.SUPPRESS, help=f"Git network retry attempts on transient errors (default: {config.retries})")
     common.add_argument("--preflight", action="store_true", default=argparse.SUPPRESS, help="Run pre-flight credential and remote sanity check before executing operations")
     common.add_argument("--exclude", nargs="*", default=argparse.SUPPRESS, help="Directories or patterns to exclude from repo discovery")
-    common.add_argument("--compact", action="store_true", default=argparse.SUPPRESS, help="Output compact summary omitting repository items array (recommended for AI agents)")
+    common.add_argument("--compact", action="store_true", default=argparse.SUPPRESS, help="Output compact summary omitting repository items array (default for AI agents)")
     common.add_argument("--summary", dest="compact", action="store_true", default=argparse.SUPPRESS, help="Alias for --compact")
-    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output machine-readable JSON")
+    common.add_argument("--full", "--no-compact", dest="compact", action="store_false", default=argparse.SUPPRESS, help="Include full detailed repository items array in JSON output or full table in human mode")
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS, help="Output machine-readable JSON (default)")
+    common.add_argument("--human", "--no-json", "--text", "--table", dest="json", action="store_false", default=argparse.SUPPRESS, help="Output human-readable terminal tables and formatted reports")
     common.add_argument("--benchmark", action="store_true", default=argparse.SUPPRESS, help="Measure and display execution performance telemetry")
     common.add_argument("--telemetry", dest="benchmark", action="store_true", default=argparse.SUPPRESS, help="Alias for --benchmark")
     common.add_argument("--no-cache", action="store_true", default=argparse.SUPPRESS, help="Disable in-memory bulk cache across worktree and remote audits")
@@ -1737,7 +1741,31 @@ def main(argv: list[str] | None = None) -> int:
     args.timeout = getattr(args, "timeout", None) or config.timeout
     args.exclude = getattr(args, "exclude", None) if getattr(args, "exclude", None) is not None else list(config.exclude)
     args.groups = list(config.groups)
-    args.json = getattr(args, "json", False)
+
+    args.interactive = getattr(args, "interactive", False)
+    args.dashboard = getattr(args, "dashboard", False) or (args.command == "status" and args.interactive)
+
+    confirm_flag = getattr(args, "confirm", None)
+    if args.command == "pull":
+        args.confirm = confirm_flag if confirm_flag is not None else config.pull_confirm
+    elif args.command == "push":
+        args.confirm = confirm_flag if confirm_flag is not None else config.push_confirm
+    else:
+        args.confirm = confirm_flag if confirm_flag is not None else config.confirm
+
+    json_flag = getattr(args, "json", None)
+    if json_flag is not None:
+        args.json = bool(json_flag)
+    elif (
+        args.dashboard
+        or args.interactive
+        or (args.command == "completion" and not getattr(args, "install", False))
+        or (args.command == "config" and getattr(args, "edit", False))
+        or confirm_flag is True
+    ):
+        args.json = False
+    else:
+        args.json = getattr(config, "json", True)
 
     benchmark_flag = getattr(args, "benchmark", None)
     args.benchmark = benchmark_flag if benchmark_flag is not None else config.benchmark
@@ -1765,7 +1793,13 @@ def main(argv: list[str] | None = None) -> int:
     args.pending = pending_flag if pending_flag is not None else config.status_pending
 
     compact_flag = getattr(args, "compact", None)
-    args.compact = compact_flag if compact_flag is not None else config.status_compact
+    if compact_flag is not None:
+        args.compact = bool(compact_flag)
+    elif not args.json:
+        # When human output is requested without an explicit --compact flag, render full human tables/reports
+        args.compact = False
+    else:
+        args.compact = config.status_compact if args.command == "status" else getattr(config, "compact", True)
 
     changelog_flag = getattr(args, "changelog", None)
     args.changelog = changelog_flag if changelog_flag is not None else config.status_changelog
@@ -1797,9 +1831,6 @@ def main(argv: list[str] | None = None) -> int:
     strategy_flag = getattr(args, "strategy", None)
     args.strategy = strategy_flag if strategy_flag is not None else config.pull_strategy
 
-    args.interactive = getattr(args, "interactive", False)
-    args.dashboard = getattr(args, "dashboard", False) or (args.command == "status" and args.interactive)
-
     dry_run_flag = getattr(args, "dry_run", None)
     if args.command == "pull":
         args.dry_run = dry_run_flag if dry_run_flag is not None else config.pull_dry_run
@@ -1811,14 +1842,6 @@ def main(argv: list[str] | None = None) -> int:
         args.dry_run = dry_run_flag
     else:
         args.dry_run = dry_run_flag if dry_run_flag is not None else False
-
-    confirm_flag = getattr(args, "confirm", None)
-    if args.command == "pull":
-        args.confirm = confirm_flag if confirm_flag is not None else config.pull_confirm
-    elif args.command == "push":
-        args.confirm = confirm_flag if confirm_flag is not None else config.push_confirm
-    else:
-        args.confirm = confirm_flag if confirm_flag is not None else config.confirm
 
     args.preview = getattr(args, "preview", False)
 

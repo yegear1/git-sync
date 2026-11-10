@@ -14,8 +14,10 @@ Canonical operational directives for AI agents inspecting, auditing, synchronizi
   - Ad-hoc loops consume 20,000+ context tokens, execute sequentially, and risk hanging permanently on interactive credentials.
 - **FORBIDDEN ACTION: Interactive Git Hanging.**
   - **NEVER** run background Git operations without `GIT_TERMINAL_PROMPT=0`.
-- **MANDATORY: Token Minimization.**
-  - **ALWAYS** pass `--compact` (or `--summary`) and `--json` when querying status or executing pulls in agent sessions (`git-sync status --pending --compact --json`, `git-sync pull --all --compact --json`). Omitting `--json` during pull emits ANSI spinner animations and progress frames that consume 1,000+ extra context tokens.
+- **MANDATORY: Token Minimization (Agent-First Defaults).**
+  - `git-sync` defaults globally to `--json` and `--compact` (`json=True`, `compact=True`). Invoking `git-sync status`, `git-sync pull --all`, `git-sync push --all`, or `git-sync doctor` automatically emits token-minimized JSON payloads with zero ANSI spinner noise.
+  - Use `--full` (or `--no-compact`) only when you specifically need the full per-repository `items` array in `status` or full unmodified payloads.
+  - Use `--human` (or `--no-json`, `--table`, `--text`) only when rendering formatted tables or progress bars for human terminal inspection.
 - **MANDATORY: Fast-Forward Safety.**
   - Sync pulls default strictly to `--ff-only` with automated stash preservation (`autostash=True`).
 
@@ -29,20 +31,23 @@ Activate this skill whenever:
 
 ## 3. High-Leverage CLI Commands
 
-### 3.1 Status & Triage (Lowest Token Overhead)
+### 3.1 Status & Triage (Lowest Token Overhead by Default)
 
 ```bash
-# Fastest, token-minimized status of repositories requiring attention (<300 tokens):
-git-sync status --pending --compact --json
-
-# Complete workspace status summary omitting heavy items array:
-git-sync status --compact --json
-
-# Text table overview for user presentation:
+# Fastest, token-minimized status of repositories requiring attention (<300 tokens, compact JSON by default):
 git-sync status --pending
+
+# Complete workspace status summary omitting heavy items array (compact JSON by default):
+git-sync status
+
+# Detailed status JSON including full per-repository items array:
+git-sync status --full
+
+# Human-readable text table overview for terminal presentation:
+git-sync status --pending --human
 ```
 
-**JSON Output Contract:**
+**JSON Output Contract (Default Compact Mode):**
 ```json
 {
   "root": "/home/user/github",
@@ -63,24 +68,24 @@ git-sync status --pending
 ### 3.2 Bulk Pull & Synchronization
 
 ```bash
-# Token-minimized fast-forward pull for AI agents (<100 tokens, zero spinner noise):
-git-sync pull --all --compact --json
-
-# Pull specific repositories with structured JSON output:
-git-sync pull org/git-sync org/repo-b --compact --json
-
-# Interactive pull for human terminals with animated progress indicator:
+# Token-minimized fast-forward pull for AI agents (<100 tokens, compact JSON by default, zero spinner noise):
 git-sync pull --all
 
-# Preview pull operations without altering files:
-git-sync pull --all --dry-run --compact --json
+# Pull specific repositories with structured JSON output (default):
+git-sync pull org/git-sync org/repo-b
+
+# Interactive pull for human terminals with animated progress indicator:
+git-sync pull --all --human
+
+# Preview pull operations without altering files (JSON by default):
+git-sync pull --all --dry-run
 ```
 
 ### 3.3 Outgoing Commits (Push)
 
 ```bash
-# Safe dry-run push inspection:
-git-sync push --all --dry-run --json
+# Safe dry-run push inspection (JSON by default):
+git-sync push --all --dry-run
 
 # Push all repositories with pending commits (ahead > 0):
 git-sync push --all
@@ -89,7 +94,7 @@ git-sync push --all
 ### 3.4 Diagnostics & Lock Recovery
 
 ```bash
-# Diagnose workspace remotes and verify credential sanity without hanging:
+# Diagnose workspace remotes and verify credential sanity without hanging (JSON by default, add --human for table):
 git-sync doctor
 
 # Clean up stale index.lock files left by crashed processes (>300s old):

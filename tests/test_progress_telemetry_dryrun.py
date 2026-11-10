@@ -370,7 +370,7 @@ class TestCliDryRunIntegration(unittest.TestCase):
         # 1. Text dry-run pull
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
-            exit_code = main(["pull", "cli_repo", "--root", str(self.root), "--dry-run"])
+            exit_code = main(["pull", "cli_repo", "--root", str(self.root), "--dry-run", "--human"])
         self.assertEqual(exit_code, 0)
         text_out = stdout_capture.getvalue()
         self.assertIn("[DRY-RUN]", text_out)
@@ -396,7 +396,7 @@ class TestCliDryRunIntegration(unittest.TestCase):
 
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
-            exit_code = main(["--config", str(cfg_file), "config"])
+            exit_code = main(["--config", str(cfg_file), "config", "--human"])
         self.assertEqual(exit_code, 0)
         text_out = stdout_capture.getvalue()
         self.assertIn("Pull (dry-run):      True", text_out)
@@ -583,7 +583,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
         # 1. Text preview mode
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
-            exit_code = main(["pull", "repo1", "--root", str(self.root), "--preview"])
+            exit_code = main(["pull", "repo1", "--root", str(self.root), "--preview", "--human"])
         self.assertEqual(exit_code, 0)
         out = stdout_capture.getvalue()
         self.assertIn("BULK PULL PREVIEW", out)
@@ -614,7 +614,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
             with patch("builtins.input", return_value="n"):
-                exit_code = main(["pull", "repo1", "--root", str(self.root), "--confirm"])
+                exit_code = main(["pull", "repo1", "--root", str(self.root), "--confirm", "--human"])
 
         self.assertEqual(exit_code, 0)
         out = stdout_capture.getvalue()
@@ -633,7 +633,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
             with patch("builtins.input", return_value="yes"):
-                exit_code = main(["pull", "repo1", "--root", str(self.root), "--confirm"])
+                exit_code = main(["pull", "repo1", "--root", str(self.root), "--confirm", "--human"])
 
         self.assertEqual(exit_code, 0)
         out = stdout_capture.getvalue()
@@ -687,7 +687,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
         # 1. Preview push
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
-            exit_code = main(["push", "push_repo", "--root", str(self.root), "--preview"])
+            exit_code = main(["push", "push_repo", "--root", str(self.root), "--preview", "--human"])
         self.assertEqual(exit_code, 0)
         out = stdout_capture.getvalue()
         self.assertIn("BULK PUSH PREVIEW", out)
@@ -697,7 +697,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
         stdout_denied = io.StringIO()
         with patch("sys.stdout", stdout_denied):
             with patch("builtins.input", return_value="n"):
-                exit_code = main(["push", "push_repo", "--root", str(self.root), "--confirm"])
+                exit_code = main(["push", "push_repo", "--root", str(self.root), "--confirm", "--human"])
         self.assertEqual(exit_code, 0)
         self.assertIn("Operation canceled by user.", stdout_denied.getvalue())
 

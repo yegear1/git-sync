@@ -571,7 +571,7 @@ Host *
         }
 
         with patch("sys.stdout"):
-            exit_code = main(["doctor", "--ssh"])
+            exit_code = main(["doctor", "--ssh", "--human"])
             self.assertEqual(exit_code, 0)
             mock_audit.assert_called_once()
 
@@ -787,7 +787,7 @@ Host *
 
         captured = []
         with patch("sys.stdout.write", side_effect=captured.append):
-            exit_code = main(["doctor", "--prune-ssh"])
+            exit_code = main(["doctor", "--prune-ssh", "--human"])
             self.assertEqual(exit_code, 0)
             output = "".join(captured)
             self.assertIn("pruned", output)
@@ -1138,7 +1138,7 @@ class TestRemoteLatencyGradingAndDoctor(unittest.TestCase):
         # Test Text Formatting Table
         captured = []
         with patch("sys.stdout.write", side_effect=captured.append):
-            exit_code = main(["doctor"])
+            exit_code = main(["doctor", "--human"])
             self.assertEqual(exit_code, 0)
 
         out_text = "".join(captured)
@@ -1459,7 +1459,7 @@ class TestCredentialHelperTriageAndExpiryDiagnostics(unittest.TestCase):
 
         captured = []
         with patch("sys.stdout.write", side_effect=captured.append):
-            exit_code = main(["doctor"])
+            exit_code = main(["doctor", "--human"])
             self.assertEqual(exit_code, 1)
 
         out_text = "".join(captured)
@@ -1714,7 +1714,7 @@ class TestMultiRemoteMatrixAndWorktreeHealthAudit(unittest.TestCase):
 
         captured = []
         with patch("sys.stdout.write", side_effect=captured.append):
-            exit_code = main(["doctor"])
+            exit_code = main(["doctor", "--human"])
             self.assertEqual(exit_code, 0)
 
         out_text = "".join(captured)

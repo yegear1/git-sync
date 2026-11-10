@@ -284,7 +284,7 @@ class TestCliTelemetryAndMultiRemote(unittest.TestCase):
 
         out_buf = io.StringIO()
         with redirect_stdout(out_buf):
-            code = main(["status", "--root", str(self.root), "--no-fetch", "--benchmark"])
+            code = main(["status", "--root", str(self.root), "--no-fetch", "--benchmark", "--human"])
 
         self.assertEqual(code, 0)
         output = out_buf.getvalue()
@@ -309,7 +309,7 @@ class TestCliTelemetryAndMultiRemote(unittest.TestCase):
     def test_cli_config_shows_benchmark_and_cache(self):
         out_buf = io.StringIO()
         with redirect_stdout(out_buf):
-            code = main(["config"])
+            code = main(["config", "--human"])
 
         self.assertEqual(code, 0)
         output = out_buf.getvalue()

@@ -43,6 +43,8 @@ DEFAULT_CONFIG_TEMPLATE: dict[str, Any] = {
     "workers": "auto",
     "auto_tune": True,
     "timeout": DEFAULT_TIMEOUT,
+    "json": True,
+    "compact": True,
     "exclude": [],
     "groups": [],
     "pull": {
@@ -62,7 +64,7 @@ DEFAULT_CONFIG_TEMPLATE: dict[str, Any] = {
         "sync_branches": False,
     },
     "status": {
-        "compact": False,
+        "compact": True,
         "no_fetch": False,
         "changelog": False,
     },
@@ -144,6 +146,8 @@ class GitSyncConfig:
     timeout: int = DEFAULT_TIMEOUT
     disk_latency_threshold: float = DEFAULT_DISK_LATENCY_THRESHOLD
     network_latency_threshold: float = DEFAULT_NETWORK_LATENCY_THRESHOLD
+    json: bool = True
+    compact: bool = True
     exclude: list[str] = field(default_factory=list)
     groups: list[str] = field(default_factory=list)
     sources: list[str] = field(default_factory=lambda: ["defaults"])
@@ -169,7 +173,7 @@ class GitSyncConfig:
     push_force: bool = False
     status_no_fetch: bool = False
     status_pending: bool = False
-    status_compact: bool = False
+    status_compact: bool = True
     status_prune: bool = False
     status_changelog: bool = False
     status_submodules: bool = False
@@ -199,6 +203,8 @@ class GitSyncConfig:
             "timeout": self.timeout,
             "disk_latency_threshold": self.disk_latency_threshold,
             "network_latency_threshold": self.network_latency_threshold,
+            "json": self.json,
+            "compact": self.compact,
             "retries": self.retries,
             "preflight": self.preflight,
             "exclude": list(self.exclude),
@@ -487,7 +493,29 @@ def resolve_config(
     status_cfg: dict[str, Any] = status_raw if isinstance(status_raw, dict) else {}
     status_no_fetch = bool(status_cfg.get("no_fetch", combined.get("no_fetch", False)))
     status_pending = bool(status_cfg.get("pending", combined.get("pending", False)))
-    status_compact = bool(status_cfg.get("compact", combined.get("compact", False)))
+
+    # Parse Agent-First output defaults (json=True, compact=True) with human/full overrides
+    if "json" in combined:
+        json_enabled = bool(combined["json"])
+    elif "human" in combined:
+        json_enabled = not bool(combined["human"])
+    else:
+        json_enabled = True
+
+    if "compact" in combined:
+        compact_enabled = bool(combined["compact"])
+    elif "full" in combined:
+        compact_enabled = not bool(combined["full"])
+    else:
+        compact_enabled = True
+
+    if "compact" in status_cfg:
+        status_compact = bool(status_cfg["compact"])
+    elif "full" in status_cfg:
+        status_compact = not bool(status_cfg["full"])
+    else:
+        status_compact = compact_enabled
+
     status_prune = bool(status_cfg.get("prune", combined.get("status_prune", global_prune)))
     status_submodules = bool(status_cfg.get("submodules", combined.get("status_submodules", global_submodules)))
     status_changelog = bool(status_cfg.get("changelog", combined.get("changelog", False)))
@@ -524,6 +552,8 @@ def resolve_config(
         timeout=timeout,
         disk_latency_threshold=disk_threshold,
         network_latency_threshold=network_threshold,
+        json=json_enabled,
+        compact=compact_enabled,
         exclude=exclude,
         groups=groups,
         pull_ff_only=pull_ff_only,
@@ -671,6 +701,23 @@ def load_config(
             pass
     if "GIT_SYNC_AUTO_TUNE" in os.environ:
         env_overrides["auto_tune"] = os.environ["GIT_SYNC_AUTO_TUNE"].strip().lower() in ("1", "true", "yes")
+    if "GIT_SYNC_JSON" in os.environ and os.environ["GIT_SYNC_JSON"].strip():
+        env_overrides["json"] = os.environ["GIT_SYNC_JSON"].strip().lower() in ("1", "true", "yes")
+    if "GIT_SYNC_HUMAN" in os.environ and os.environ["GIT_SYNC_HUMAN"].strip():
+        is_human = os.environ["GIT_SYNC_HUMAN"].strip().lower() in ("1", "true", "yes")
+        env_overrides["human"] = is_human
+        if "GIT_SYNC_JSON" not in os.environ:
+            env_overrides["json"] = not is_human
+    if "GIT_SYNC_COMPACT" in os.environ and os.environ["GIT_SYNC_COMPACT"].strip():
+        is_compact = os.environ["GIT_SYNC_COMPACT"].strip().lower() in ("1", "true", "yes")
+        env_overrides["compact"] = is_compact
+        env_overrides.setdefault("status", {})["compact"] = is_compact
+    if "GIT_SYNC_FULL" in os.environ and os.environ["GIT_SYNC_FULL"].strip():
+        is_full = os.environ["GIT_SYNC_FULL"].strip().lower() in ("1", "true", "yes")
+        env_overrides["full"] = is_full
+        if "GIT_SYNC_COMPACT" not in os.environ:
+            env_overrides["compact"] = not is_full
+            env_overrides.setdefault("status", {})["compact"] = not is_full
     if "GIT_SYNC_REMOTE" in os.environ and os.environ["GIT_SYNC_REMOTE"].strip():
         env_overrides["remote"] = os.environ["GIT_SYNC_REMOTE"].strip()
     if "GIT_SYNC_RETRIES" in os.environ and os.environ["GIT_SYNC_RETRIES"].strip():
