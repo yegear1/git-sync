@@ -94,6 +94,11 @@ class TelemetryBenchmark:
             if recovered:
                 self.retries_recovered += 1
 
+    def record_alert(self, alert: dict[str, Any]) -> None:
+        """Record an alert event thread-safely."""
+        with self._lock:
+            self.alerts.append(alert)
+
     def record_hygiene(
         self,
         repo_rel: str,

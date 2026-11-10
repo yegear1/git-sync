@@ -2698,7 +2698,7 @@ def push_repo(
         if benchmark:
             benchmark.record_failure(cat.lower())
             if cat in ("PROTECTED_BRANCH_FORCE_PUSH", "PROTECTED_BRANCH_DIRECT_PUSH"):
-                benchmark.alerts.append({
+                benchmark.record_alert({
                     "category": cat,
                     "repo": repo_path,
                     "branch": target_branch,
@@ -2781,7 +2781,7 @@ def push_repo(
                             if benchmark:
                                 benchmark.record_failure(cat.lower())
                                 if cat in ("PROTECTED_BRANCH_FORCE_PUSH", "PROTECTED_BRANCH_DIRECT_PUSH"):
-                                    benchmark.alerts.append({
+                                    benchmark.record_alert({
                                         "category": cat,
                                         "repo": repo_path,
                                         "branch": b_name,

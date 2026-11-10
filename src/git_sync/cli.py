@@ -955,42 +955,74 @@ def cmd_push(args: argparse.Namespace) -> int:
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
     msg_prog = "Simulating push..." if args.dry_run else "Pushing commits..."
 
-    with ProgressIndicator(msg_prog, total=len(targets), enabled=show_progress) as progress:
-        for r in targets:
-            rel = os.path.relpath(r, root)
-            res = push_repo(
-                r,
-                branch=args.branch,
-                remote=remote,
-                dry_run=args.dry_run,
-                force=force,
-                protected_branches=prot_branches,
-                block_protected=block_prot,
-                allow_protected=allow_prot,
-                timeout=args.timeout,
-                cache=cache,
-                benchmark=benchmark,
-                retries=retries,
-                sync_branches=getattr(args, "sync_branches", False),
-            )
-            res["repo_rel"] = rel
-            push_results.append(res)
-            prog_label = f"{rel} [worktree]" if res.get("is_worktree") else rel
-            progress.advance(prog_label)
+    configured_w = None if auto_tuned else args.workers
+    effective_workers = controller.determine_workers(
+        len(targets),
+        is_fetch=True,
+        configured_workers=configured_w,
+    )
+    benchmark.active_workers = effective_workers
+    benchmark.optimal_workers = effective_workers
 
-            if not args.json:
-                render_push_item(res, dry_run=args.dry_run)
+    with ProgressIndicator(msg_prog, total=len(targets), enabled=show_progress) as progress:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
+            futures = {
+                executor.submit(
+                    push_repo,
+                    r,
+                    branch=args.branch,
+                    remote=remote,
+                    dry_run=args.dry_run,
+                    force=force,
+                    protected_branches=prot_branches,
+                    block_protected=block_prot,
+                    allow_protected=allow_prot,
+                    timeout=args.timeout,
+                    cache=cache,
+                    benchmark=benchmark,
+                    retries=retries,
+                    sync_branches=getattr(args, "sync_branches", False),
+                ): r
+                for r in targets
+            }
+            for future in concurrent.futures.as_completed(futures):
+                r_path = futures[future]
+                rel = os.path.relpath(r_path, root)
+                try:
+                    res: PushResult | dict[str, Any] = future.result()
+                except Exception as exc:
+                    res = {
+                        "repo": r_path,
+                        "branch": getattr(args, "branch", None),
+                        "remote": remote,
+                        "success": False,
+                        "stdout": "",
+                        "stderr": str(exc),
+                        "dry_run": args.dry_run,
+                        "ahead": 0,
+                        "aux_branches": {},
+                        "is_worktree": False,
+                        "worktree_main_path": None,
+                        "diagnostic": {
+                            "category": "PUSH_EXCEPTION",
+                            "message": str(exc),
+                            "action_required": "inspect_exception",
+                        },
+                    }
+                res["repo_rel"] = rel
+                push_results.append(res)
+                prog_label = f"{rel} [worktree]" if res.get("is_worktree") else rel
+                progress.advance(prog_label)
+
+    push_results.sort(key=lambda x: str(x.get("repo_rel", "")))
+
+    if not args.json:
+        for res in push_results:
+            render_push_item(res, dry_run=args.dry_run)
 
     t_push = time.perf_counter() - t2
     benchmark.record_stage("push", t_push)
     benchmark.total_repos = len(targets)
-    configured_w = None if auto_tuned else args.workers
-    effective_workers = controller.determine_workers(
-        len(all_repos),
-        is_fetch=not getattr(args, "no_fetch", False),
-        configured_workers=configured_w,
-    )
-    benchmark.active_workers = effective_workers
     c_stats = cache.stats
     benchmark.cache_hits = c_stats["hits"]
     benchmark.cache_misses = c_stats["misses"]
@@ -1006,7 +1038,7 @@ def cmd_push(args: argparse.Namespace) -> int:
         if getattr(args, "benchmark", False):
             _print_benchmark_output(benchmark, getattr(args, "json", False))
 
-    has_failures = any(not r["success"] for r in push_results)
+    has_failures = any(not r.get("success", False) for r in push_results)
     return 1 if has_failures else 0
 
 

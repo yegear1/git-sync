@@ -284,5 +284,187 @@ class TestCLIAndConfigAutoTuning(unittest.TestCase):
         self.assertIn("Auto-tune:           True", output)
 
 
+class TestConcurrentPush(unittest.TestCase):
+    """Test concurrent multi-repository git-sync push, deterministic sorting, and telemetry."""
+
+    def setUp(self) -> None:
+        self.test_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.test_dir.name)
+
+    def tearDown(self) -> None:
+        self.test_dir.cleanup()
+
+    def _init_repo(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        run_git(str(path), ["init", "-b", "main"])
+        run_git(str(path), ["config", "user.email", "test@example.com"])
+        run_git(str(path), ["config", "user.name", "Test User"])
+        return path
+
+    def _init_bare_remote(self, path: Path) -> Path:
+        path.mkdir(parents=True, exist_ok=True)
+        run_git(str(path), ["init", "--bare", "-b", "main"])
+        return path
+
+    def test_cli_push_concurrent_multi_repo_deterministic_sorting_and_telemetry(self) -> None:
+        # Create 3 repositories with remote origins: repo-c, repo-a, repo-b
+        for name in ("repo-c", "repo-a", "repo-b"):
+            bare = self._init_bare_remote(self.root / f"{name}_origin.git")
+            repo = self._init_repo(self.root / name)
+            (repo / "f.txt").write_text(f"init {name}\n")
+            run_git(str(repo), ["add", "f.txt"])
+            run_git(str(repo), ["commit", "-m", "init"])
+            run_git(str(repo), ["remote", "add", "origin", str(bare)])
+            run_git(str(repo), ["push", "-u", "origin", "main"])
+
+            # Local unpushed commit
+            (repo / "f.txt").write_text(f"update {name}\n")
+            run_git(str(repo), ["add", "f.txt"])
+            run_git(str(repo), ["commit", "-m", f"update {name}"])
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            exit_code = main([
+                "push",
+                "--root", str(self.root),
+                "repo-c", "repo-a", "repo-b",
+                "--benchmark",
+                "--json",
+            ])
+
+        self.assertEqual(exit_code, 0)
+        data = json.loads(out.getvalue())
+        self.assertIn("results", data)
+        self.assertIn("telemetry", data)
+
+        results = data["results"]
+        self.assertEqual(len(results), 3)
+        # Verify deterministic sorting by repo_rel
+        repos_sorted = [r["repo_rel"] for r in results]
+        self.assertEqual(repos_sorted, ["repo-a", "repo-b", "repo-c"])
+        for r in results:
+            self.assertTrue(r["success"])
+            self.assertEqual(r["ahead"], 1)
+
+        # Verify telemetry for push stage
+        telemetry = data["telemetry"]
+        self.assertIn("push", telemetry["stages"])
+        self.assertGreaterEqual(telemetry["stages"]["push"], 0.0)
+        self.assertEqual(telemetry["total_repos"], 3)
+        self.assertGreaterEqual(telemetry["concurrency"]["active_workers"], 1)
+
+    def test_cli_push_concurrent_error_propagation_and_sorting(self) -> None:
+        # repo-1 is on an unprotected feature branch, repo-2 is on main (blocked by --block-protected)
+        for name in ("repo-2", "repo-1"):
+            bare = self._init_bare_remote(self.root / f"{name}_origin.git")
+            repo = self._init_repo(self.root / name)
+            (repo / "f.txt").write_text(f"init {name}\n")
+            run_git(str(repo), ["add", "f.txt"])
+            run_git(str(repo), ["commit", "-m", "init"])
+            run_git(str(repo), ["remote", "add", "origin", str(bare)])
+            run_git(str(repo), ["push", "-u", "origin", "main"])
+
+        # repo-1 has unpushed commit on unprotected feature branch
+        repo1 = self.root / "repo-1"
+        run_git(str(repo1), ["checkout", "-b", "feature-ok"])
+        (repo1 / "feat.txt").write_text("feature\n")
+        run_git(str(repo1), ["add", "feat.txt"])
+        run_git(str(repo1), ["commit", "-m", "feature commit"])
+        run_git(str(repo1), ["push", "-u", "origin", "feature-ok"])
+        (repo1 / "feat.txt").write_text("feature update\n")
+        run_git(str(repo1), ["add", "feat.txt"])
+        run_git(str(repo1), ["commit", "-m", "feature update commit"])
+
+        # repo-2 has unpushed commit on main (protected)
+        repo2 = self.root / "repo-2"
+        (repo2 / "f.txt").write_text("update repo-2\n")
+        run_git(str(repo2), ["add", "f.txt"])
+        run_git(str(repo2), ["commit", "-m", "update repo-2"])
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            exit_code = main([
+                "push",
+                "--root", str(self.root),
+                "repo-2", "repo-1",
+                "--block-protected",
+                "--json",
+            ])
+
+        # Exits with 1 due to failure on repo-2
+        self.assertEqual(exit_code, 1)
+        data = json.loads(out.getvalue())
+        self.assertEqual(len(data), 2)
+        # Results must still be deterministically sorted by repo_rel
+        self.assertEqual(data[0]["repo_rel"], "repo-1")
+        self.assertEqual(data[1]["repo_rel"], "repo-2")
+        self.assertTrue(data[0]["success"])
+        self.assertFalse(data[1]["success"])
+        self.assertEqual(data[1]["diagnostic"]["category"], "PROTECTED_BRANCH_DIRECT_PUSH")
+
+    def test_cli_push_threadpool_concurrency_workers_auto(self) -> None:
+        # Test that --workers auto calculates effective workers via AdaptiveConcurrencyController
+        for name in ("repo-x", "repo-y"):
+            bare = self._init_bare_remote(self.root / f"{name}_origin.git")
+            repo = self._init_repo(self.root / name)
+            (repo / "f.txt").write_text(f"init {name}\n")
+            run_git(str(repo), ["add", "f.txt"])
+            run_git(str(repo), ["commit", "-m", "init"])
+            run_git(str(repo), ["remote", "add", "origin", str(bare)])
+            run_git(str(repo), ["push", "-u", "origin", "main"])
+
+            (repo / "f.txt").write_text(f"update {name}\n")
+            run_git(str(repo), ["add", "f.txt"])
+            run_git(str(repo), ["commit", "-m", f"update {name}"])
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            exit_code = main([
+                "push",
+                "--root", str(self.root),
+                "--all",
+                "--workers", "auto",
+                "--benchmark",
+                "--dry-run",
+                "--json",
+            ])
+
+        self.assertEqual(exit_code, 0)
+        data = json.loads(out.getvalue())
+        self.assertIn("telemetry", data)
+        concurrency = data["telemetry"]["concurrency"]
+        self.assertTrue(concurrency["auto_tuned"])
+        self.assertEqual(concurrency["configured_workers"], "auto")
+        self.assertGreaterEqual(concurrency["active_workers"], 1)
+        self.assertEqual(len(data["results"]), 2)
+        self.assertEqual([r["repo_rel"] for r in data["results"]], ["repo-x", "repo-y"])
+
+    def test_cli_push_concurrent_exception_handling(self) -> None:
+        repo = self._init_repo(self.root / "repo-err")
+        bare = self._init_bare_remote(self.root / "repo-err_origin.git")
+        run_git(str(repo), ["remote", "add", "origin", str(bare)])
+        (repo / "f.txt").write_text("commit\n")
+        run_git(str(repo), ["add", "f.txt"])
+        run_git(str(repo), ["commit", "-m", "commit"])
+
+        from unittest.mock import patch
+        with patch("git_sync.cli.push_repo", side_effect=RuntimeError("simulated network crash")):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                exit_code = main([
+                    "push",
+                    "--root", str(self.root),
+                    "repo-err",
+                    "--json",
+                ])
+
+            self.assertEqual(exit_code, 1)
+            data = json.loads(out.getvalue())
+            self.assertEqual(len(data), 1)
+            self.assertFalse(data[0]["success"])
+            self.assertEqual(data[0]["diagnostic"]["category"], "PUSH_EXCEPTION")
+            self.assertIn("simulated network crash", data[0]["stderr"])
+
+
 if __name__ == "__main__":
     unittest.main()
