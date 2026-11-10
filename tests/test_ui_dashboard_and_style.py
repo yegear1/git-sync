@@ -183,7 +183,7 @@ class TestInteractiveDashboard(unittest.TestCase):
         self.assertIn("GIT-SYNC DASHBOARD", rendered)
         self.assertIn("org/repo-alpha", rendered)
         self.assertIn("org/repo-beta", rendered)
-        self.assertIn("Saindo do dashboard", rendered)
+        self.assertIn("Exiting dashboard", rendered)
 
     def test_dashboard_sigint_and_eof_return_130(self) -> None:
         for exc_cls in (KeyboardInterrupt, EOFError):
@@ -228,7 +228,7 @@ class TestInteractiveDashboard(unittest.TestCase):
         code = dash.run()
         self.assertEqual(code, 0)
         self.assertEqual(pulled_paths, ["org/repo-alpha"])
-        self.assertIn("Pull concluído em 1/1 repositório(s)", out.getvalue())
+        self.assertIn("Pull completed on 1/1 repository(s)", out.getvalue())
 
     def test_dashboard_navigate_and_pull_selected(self) -> None:
         out = io.StringIO()
@@ -253,7 +253,7 @@ class TestInteractiveDashboard(unittest.TestCase):
         code = dash.run()
         self.assertEqual(code, 0)
         self.assertEqual(pulled_paths, ["org/repo-beta"])
-        self.assertIn("Pull concluído para 'org/repo-beta'", out.getvalue())
+        self.assertIn("Pull completed for 'org/repo-beta'", out.getvalue())
 
     def test_dashboard_refresh_and_inspect_dirty_diff(self) -> None:
         out = io.StringIO()
@@ -282,7 +282,7 @@ class TestInteractiveDashboard(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(len(refresh_calls), 1)
         output = out.getvalue()
-        self.assertIn("Status dos repositórios atualizado", output)
+        self.assertIn("Repository statuses refreshed", output)
         self.assertIn("Diff / Dirty Inspection: org/repo-beta", output)
         self.assertIn("M src/app.py", output)
         self.assertIn(f"{ANSI_GREEN}+++{ANSI_RESET}", output)
@@ -385,8 +385,8 @@ class TestInteractiveDashboard(unittest.TestCase):
             self.assertIn("oss-library", repo_names)
 
             rendered = out.getvalue()
-            self.assertIn("perfil: oss", rendered)
-            self.assertIn("Perfil alterado para 'oss'", rendered)
+            self.assertIn("profile: oss", rendered)
+            self.assertIn("Switched profile to 'oss'", rendered)
 
     def test_dashboard_profile_cycle_tab_and_direct_switch(self) -> None:
         raw_cfg = {
@@ -434,7 +434,7 @@ class TestInteractiveDashboard(unittest.TestCase):
         # 3. Switching to invalid profile fails gracefully
         target_bad = dash.action_switch_profile("non_existent")
         self.assertIsNone(target_bad)
-        self.assertIn("não encontrado", dash.last_message)
+        self.assertIn("not found", dash.last_message)
 
 
 if __name__ == "__main__":

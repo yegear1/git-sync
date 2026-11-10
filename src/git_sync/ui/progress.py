@@ -133,7 +133,7 @@ class BulkActionItem:
 
 def format_bulk_action_preview(
     items: Sequence[BulkActionItem | dict[str, Any]],
-    title: str = "PRÉVIA DE AÇÕES EM LOTE (BULK ACTION PREVIEW)",
+    title: str = "BULK ACTION PREVIEW",
     stream: Any | None = None,
     color: bool | None = None,
 ) -> str:
@@ -154,10 +154,10 @@ def format_bulk_action_preview(
     lines.append(styler.cyan(f"╚{header_bar}╝"))
 
     if not items:
-        lines.append(styler.dim("  (Nenhum repositório pendente de mutação)"))
+        lines.append(styler.dim("  (No repositories pending mutation)"))
         return "\n".join(lines)
 
-    lines.append(styler.bold(f"Repositórios alvo ({len(items)}):"))
+    lines.append(styler.bold(f"Target repositories ({len(items)}):"))
 
     dirty_count = 0
     protected_count = 0
@@ -204,19 +204,19 @@ def format_bulk_action_preview(
         branch_part = f" [{branch}]" if branch else ""
         meta_parts: list[str] = []
         if behind > 0:
-            meta_parts.append(f"{behind} commit(s) atrás")
+            meta_parts.append(f"{behind} commit(s) behind")
         if ahead > 0:
-            meta_parts.append(f"{ahead} commit(s) à frente")
+            meta_parts.append(f"{ahead} commit(s) ahead")
         meta_str = f" ({', '.join(meta_parts)})" if meta_parts else ""
 
         line_repo = f"  • {styler.bold(repo_rel)}{branch_part} ↳ {action}{meta_str}"
 
         tags: list[str] = []
         if is_dirty:
-            tag_text = f"⚠️ [Árvore suja: {dirty_files_count} arquivo(s)]"
+            tag_text = f"⚠️ [Dirty working tree: {dirty_files_count} file(s)]"
             tags.append(styler.yellow(tag_text))
         if is_protected:
-            tag_text = f"🛡️ [Branch protegida: {branch}]"
+            tag_text = f"🛡️ [Protected branch: {branch}]"
             tags.append(styler.magenta(tag_text))
         for w in warnings:
             tags.append(styler.red(f"⚠️ [{w}]"))
@@ -226,20 +226,20 @@ def format_bulk_action_preview(
         lines.append(line_repo)
 
     lines.append("")
-    lines.append(styler.bold("📊 Resumo de Segurança:"))
-    lines.append(f"  • Total de repositórios a modificar: {styler.bold(str(len(items)))}")
+    lines.append(styler.bold("📊 Safety Summary:"))
+    lines.append(f"  • Total repositories to modify: {styler.bold(str(len(items)))}")
     if dirty_count > 0:
-        lines.append(f"  • Repositórios com autostash necessário: {styler.yellow(str(dirty_count))}")
+        lines.append(f"  • Repositories requiring autostash: {styler.yellow(str(dirty_count))}")
     if protected_count > 0:
-        lines.append(f"  • Branches protegidas afetadas: {styler.magenta(str(protected_count))}")
+        lines.append(f"  • Protected branches affected: {styler.magenta(str(protected_count))}")
     if submodules_total > 0:
-        lines.append(f"  • Submódulos com drift pendente: {submodules_total!s}")
+        lines.append(f"  • Submodules with pending drift: {submodules_total!s}")
     if aux_branches_total > 0:
-        lines.append(f"  • Branches auxiliares pendentes de envio: {aux_branches_total!s}")
+        lines.append(f"  • Auxiliary branches pending push: {aux_branches_total!s}")
 
     if dirty_count > 0 or protected_count > 0:
         lines.append("")
-        lines.append(styler.yellow("⚠️  Atenção: Revise as operações acima antes de confirmar."))
+        lines.append(styler.yellow("⚠️  Warning: Review the operations above before confirming."))
 
     return "\n".join(lines)
 
@@ -247,7 +247,7 @@ def format_bulk_action_preview(
 
 def prompt_bulk_confirmation(
     items: Sequence[BulkActionItem | dict[str, Any]],
-    title: str = "PRÉVIA DE AÇÕES EM LOTE (BULK ACTION PREVIEW)",
+    title: str = "BULK ACTION PREVIEW",
     prompt_text: str | None = None,
     stream: Any | None = None,
     input_func: Any | None = None,
@@ -269,21 +269,21 @@ def prompt_bulk_confirmation(
     target_stream.flush()
 
     if prompt_text is None:
-        prompt_text = f"Confirmar execução em {len(items)} repositório(s)? [y/N]: "
+        prompt_text = f"Confirm execution on {len(items)} repository(s)? [y/N]: "
 
     prompt_fn = input_func if input_func is not None else input
 
     try:
         ans = prompt_fn(prompt_text).strip().lower()
     except (EOFError, KeyboardInterrupt):
-        target_stream.write("\nOperação abortada pelo usuário.\n")
+        target_stream.write("\nOperation aborted by user.\n")
         target_stream.flush()
         return False
 
     if ans in ("y", "yes", "s", "sim"):
         return True
 
-    target_stream.write("Operação cancelada pelo usuário.\n")
+    target_stream.write("Operation canceled by user.\n")
     target_stream.flush()
     return False
 

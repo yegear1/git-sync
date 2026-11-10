@@ -1146,7 +1146,7 @@ class TestGitSyncCore(unittest.TestCase):
         self.assertIn("Changelog: mock-repo", report)
         self.assertIn("major breaking redesign", report)
         self.assertIn("[BREAKING]", report)
-        self.assertIn("Changelog de 'mock-repo' inspecionado", dashboard.last_message)
+        self.assertIn("Inspected changelog for 'mock-repo'", dashboard.last_message)
 
     def test_prune_repo_worktrees_cleans_missing_worktree_metadata(self):
         """Verify prune_repo_worktrees cleans missing worktree metadata and updates topology."""

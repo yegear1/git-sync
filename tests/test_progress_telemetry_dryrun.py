@@ -435,7 +435,7 @@ class TestBulkActionPreviewAndConfirmation(unittest.TestCase):
     def test_format_bulk_action_preview_empty(self):
         rendered = format_bulk_action_preview([], title="TEST PREVIEW", color=False)
         self.assertIn("TEST PREVIEW", rendered)
-        self.assertIn("(Nenhum repositório pendente de mutação)", rendered)
+        self.assertIn("(No repositories pending mutation)", rendered)
 
     def test_format_bulk_action_preview_rendering_and_safety_summary(self):
         items = [
@@ -459,15 +459,15 @@ class TestBulkActionPreviewAndConfirmation(unittest.TestCase):
         ]
         rendered = format_bulk_action_preview(items, title="TEST AUDIT", color=False)
         self.assertIn("TEST AUDIT", rendered)
-        self.assertIn("Repositórios alvo (2):", rendered)
-        self.assertIn("repo-a [main] ↳ PULL (ff-only) (4 commit(s) atrás)", rendered)
-        self.assertIn("[Árvore suja: 3 arquivo(s)]", rendered)
-        self.assertIn("[Branch protegida: main]", rendered)
-        self.assertIn("repo-b [feat/test] ↳ PUSH (2 commit(s) à frente)", rendered)
-        self.assertIn("Resumo de Segurança:", rendered)
-        self.assertIn("Total de repositórios a modificar: 2", rendered)
-        self.assertIn("Repositórios com autostash necessário: 1", rendered)
-        self.assertIn("Branches protegidas afetadas: 1", rendered)
+        self.assertIn("Target repositories (2):", rendered)
+        self.assertIn("repo-a [main] ↳ PULL (ff-only) (4 commit(s) behind)", rendered)
+        self.assertIn("[Dirty working tree: 3 file(s)]", rendered)
+        self.assertIn("[Protected branch: main]", rendered)
+        self.assertIn("repo-b [feat/test] ↳ PUSH (2 commit(s) ahead)", rendered)
+        self.assertIn("Safety Summary:", rendered)
+        self.assertIn("Total repositories to modify: 2", rendered)
+        self.assertIn("Repositories requiring autostash: 1", rendered)
+        self.assertIn("Protected branches affected: 1", rendered)
 
     def test_prompt_bulk_confirmation_accepts_yes(self):
         stream = io.StringIO()
@@ -487,7 +487,7 @@ class TestBulkActionPreviewAndConfirmation(unittest.TestCase):
         # User answers 'n'
         res_no = prompt_bulk_confirmation(items, stream=stream, input_func=lambda _: "n")
         self.assertFalse(res_no)
-        self.assertIn("Operação cancelada pelo usuário.", stream.getvalue())
+        self.assertIn("Operation canceled by user.", stream.getvalue())
 
         # User presses Ctrl+C or EOF
         def raise_eof(_):
@@ -495,7 +495,7 @@ class TestBulkActionPreviewAndConfirmation(unittest.TestCase):
 
         res_eof = prompt_bulk_confirmation(items, stream=stream, input_func=raise_eof)
         self.assertFalse(res_eof)
-        self.assertIn("Operação abortada pelo usuário.", stream.getvalue())
+        self.assertIn("Operation aborted by user.", stream.getvalue())
 
     def test_prompt_bulk_confirmation_auto_yes(self):
         items = [BulkActionItem(repo="/r1", action="PULL", repo_rel="r1")]
@@ -619,7 +619,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         out = stdout_capture.getvalue()
         self.assertIn("BULK PULL PREVIEW", out)
-        self.assertIn("Operação cancelada pelo usuário.", out)
+        self.assertIn("Operation canceled by user.", out)
 
         # INVARIANT: Repository MUST NOT be modified when confirmation is denied
         head_after = run_git(str(local_dir), ["rev-parse", "HEAD"]).stdout.strip()
@@ -699,7 +699,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
             with patch("builtins.input", return_value="n"):
                 exit_code = main(["push", "push_repo", "--root", str(self.root), "--confirm"])
         self.assertEqual(exit_code, 0)
-        self.assertIn("Operação cancelada pelo usuário.", stdout_denied.getvalue())
+        self.assertIn("Operation canceled by user.", stdout_denied.getvalue())
 
 
 if __name__ == "__main__":

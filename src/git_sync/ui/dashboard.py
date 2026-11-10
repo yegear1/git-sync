@@ -267,12 +267,12 @@ class InteractiveDashboard:
         # INVARIANT: Updates root, workers, exclusions, groups, and remote without restarting dashboard.
         """
         if not self.available_profiles and not self.raw_config and not self.config_path and not (self.config and getattr(self.config, "config_path", None)):
-            self.last_message = self.styler.yellow(f"⚠️ Perfil '{profile_name}' não pôde ser ativado: nenhuma configuração disponível.")
+            self.last_message = self.styler.yellow(f"⚠️ Profile '{profile_name}' could not be activated: no configuration available.")
             return False
 
         if self.available_profiles and profile_name not in self.available_profiles:
             avail_str = ", ".join(self.available_profiles)
-            self.last_message = self.styler.yellow(f"⚠️ Perfil '{profile_name}' não encontrado. Disponíveis: {avail_str}")
+            self.last_message = self.styler.yellow(f"⚠️ Profile '{profile_name}' not found. Available: {avail_str}")
             return False
 
         try:
@@ -289,7 +289,7 @@ class InteractiveDashboard:
                 from git_sync.config import load_config
                 new_cfg = load_config(profile_name=profile_name)
         except Exception as exc:
-            self.last_message = self.styler.red(f"❌ Erro ao ativar perfil '{profile_name}': {exc}")
+            self.last_message = self.styler.red(f"❌ Error activating profile '{profile_name}': {exc}")
             return False
 
         if new_cfg is None:
@@ -317,7 +317,7 @@ class InteractiveDashboard:
         self.refresh_repos(do_fetch=fetch_flag)
 
         self.last_message = self.styler.green(
-            f"🔀 Perfil alterado para '{profile_name}' (root: {self.root}, workers: {self.workers})"
+            f"🔀 Switched profile to '{profile_name}' (root: {self.root}, workers: {self.workers})"
         )
         return True
 
@@ -327,7 +327,7 @@ class InteractiveDashboard:
         If profile_name is None, cycles to the next available profile.
         """
         if not self.available_profiles:
-            self.last_message = self.styler.yellow("⚠️ Nenhum perfil alternativo configurado em .git-sync.json.")
+            self.last_message = self.styler.yellow("⚠️ No alternative profiles configured in .git-sync.json.")
             return None
 
         if profile_name:
@@ -396,14 +396,14 @@ class InteractiveDashboard:
             warn = "!" if sc.get("warning") else ""
             details.append(self.styler.dim(f"[sparse:{tag}{warn}]"))
         if not details:
-            details.append(self.styler.dim("sincronizado"))
+            details.append(self.styler.dim("synced"))
 
         return f" {pointer} {styled_badge} {padded_repo} {padded_branch} {' '.join(details)}"
 
     def render(self) -> str:
         """Render full high-density dashboard screen string."""
         lines: list[str] = []
-        header_prof = f" [{self.styler.cyan(f'perfil: {self.active_profile}')}]" if self.active_profile else ""
+        header_prof = f" [{self.styler.cyan(f'profile: {self.active_profile}')}]" if self.active_profile else ""
         header_title = self.styler.bold(f"📊 GIT-SYNC DASHBOARD — {self.root}") + header_prof
         lines.append(header_title)
         lines.append("=" * 92)
@@ -415,7 +415,7 @@ class InteractiveDashboard:
                     prof_badges.append(self.styler.bold(self.styler.cyan(f"[{p}]")))
                 else:
                     prof_badges.append(self.styler.dim(p))
-            lines.append(f"Perfis: {'  '.join(prof_badges)}  " + self.styler.dim("([w] alternar)"))
+            lines.append(f"Profiles: {'  '.join(prof_badges)}  " + self.styler.dim("([w] switch)"))
             lines.append("-" * 92)
 
         pending_pull = sum(1 for r in self.repos if "PULL" in r.get("status", "") or r.get("aux_branches_behind"))
@@ -427,17 +427,17 @@ class InteractiveDashboard:
             f"Total: {self.styler.bold(str(len(self.repos)))} | "
             f"Pull: {self.styler.cyan(str(pending_pull))} | "
             f"Push: {self.styler.magenta(str(pending_push))} | "
-            f"Divergidos: {self.styler.yellow(str(diverged_count))} | "
+            f"Diverged: {self.styler.yellow(str(diverged_count))} | "
             f"Dirty: {self.styler.yellow(str(dirty_count))}"
         )
         lines.append(summary_bar)
         lines.append("-" * 92)
-        col_header = f"   {'STATUS':<14} {'REPOSITÓRIO':<36} {'BRANCH':<14} {'DETALHES'}"
+        col_header = f"   {'STATUS':<14} {'REPOSITORY':<36} {'BRANCH':<14} {'DETAILS'}"
         lines.append(self.styler.dim(col_header))
         lines.append("-" * 92)
 
         if not self.repos:
-            lines.append("   (Nenhum repositório encontrado)")
+            lines.append("   (No repositories found)")
         else:
             for idx, r in enumerate(self.repos):
                 lines.append(self.format_row(r, selected=(idx == self.selected_idx)))
@@ -449,13 +449,13 @@ class InteractiveDashboard:
 
         if self.available_profiles:
             controls = (
-                "[Enter] Pull pendentes  [p] Pull selecionado  [w] Perfil  [r] Atualizar  "
-                "[c] Changelog  [d] Dirty/Diff  [j/k] Navegar  [q] Sair"
+                "[Enter] Pull pending  [p] Pull selected  [w] Profile  [r] Refresh  "
+                "[c] Changelog  [d] Dirty/Diff  [j/k] Navigate  [q] Quit"
             )
         else:
             controls = (
-                "[Enter] Pull pendentes  [p] Pull selecionado  [r] Atualizar  "
-                "[c] Changelog  [d] Dirty/Diff  [j/k] Navegar  [q] Sair"
+                "[Enter] Pull pending  [p] Pull selected  [r] Refresh  "
+                "[c] Changelog  [d] Dirty/Diff  [j/k] Navigate  [q] Quit"
             )
         lines.append(self.styler.bold(controls))
         output = "\n".join(lines)
@@ -483,7 +483,7 @@ class InteractiveDashboard:
             if "PULL" in r.get("status", "") or r.get("aux_branches_behind")
         ]
         if not pending:
-            self.last_message = self.styler.green("✅ Nenhum repositório pendente de pull.")
+            self.last_message = self.styler.green("✅ No repositories pending pull.")
             return []
 
         results: list[PullResult | dict[str, Any]] = []
@@ -496,18 +496,18 @@ class InteractiveDashboard:
 
         self.refresh_repos(do_fetch=False)
         if ok_count == len(pending):
-            self.last_message = self.styler.green(f"✅ Pull concluído em {ok_count}/{len(pending)} repositório(s).")
+            self.last_message = self.styler.green(f"✅ Pull completed on {ok_count}/{len(pending)} repository(s).")
         else:
             fail_count = len(pending) - ok_count
             self.last_message = self.styler.yellow(
-                f"⚠️ Pull concluído: {ok_count} OK, {fail_count} falha(s)."
+                f"⚠️ Pull completed: {ok_count} OK, {fail_count} failure(s)."
             )
         return results
 
     def action_pull_selected(self) -> PullResult | dict[str, Any] | None:
         """Pull the currently selected repository."""
         if not self.repos:
-            self.last_message = self.styler.yellow("⚠️ Nenhum repositório selecionado.")
+            self.last_message = self.styler.yellow("⚠️ No repository selected.")
             return None
 
         target = self.repos[self.selected_idx]
@@ -515,16 +515,16 @@ class InteractiveDashboard:
         res = self._execute_pull(target)
         self.refresh_repos(do_fetch=False)
         if res.get("success"):
-            self.last_message = self.styler.green(f"✅ Pull concluído para '{rel}'.")
+            self.last_message = self.styler.green(f"✅ Pull completed for '{rel}'.")
         else:
-            err = res.get("stderr") or res.get("stdout") or "Erro no pull"
-            self.last_message = self.styler.red(f"❌ Falha no pull de '{rel}': {err}")
+            err = res.get("stderr") or res.get("stdout") or "Pull error"
+            self.last_message = self.styler.red(f"❌ Pull failed for '{rel}': {err}")
         return res
 
     def action_inspect_dirty_diff(self) -> str:
         """Inspect uncommitted files and colored diff --stat for selected or dirty repositories."""
         if not self.repos:
-            msg = "⚠️ Nenhum repositório disponível para inspeção."
+            msg = "⚠️ No repository available for inspection."
             self.last_message = self.styler.yellow(msg)
             return msg
 
@@ -545,7 +545,7 @@ class InteractiveDashboard:
                 for df in dirty_files[:15]:
                     sub_lines.append(f"   • {df}")
                 if len(dirty_files) > 15:
-                    sub_lines.append(f"   ... (+{len(dirty_files) - 15} arquivos)")
+                    sub_lines.append(f"   ... (+{len(dirty_files) - 15} files)")
             if self._diff_stat_fn is not None:
                 raw_stat = self._diff_stat_fn(r)
             else:
@@ -554,18 +554,18 @@ class InteractiveDashboard:
                 colored = format_diff_stat(raw_stat, enabled=self.styler.enabled, stream=self.stream)
                 sub_lines.append(colored)
             elif not dirty_files:
-                sub_lines.append("   (Sem alterações locais ou diff pendente)")
+                sub_lines.append("   (No local changes or pending diff)")
             blocks.append("\n".join(sub_lines))
 
         report = "\n\n".join(blocks)
         self._write("\n" + report + "\n")
-        self.last_message = f"🔍 Inspecionado(s) {len(targets)} repositório(s)."
+        self.last_message = f"🔍 Inspected {len(targets)} repository(s)."
         return report
 
     def action_inspect_changelog(self) -> str:
         """Inspect and summarize Conventional Commit changelog for selected repository."""
         if not self.repos:
-            msg = "⚠️ Nenhum repositório disponível para inspeção."
+            msg = "⚠️ No repository available for inspection."
             self.last_message = self.styler.yellow(msg)
             return msg
 
@@ -591,17 +591,17 @@ class InteractiveDashboard:
         lines.append(header)
 
         if not cl.get("incoming") and not cl.get("outgoing"):
-            lines.append("   (Sem commits pendentes entre HEAD e upstream)")
+            lines.append("   (No pending commits between HEAD and upstream)")
         else:
             if cl.get("incoming"):
-                inc_hdr = self.styler.cyan(f"⬇️ Commits Recebidos (Incoming - {len(cl['incoming'])}):")
+                inc_hdr = self.styler.cyan(f"⬇️ Incoming Commits ({len(cl['incoming'])}):")
                 lines.append(f"   {inc_hdr}")
                 for c in cl["incoming"]:
                     cat_badge = self.styler.style(f"[{c['category']}]", "yellow" if c.get("is_breaking") else "green")
                     brk = self.styler.red(" [BREAKING]") if c.get("is_breaking") else ""
                     lines.append(f"     • {cat_badge}{brk} {c['subject']} ({c['hash']})")
             if cl.get("outgoing"):
-                out_hdr = self.styler.magenta(f"⬆️ Commits Locais (Outgoing - {len(cl['outgoing'])}):")
+                out_hdr = self.styler.magenta(f"⬆️ Outgoing Commits ({len(cl['outgoing'])}):")
                 lines.append(f"   {out_hdr}")
                 for c in cl["outgoing"]:
                     cat_badge = self.styler.style(f"[{c['category']}]", "yellow" if c.get("is_breaking") else "cyan")
@@ -610,7 +610,7 @@ class InteractiveDashboard:
 
         report = "\n".join(lines)
         self._write("\n" + report + "\n")
-        self.last_message = f"📋 Changelog de '{rel}' inspecionado."
+        self.last_message = f"📋 Inspected changelog for '{rel}'."
         return report
 
     def run(self) -> int:
@@ -629,7 +629,7 @@ class InteractiveDashboard:
                 norm_key = key.strip() if key != "ENTER" else "ENTER"
 
                 if norm_key in ("q", "Q", "ESC"):
-                    self._write("👋 Saindo do dashboard.")
+                    self._write("👋 Exiting dashboard.")
                     return 0
                 elif norm_key == "ENTER":
                     self.action_pull_pending()
@@ -643,7 +643,7 @@ class InteractiveDashboard:
                         self.action_switch_profile(parts[1].strip())
                 elif norm_key in ("r", "R"):
                     self.refresh_repos(do_fetch=self.do_fetch)
-                    self.last_message = self.styler.cyan("🔄 Status dos repositórios atualizado.")
+                    self.last_message = self.styler.cyan("🔄 Repository statuses refreshed.")
                 elif norm_key in ("c", "C"):
                     self.action_inspect_changelog()
                 elif norm_key in ("d", "D"):
@@ -660,15 +660,15 @@ class InteractiveDashboard:
                     idx = int(norm_key) - 1
                     if 0 <= idx < len(self.repos):
                         self.selected_idx = idx
-                        self.last_message = f"Selecionado: {self.repos[idx].get('rel_path')}"
+                        self.last_message = f"Selected: {self.repos[idx].get('rel_path')}"
                     else:
-                        self.last_message = self.styler.yellow(f"⚠️ Índice fora do intervalo (1-{len(self.repos)}).")
+                        self.last_message = self.styler.yellow(f"⚠️ Index out of range (1-{len(self.repos)}).")
                 else:
                     self.last_message = self.styler.yellow(
-                        f"⚠️ Tecla '{norm_key}' não reconhecida. Use Enter, p, r, c, d, j/k ou q."
+                        f"⚠️ Unrecognized key '{norm_key}'. Use Enter, p, r, c, d, j/k, or q."
                     )
         except (KeyboardInterrupt, EOFError):
-            self._write("\n⚠️ Dashboard encerrado (SIGINT/EOF).")
+            self._write("\n⚠️ Dashboard terminated (SIGINT/EOF).")
             return EXIT_CODE_SIGINT
 
 
