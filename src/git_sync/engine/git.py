@@ -1776,7 +1776,7 @@ def inspect_repo(
     elif info["aux_branches_ahead"]:
         info["status"] = "AUX_PUSH_PENDING"
         info["action_required"] = "push_aux"
-        info["remediation"] = f"git-sync push {rel_path} --all"
+        info["remediation"] = f"git-sync push {rel_path} --sync-branches"
     elif not info["upstream"]:
         info["status"] = "NO_UPSTREAM"
         info["action_required"] = "push_upstream"
@@ -2686,12 +2686,14 @@ def push_repo(
     cache: Optional[BulkCache] = None,
     benchmark: Optional[TelemetryBenchmark] = None,
     retries: int = DEFAULT_RETRIES,
+    sync_branches: bool = False,
 ) -> PushResult:
     """
     Push committed changes for a repository with pre-flight telemetry and branch protection safeguards.
     # INVARIANT: Force push to protected branches is strictly prohibited to prevent data loss across satellite repositories.
     # INVARIANT: Diverged branches (ahead > 0 and behind > 0) are blocked from pushing to prevent remote rejection.
     # INVARIANT: GIT_TERMINAL_PROMPT=0 guarantees git never blocks on interactive auth/passphrase prompts.
+    # INVARIANT: When sync_branches is True, auxiliary tracking branches are evaluated and pushed independently.
     """
     preflight = preflight_push_check(
         repo_path,
@@ -2739,6 +2741,8 @@ def push_repo(
             "preflight": preflight,
             "is_worktree": is_worktree,
             "worktree_main_path": worktree_main_path,
+            "aux_branches": {},
+            "aux_diagnostics": {},
         }
 
     cmd = ["push"]
@@ -2754,6 +2758,8 @@ def push_repo(
         benchmark.record_network_latency(time.perf_counter() - t_push)
 
     success = (proc.returncode == 0)
+    stdout = proc.stdout.strip()
+    stderr = proc.stderr.strip()
     diagnostic: Optional[Dict[str, str]] = None
 
     if not success:
@@ -2761,6 +2767,72 @@ def push_repo(
         if benchmark:
             fail_type = diagnostic["category"].lower() if diagnostic else "push_error"
             benchmark.record_failure(fail_type)
+
+    aux_results: Dict[str, Any] = {}
+    aux_diagnostics: Dict[str, Any] = {}
+
+    if sync_branches and success:
+        # Discover auxiliary tracking branches ahead of upstream
+        # INVARIANT: Evaluate branch protection, force-push block, and divergence independently for each aux branch
+        p_branches = run_git(
+            repo_path,
+            ["for-each-ref", "--format=%(refname:short)|%(upstream:short)|%(upstream:track)", "refs/heads/"],
+            timeout=min(timeout, 5),
+        )
+        for b_line in p_branches.stdout.splitlines():
+            parts = b_line.split("|")
+            if len(parts) >= 3:
+                b_name, b_up, b_track = parts[0], parts[1], parts[2]
+                if b_up and b_name != target_branch:
+                    m_ahead = re.search(r"ahead (\d+)", b_track)
+                    if m_ahead and int(m_ahead.group(1)) > 0:
+                        aux_pre = preflight_push_check(
+                            repo_path,
+                            branch=b_name,
+                            remote=target_remote,
+                            force=force,
+                            protected_branches=protected_branches,
+                            block_protected=block_protected,
+                            allow_protected=allow_protected,
+                            cache=cache,
+                            timeout=min(timeout, 5),
+                        )
+                        if not aux_pre["passed"]:
+                            aux_diag = aux_pre.get("diagnostic") or {}
+                            aux_results[b_name] = False
+                            aux_diagnostics[b_name] = aux_diag
+                            cat = aux_diag.get("category", "AUX_PUSH_BLOCKED")
+                            if benchmark:
+                                benchmark.record_failure(cat.lower())
+                                if cat in ("PROTECTED_BRANCH_FORCE_PUSH", "PROTECTED_BRANCH_DIRECT_PUSH"):
+                                    benchmark.alerts.append({
+                                        "category": cat,
+                                        "repo": repo_path,
+                                        "branch": b_name,
+                                        "message": aux_diag.get("message", "Auxiliary push blocked by protected branch defense."),
+                                    })
+                            success = False
+                        else:
+                            aux_remote = aux_pre.get("remote") or target_remote or (b_up.split('/')[0] if '/' in b_up else "origin")
+                            aux_cmd = ["push"]
+                            if dry_run:
+                                aux_cmd.append("--dry-run")
+                            if force:
+                                aux_cmd.append("--force-with-lease")
+                            aux_cmd.extend([aux_remote, b_name])
+                            t_aux = time.perf_counter()
+                            aux_proc = run_git_with_retry(repo_path, aux_cmd, timeout=timeout, benchmark=benchmark)
+                            if benchmark:
+                                benchmark.record_network_latency(time.perf_counter() - t_aux)
+                            aux_ok = (aux_proc.returncode == 0)
+                            aux_results[b_name] = aux_ok
+                            if not aux_ok:
+                                aux_diag = diagnose_git_error(aux_proc.stderr.strip(), None)
+                                aux_diagnostics[b_name] = aux_diag
+                                if benchmark:
+                                    fail_type = aux_diag["category"].lower() if aux_diag else "push_error"
+                                    benchmark.record_failure(fail_type)
+                                success = False
 
     if success and not dry_run and cache:
         cache.invalidate(repo_path)
@@ -2770,15 +2842,18 @@ def push_repo(
         "branch": target_branch,
         "remote": target_remote,
         "success": success,
-        "stdout": proc.stdout.strip(),
-        "stderr": proc.stderr.strip(),
+        "stdout": stdout,
+        "stderr": stderr,
         "dry_run": dry_run,
         "ahead": preflight.get("ahead", 0),
         "diagnostic": diagnostic,
         "preflight": preflight,
         "is_worktree": is_worktree,
         "worktree_main_path": worktree_main_path,
+        "aux_branches": aux_results,
+        "aux_diagnostics": aux_diagnostics,
     }
+
 
 
 def find_push_pending_repos(

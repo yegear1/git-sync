@@ -161,6 +161,7 @@ def format_bulk_action_preview(
     dirty_count = 0
     protected_count = 0
     submodules_total = 0
+    aux_branches_total = 0
 
     for raw in items:
         if isinstance(raw, dict):
@@ -174,6 +175,7 @@ def format_bulk_action_preview(
             is_protected = bool(raw.get("is_protected", False))
             submodules_count = int(raw.get("submodules_count", 0))
             warnings = list(raw.get("warnings", []))
+            raw_details = raw.get("details", {})
         else:
             repo_rel = raw.repo_rel or raw.repo
             action = raw.action
@@ -185,6 +187,7 @@ def format_bulk_action_preview(
             is_protected = raw.is_protected
             submodules_count = raw.submodules_count
             warnings = list(raw.warnings)
+            raw_details = raw.details
 
         if is_dirty:
             dirty_count += 1
@@ -192,6 +195,10 @@ def format_bulk_action_preview(
             protected_count += 1
         if submodules_count > 0:
             submodules_total += submodules_count
+        if isinstance(raw_details, (dict, Mapping)):
+            aux_ahead_map = raw_details.get("aux_branches_ahead")
+            if isinstance(aux_ahead_map, dict):
+                aux_branches_total += len(aux_ahead_map)
 
         branch_part = f" [{branch}]" if branch else ""
         meta_parts: List[str] = []
@@ -226,12 +233,15 @@ def format_bulk_action_preview(
         lines.append(f"  • Branches protegidas afetadas: {styler.magenta(str(protected_count))}")
     if submodules_total > 0:
         lines.append(f"  • Submódulos com drift pendente: {str(submodules_total)}")
+    if aux_branches_total > 0:
+        lines.append(f"  • Branches auxiliares pendentes de envio: {str(aux_branches_total)}")
 
     if dirty_count > 0 or protected_count > 0:
         lines.append("")
         lines.append(styler.yellow("⚠️  Atenção: Revise as operações acima antes de confirmar."))
 
     return "\n".join(lines)
+
 
 
 def prompt_bulk_confirmation(

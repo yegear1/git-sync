@@ -60,6 +60,7 @@ DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
         "confirm": False,
         "protected_branches": ["main", "master", "release/*", "production"],
         "block_protected": False,
+        "sync_branches": False,
     },
     "status": {
         "compact": False,
@@ -159,6 +160,7 @@ class GitSyncConfig:
     pull_unshallow: bool = False
     pull_reapply_sparse: bool = False
     push_dry_run: bool = False
+    push_sync_branches: bool = False
     push_confirm: bool = False
     push_all: bool = False
     push_branch: Optional[str] = None
@@ -219,6 +221,7 @@ class GitSyncConfig:
             },
             "push": {
                 "dry_run": self.push_dry_run,
+                "sync_branches": self.push_sync_branches,
                 "confirm": self.push_confirm,
                 "all": self.push_all,
                 "branch": self.push_branch,
@@ -459,6 +462,7 @@ def resolve_config(
     push_raw = combined.get("push")
     push_cfg: Dict[str, Any] = push_raw if isinstance(push_raw, dict) else {}
     push_dry_run = bool(push_cfg.get("dry_run", combined.get("dry_run", False)))
+    push_sync_branches = bool(push_cfg.get("sync_branches", combined.get("push_sync_branches", False)))
     push_confirm = bool(push_cfg.get("confirm", combined.get("push_confirm", confirm)))
     push_all = bool(push_cfg.get("all", combined.get("push_all", False)))
     push_branch_raw = push_cfg.get("branch", combined.get("branch", None))
@@ -536,6 +540,7 @@ def resolve_config(
         pull_unshallow=pull_unshallow,
         pull_reapply_sparse=pull_reapply_sparse,
         push_dry_run=push_dry_run,
+        push_sync_branches=push_sync_branches,
         push_confirm=push_confirm,
         push_all=push_all,
         push_branch=push_branch,

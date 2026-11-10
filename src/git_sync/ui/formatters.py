@@ -842,6 +842,36 @@ def render_push_item(res: PushResult | Dict[str, Any], dry_run: bool = False) ->
     wt_tag = " [worktree]" if res.get("is_worktree") else ""
     rel = res.get("repo_rel", os.path.basename(str(res.get("repo", ""))))
     print(f"{icon} {mode_str}[{rel}]{wt_tag} ({res.get('branch')}{ahead_info}{remote_tag}): {status_detail}")
+    aux_branches = res.get("aux_branches") or {}
+    aux_diags = res.get("aux_diagnostics") or {}
+    is_dry = bool(res.get("dry_run") or dry_run)
+    for aux_b, aux_val in aux_branches.items():
+        aux_diag = aux_diags.get(aux_b)
+        if isinstance(aux_val, dict):
+            aux_ok = aux_val.get("success", False)
+            aux_diag = aux_val.get("diagnostic") or aux_diag
+        else:
+            aux_ok = bool(aux_val)
+        cat = aux_diag.get("category", "") if aux_diag else ""
+        if is_dry:
+            aux_icon = "  ↳ ℹ️ [DRY-RUN]"
+            aux_status = "push previsto"
+        elif aux_ok:
+            aux_icon = "  ↳ ✅"
+            aux_status = "push concluído"
+        elif cat in ("PROTECTED_BRANCH_FORCE_PUSH", "PROTECTED_BRANCH_DIRECT_PUSH"):
+            aux_icon = "  ↳ 🛡️"
+            aux_msg = aux_diag.get("message") if aux_diag else "branch protegida"
+            aux_status = f"push bloqueado ({aux_msg})"
+        elif cat == "DIVERGED":
+            aux_icon = "  ↳ ❌"
+            aux_msg = aux_diag.get("message") if aux_diag else "divergência detectada"
+            aux_status = f"push bloqueado ({aux_msg})"
+        else:
+            aux_msg = aux_diag.get("message") if aux_diag else "falha ao enviar"
+            aux_icon = "  ↳ ❌"
+            aux_status = aux_msg
+        print(f"{aux_icon} Branch auxiliar '{aux_b}': {aux_status}")
 
 
 def print_dirty_report(dirty: Sequence[RepoStatusRecord | Dict[str, Any]]) -> None:

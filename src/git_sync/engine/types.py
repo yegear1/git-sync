@@ -165,6 +165,7 @@ class PushResult(TypedDict, total=False):
     is_worktree: bool
     worktree_main_path: Optional[str]
     aux_branches: Optional[Dict[str, Any]]
+    aux_diagnostics: Optional[Dict[str, Any]]
 
 
 class ResolveResult(TypedDict, total=False):

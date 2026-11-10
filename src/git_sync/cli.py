@@ -924,8 +924,7 @@ def cmd_push(args: argparse.Namespace) -> int:
             if r in pending_map:
                 chk_info = dict(pending_map[r])
             else:
-                chk = preflight_push_check(r, branch=args.branch, remote=remote, timeout=args.timeout)
-                chk_info = {"branch": chk.get("branch") or "", "ahead": chk.get("ahead", 0)}
+                chk_info = dict(inspect_repo(r, root, do_fetch=False, timeout=args.timeout))
             branch = str(chk_info.get("branch") or args.branch or "")
             ahead = int(chk_info.get("ahead", 0))
             is_prot = is_branch_protected(branch, prot_branches) if branch else False
@@ -934,6 +933,10 @@ def cmd_push(args: argparse.Namespace) -> int:
                 warnings.append(f"Branch protegida: {branch}")
             if force:
                 warnings.append("Push forçado (--force)")
+            aux_ahead = chk_info.get("aux_branches_ahead") or {}
+            if aux_ahead:
+                aux_desc = ", ".join(f"{b} (+{cnt})" for b, cnt in aux_ahead.items())
+                warnings.append(f"{len(aux_ahead)} branch(es) secundária(s) pendente(s) de envio ({aux_desc})")
             action_label = "PUSH (--force)" if force else "PUSH"
             preview_items.append(
                 BulkActionItem(
@@ -987,6 +990,7 @@ def cmd_push(args: argparse.Namespace) -> int:
                 cache=cache,
                 benchmark=benchmark,
                 retries=retries,
+                sync_branches=getattr(args, "sync_branches", False),
             )
             res["repo_rel"] = rel
             push_results.append(res)
@@ -1145,6 +1149,7 @@ def cmd_config(args: argparse.Namespace, config: GitSyncConfig) -> int:
     print(f"  Confirm (bulk):      {getattr(args, 'confirm', config.confirm)}")
     print(f"  Push (protected):    {', '.join(getattr(config, 'push_protected_branches', DEFAULT_PROTECTED_BRANCHES))}")
     print(f"  Push (block-prot):   {getattr(config, 'push_block_protected', False)}")
+    print(f"  Push (sync-branches):{getattr(args, 'push_sync_branches', getattr(config, 'push_sync_branches', False))}")
     print(f"  Status (compact):    {getattr(args, 'compact', config.status_compact)}")
     print(f"  Benchmark:           {getattr(args, 'benchmark', config.benchmark)}")
     print(f"  Bulk Cache:          {not getattr(args, 'no_cache', not config.use_cache)}")
@@ -1673,6 +1678,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_push.add_argument("--block-protected", dest="block_protected", action="store_true", default=None, help="Block direct push to protected branches")
     p_push.add_argument("--allow-protected", dest="allow_protected", action="store_true", default=None, help="Allow direct push to protected branches when blocked by policy")
     p_push.add_argument("--protected-branches", default=None, help="Comma-separated patterns of protected branches (default: main,master,release/*,production,prod)")
+    p_push.add_argument("--sync-branches", "--all-branches", dest="sync_branches", action="store_true", default=None, help="Push auxiliary tracking branches ahead of upstream")
+    p_push.add_argument("--no-sync-branches", dest="sync_branches", action="store_false", default=None, help="Skip pushing auxiliary tracking branches")
 
     # dirty
     p_dirty = subparsers.add_parser("dirty", parents=[common], help="Show repositories with uncommitted or untracked changes")
@@ -1788,7 +1795,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     args.ff_only = ff_only_flag if ff_only_flag is not None else config.pull_ff_only
 
     sync_branches_flag = getattr(args, "sync_branches", None)
-    args.sync_branches = sync_branches_flag if sync_branches_flag is not None else config.pull_sync_branches
+    if args.command == "push":
+        args.sync_branches = sync_branches_flag if sync_branches_flag is not None else config.push_sync_branches
+    elif args.command == "pull":
+        args.sync_branches = sync_branches_flag if sync_branches_flag is not None else config.pull_sync_branches
+    else:
+        args.sync_branches = sync_branches_flag if sync_branches_flag is not None else True
 
     autostash_flag = getattr(args, "autostash", None)
     args.autostash = autostash_flag if autostash_flag is not None else config.pull_autostash
@@ -1832,10 +1844,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     args.preview = getattr(args, "preview", False)
 
     push_all_flag = getattr(args, "push_all", None)
-    if push_all_flag is not None:
-        args.all = push_all_flag
-    elif args.command == "push":
-        args.all = config.push_all
+    if args.command == "push":
+        # Smart disambiguation: passing git-sync push <repo> --all treats --all
+        # as --all-branches (--sync-branches) for the specified repo rather than triggering global discovery.
+        if push_all_flag and getattr(args, "repos", None):
+            args.sync_branches = True
+            args.all = False
+        elif push_all_flag is not None:
+            args.all = push_all_flag
+        else:
+            args.all = config.push_all
 
     branch_flag = getattr(args, "branch", None)
     args.branch = branch_flag if branch_flag is not None else config.push_branch

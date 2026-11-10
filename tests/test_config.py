@@ -140,6 +140,7 @@ class TestGitSyncConfig(unittest.TestCase):
         self.assertTrue(cfg.pull_sync_branches)
         self.assertFalse(cfg.pull_all)
         self.assertFalse(cfg.push_dry_run)
+        self.assertFalse(cfg.push_sync_branches)
         self.assertFalse(cfg.status_no_fetch)
 
     def test_resolve_config_custom_values(self):
@@ -156,6 +157,7 @@ class TestGitSyncConfig(unittest.TestCase):
             },
             "push": {
                 "dry_run": True,
+                "sync_branches": True,
                 "all": True,
                 "branch": "main",
             },
@@ -174,6 +176,7 @@ class TestGitSyncConfig(unittest.TestCase):
         self.assertFalse(cfg.pull_sync_branches)
         self.assertTrue(cfg.pull_all)
         self.assertTrue(cfg.push_dry_run)
+        self.assertTrue(cfg.push_sync_branches)
         self.assertTrue(cfg.push_all)
         self.assertEqual(cfg.push_branch, "main")
         self.assertTrue(cfg.status_no_fetch)
@@ -855,6 +858,38 @@ class TestHierarchicalConfigMergingAndInteractiveBootstrap(unittest.TestCase):
         self.assertEqual(d["push"]["protected_branches"], ["main", "prod/*"])
         self.assertTrue(d["push"]["block_protected"])
 
+    def test_push_sync_branches_configuration(self):
+        # Default is False
+        cfg_default = resolve_config({})
+        self.assertFalse(cfg_default.push_sync_branches)
+        self.assertFalse(cfg_default.to_dict()["push"]["sync_branches"])
+
+        # Explicit push.sync_branches: True
+        data = {
+            "push": {
+                "sync_branches": True,
+            }
+        }
+        cfg_custom = resolve_config(data)
+        self.assertTrue(cfg_custom.push_sync_branches)
+        self.assertTrue(cfg_custom.to_dict()["push"]["sync_branches"])
+
+        # Profile override
+        profile_data = {
+            "push": {
+                "sync_branches": False,
+            },
+            "profiles": {
+                "sync_all": {
+                    "push": {
+                        "sync_branches": True,
+                    }
+                }
+            }
+        }
+        cfg_prof = resolve_config(profile_data, profile_name="sync_all")
+        self.assertTrue(cfg_prof.push_sync_branches)
+        self.assertTrue(cfg_prof.to_dict()["push"]["sync_branches"])
 
 
 if __name__ == "__main__":

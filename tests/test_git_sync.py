@@ -1725,6 +1725,290 @@ class TestProtectedBranchAndPushPreflight(unittest.TestCase):
         self.assertTrue(res_allow[0]["success"])
         self.assertTrue(res_allow[0]["dry_run"])
 
+    def test_aux_push_pending_remediation(self):
+        bare_remote = self._init_bare_remote(self.root / "aux_rem_test.git")
+        local_repo = self._init_repo(self.root / "aux_rem_repo")
+
+        (local_repo / "main.txt").write_text("main\n")
+        run_git(str(local_repo), ["add", "main.txt"])
+        run_git(str(local_repo), ["commit", "-m", "main c1"])
+        run_git(str(local_repo), ["remote", "add", "origin", str(bare_remote)])
+        run_git(str(local_repo), ["push", "-u", "origin", "main"])
+
+        # Create aux branch tracking origin
+        run_git(str(local_repo), ["checkout", "-b", "aux_feature"])
+        (local_repo / "feat.txt").write_text("feat1\n")
+        run_git(str(local_repo), ["add", "feat.txt"])
+        run_git(str(local_repo), ["commit", "-m", "feat c1"])
+        run_git(str(local_repo), ["push", "-u", "origin", "aux_feature"])
+
+        # Second commit on aux_feature (unpushed)
+        (local_repo / "feat.txt").write_text("feat2\n")
+        run_git(str(local_repo), ["add", "feat.txt"])
+        run_git(str(local_repo), ["commit", "-m", "feat c2"])
+
+        # Switch back to main
+        run_git(str(local_repo), ["checkout", "main"])
+
+        info = inspect_repo(str(local_repo), str(self.root), do_fetch=False)
+        self.assertEqual(info["status"], "AUX_PUSH_PENDING")
+        self.assertEqual(info["action_required"], "push_aux")
+        self.assertIn("aux_rem_repo", info["remediation"])
+        self.assertIn("--sync-branches", info["remediation"])
+        self.assertEqual(info["remediation"], "git-sync push aux_rem_repo --sync-branches")
+
+    def test_push_repo_aux_branches(self):
+        bare_remote = self._init_bare_remote(self.root / "aux_push_test.git")
+        local_repo = self._init_repo(self.root / "aux_push_repo")
+
+        (local_repo / "main.txt").write_text("main\n")
+        run_git(str(local_repo), ["add", "main.txt"])
+        run_git(str(local_repo), ["commit", "-m", "init"])
+        run_git(str(local_repo), ["remote", "add", "origin", str(bare_remote)])
+        run_git(str(local_repo), ["push", "-u", "origin", "main"])
+
+        # Auxiliary branch
+        run_git(str(local_repo), ["checkout", "-b", "aux_feat"])
+        (local_repo / "f.txt").write_text("f1\n")
+        run_git(str(local_repo), ["add", "f.txt"])
+        run_git(str(local_repo), ["commit", "-m", "feat 1"])
+        run_git(str(local_repo), ["push", "-u", "origin", "aux_feat"])
+
+        (local_repo / "f.txt").write_text("f2\n")
+        run_git(str(local_repo), ["add", "f.txt"])
+        run_git(str(local_repo), ["commit", "-m", "feat 2"])
+        run_git(str(local_repo), ["checkout", "main"])
+
+        # 1. With sync_branches=False, aux branch is not pushed
+        res_no_sync = push_repo(str(local_repo), sync_branches=False)
+        self.assertTrue(res_no_sync["success"])
+        self.assertFalse(res_no_sync.get("aux_branches", {}))
+        p_c1 = run_git(str(bare_remote), ["rev-list", "--count", "aux_feat"])
+        self.assertEqual(p_c1.stdout.strip(), "2")  # init + feat 1
+
+        # 2. Dry run with sync_branches=True
+        res_dry = push_repo(str(local_repo), sync_branches=True, dry_run=True)
+        self.assertTrue(res_dry["success"])
+        self.assertTrue(res_dry["dry_run"])
+        self.assertIn("aux_feat", res_dry.get("aux_branches", {}))
+        self.assertTrue(res_dry["aux_branches"]["aux_feat"])
+        p_c2 = run_git(str(bare_remote), ["rev-list", "--count", "aux_feat"])
+        self.assertEqual(p_c2.stdout.strip(), "2")
+
+        # 3. Real push with sync_branches=True
+        res_real = push_repo(str(local_repo), sync_branches=True, dry_run=False)
+        self.assertTrue(res_real["success"])
+        self.assertIn("aux_feat", res_real.get("aux_branches", {}))
+        self.assertTrue(res_real["aux_branches"]["aux_feat"])
+        p_c3 = run_git(str(bare_remote), ["rev-list", "--count", "aux_feat"])
+        self.assertEqual(p_c3.stdout.strip(), "3")  # init + feat 1 + feat 2
+
+    def test_push_repo_aux_branch_safety_defenses(self):
+        bare_remote = self._init_bare_remote(self.root / "aux_def_remote.git")
+        local_repo = self._init_repo(self.root / "aux_def_repo")
+
+        (local_repo / "main.txt").write_text("main\n")
+        run_git(str(local_repo), ["add", "main.txt"])
+        run_git(str(local_repo), ["commit", "-m", "init"])
+        run_git(str(local_repo), ["remote", "add", "origin", str(bare_remote)])
+        run_git(str(local_repo), ["push", "-u", "origin", "main"])
+
+        # Create protected aux branch prod
+        run_git(str(local_repo), ["checkout", "-b", "prod"])
+        (local_repo / "prod.txt").write_text("p1\n")
+        run_git(str(local_repo), ["add", "prod.txt"])
+        run_git(str(local_repo), ["commit", "-m", "prod 1"])
+        run_git(str(local_repo), ["push", "-u", "origin", "prod"])
+
+        # Commit on prod
+        (local_repo / "prod.txt").write_text("p2\n")
+        run_git(str(local_repo), ["add", "prod.txt"])
+        run_git(str(local_repo), ["commit", "-m", "prod 2"])
+        run_git(str(local_repo), ["checkout", "main"])
+
+        # 1. Force push defense on protected aux branch
+        res_force = push_repo(
+            str(local_repo),
+            sync_branches=True,
+            force=True,
+            protected_branches=["prod"],
+        )
+        self.assertFalse(res_force["success"])
+        self.assertIn("prod", res_force.get("aux_branches", {}))
+        self.assertFalse(res_force["aux_branches"]["prod"])
+        self.assertEqual(
+            res_force.get("aux_diagnostics", {}).get("prod", {}).get("category"),
+            "PROTECTED_BRANCH_FORCE_PUSH",
+        )
+
+        # 2. Block protected direct push on aux branch
+        res_blocked = push_repo(
+            str(local_repo),
+            sync_branches=True,
+            block_protected=True,
+            allow_protected=False,
+            protected_branches=["prod"],
+        )
+        self.assertFalse(res_blocked["success"])
+        self.assertFalse(res_blocked["aux_branches"]["prod"])
+        self.assertEqual(
+            res_blocked.get("aux_diagnostics", {}).get("prod", {}).get("category"),
+            "PROTECTED_BRANCH_DIRECT_PUSH",
+        )
+
+        # 3. Allow protected override on aux branch
+        res_allowed = push_repo(
+            str(local_repo),
+            sync_branches=True,
+            block_protected=True,
+            allow_protected=True,
+            protected_branches=["prod"],
+        )
+        self.assertTrue(res_allowed["success"])
+        self.assertTrue(res_allowed["aux_branches"]["prod"])
+
+        # 4. Divergence guard on auxiliary branch
+        # Create diverged_aux branch
+        run_git(str(local_repo), ["checkout", "-b", "diverged_aux"])
+        (local_repo / "div.txt").write_text("d1\n")
+        run_git(str(local_repo), ["add", "div.txt"])
+        run_git(str(local_repo), ["commit", "-m", "div 1"])
+        run_git(str(local_repo), ["push", "-u", "origin", "diverged_aux"])
+
+        # Advance remote with commit from second clone
+        clone_dir = self.root / "div_clone"
+        run_git(str(self.root), ["clone", str(bare_remote), "div_clone"])
+        run_git(str(clone_dir), ["config", "user.name", "Test User"])
+        run_git(str(clone_dir), ["checkout", "diverged_aux"])
+        (clone_dir / "div_remote.txt").write_text("remote advance\n")
+        run_git(str(clone_dir), ["add", "div_remote.txt"])
+        run_git(str(clone_dir), ["commit", "-m", "remote commit"])
+        run_git(str(clone_dir), ["push", "origin", "diverged_aux"])
+
+        # Add local commit on diverged_aux
+        (local_repo / "div_local.txt").write_text("local advance\n")
+        run_git(str(local_repo), ["add", "div_local.txt"])
+        run_git(str(local_repo), ["commit", "-m", "local commit"])
+        run_git(str(local_repo), ["fetch", "origin"])
+        run_git(str(local_repo), ["checkout", "main"])
+
+        # Push with sync_branches should block divergent aux branch
+        res_div = push_repo(str(local_repo), sync_branches=True)
+        self.assertFalse(res_div["success"])
+        self.assertIn("diverged_aux", res_div.get("aux_branches", {}))
+        self.assertFalse(res_div["aux_branches"]["diverged_aux"])
+        self.assertEqual(
+            res_div.get("aux_diagnostics", {}).get("diverged_aux", {}).get("category"),
+            "DIVERGED",
+        )
+
+    def test_cli_push_smart_disambiguation_and_aux_branches(self):
+        bare_remote = self._init_bare_remote(self.root / "cli_smart_remote.git")
+        local_repo = self._init_repo(self.root / "cli_smart_repo")
+
+        (local_repo / "main.txt").write_text("main\n")
+        run_git(str(local_repo), ["add", "main.txt"])
+        run_git(str(local_repo), ["commit", "-m", "init"])
+        run_git(str(local_repo), ["remote", "add", "origin", str(bare_remote)])
+        run_git(str(local_repo), ["push", "-u", "origin", "main"])
+
+        # Create aux branch ahead of upstream
+        run_git(str(local_repo), ["checkout", "-b", "feat_smart"])
+        (local_repo / "f.txt").write_text("f1\n")
+        run_git(str(local_repo), ["add", "f.txt"])
+        run_git(str(local_repo), ["commit", "-m", "f1"])
+        run_git(str(local_repo), ["push", "-u", "origin", "feat_smart"])
+
+        (local_repo / "f.txt").write_text("f2\n")
+        run_git(str(local_repo), ["add", "f.txt"])
+        run_git(str(local_repo), ["commit", "-m", "f2"])
+        run_git(str(local_repo), ["checkout", "main"])
+
+        # 1. Test CLI smart disambiguation: git-sync push <repo> --all
+        buf_all = io.StringIO()
+        with patch("sys.stdout", buf_all):
+            code_all = main([
+                "push",
+                "cli_smart_repo",
+                "--all",
+                "--root", str(self.root),
+                "--json",
+            ])
+        self.assertEqual(code_all, 0)
+        res_all = json.loads(buf_all.getvalue())
+        self.assertEqual(len(res_all), 1)
+        self.assertTrue(res_all[0]["success"])
+        self.assertIn("feat_smart", res_all[0].get("aux_branches", {}))
+        self.assertTrue(res_all[0]["aux_branches"]["feat_smart"])
+
+        # 2. Test CLI --all-branches alias
+        (local_repo / "feat_smart_f3.txt").write_text("f3\n")
+        run_git(str(local_repo), ["checkout", "feat_smart"])
+        run_git(str(local_repo), ["add", "feat_smart_f3.txt"])
+        run_git(str(local_repo), ["commit", "-m", "f3"])
+        run_git(str(local_repo), ["checkout", "main"])
+
+        buf_alias = io.StringIO()
+        with patch("sys.stdout", buf_alias):
+            code_alias = main([
+                "push",
+                "cli_smart_repo",
+                "--all-branches",
+                "--root", str(self.root),
+                "--json",
+            ])
+        self.assertEqual(code_alias, 0)
+        res_alias = json.loads(buf_alias.getvalue())
+        self.assertTrue(res_alias[0]["success"])
+        self.assertTrue(res_alias[0]["aux_branches"]["feat_smart"])
+
+        # 3. Test CLI --no-sync-branches
+        (local_repo / "feat_smart_f4.txt").write_text("f4\n")
+        run_git(str(local_repo), ["checkout", "feat_smart"])
+        run_git(str(local_repo), ["add", "feat_smart_f4.txt"])
+        run_git(str(local_repo), ["commit", "-m", "f4"])
+        run_git(str(local_repo), ["checkout", "main"])
+
+        buf_no_sync = io.StringIO()
+        with patch("sys.stdout", buf_no_sync):
+            code_no_sync = main([
+                "push",
+                "cli_smart_repo",
+                "--no-sync-branches",
+                "--root", str(self.root),
+                "--json",
+            ])
+        self.assertEqual(code_no_sync, 0)
+        res_no_sync = json.loads(buf_no_sync.getvalue())
+        self.assertFalse(res_no_sync[0].get("aux_branches", {}))
+
+        # 4. Test terminal output and preview mode
+        buf_prev = io.StringIO()
+        with patch("sys.stdout", buf_prev):
+            code_prev = main([
+                "push",
+                "cli_smart_repo",
+                "--preview",
+                "--root", str(self.root),
+            ])
+        self.assertEqual(code_prev, 0)
+        prev_out = buf_prev.getvalue()
+        self.assertIn("branch(es) secundária(s) pendente(s) de envio", prev_out)
+
+        # 5. Test render_push_item with aux branches
+        buf_render = io.StringIO()
+        with patch("sys.stdout", buf_render):
+            code_render = main([
+                "push",
+                "cli_smart_repo",
+                "--sync-branches",
+                "--dry-run",
+                "--root", str(self.root),
+            ])
+        self.assertEqual(code_render, 0)
+        render_out = buf_render.getvalue()
+        self.assertIn("Branch auxiliar 'feat_smart': push previsto", render_out)
+
 
 
 class TestGitLFSSupport(unittest.TestCase):
