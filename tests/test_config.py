@@ -17,12 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from git_sync.cli import main
 from git_sync.config import (
     CONFIG_FILENAME,
-    DEFAULT_CONFIG_TEMPLATE,
     GitSyncConfig,
     deep_merge,
     find_config_file,
-    get_default_config_path,
-    init_config_file,
     load_config,
     load_config_file,
     resolve_config,
@@ -260,9 +257,9 @@ class TestExclusionsAndDiscovery(unittest.TestCase):
     def test_discover_repos_with_exclusions(self):
         repo_active1 = self._init_repo(self.root / "ye-dev" / "repo1")
         repo_active2 = self._init_repo(self.root / "ye-sandbox" / "repo2")
-        repo_archived = self._init_repo(self.root / "archived" / "repo3")
-        repo_vendor = self._init_repo(self.root / "ye-dev" / "vendor" / "repo4")
-        repo_temp = self._init_repo(self.root / "temp-audit" / "repo5")
+        self._init_repo(self.root / "archived" / "repo3")
+        self._init_repo(self.root / "ye-dev" / "vendor" / "repo4")
+        self._init_repo(self.root / "temp-audit" / "repo5")
 
         # 1. Discover all without exclusions
         all_found = discover_repos(str(self.root))
@@ -344,7 +341,7 @@ class TestCliConfigurationPrecedence(unittest.TestCase):
 
         # Create repo under an alternative root
         cli_root = self.root / "cli_root"
-        repo = self._init_repo(cli_root / "sample-repo")
+        self._init_repo(cli_root / "sample-repo")
 
         # Run status with CLI override --root cli_root
         stdout_capture = io.StringIO()
@@ -432,7 +429,7 @@ class TestCliConfigurationPrecedence(unittest.TestCase):
 
         expected_cwd = str(Path.cwd().resolve())
 
-        mock_pw = patch("pwd.getpwuid")
+        patch("pwd.getpwuid")
         with patch.dict(os.environ, {"GIT_SYNC_ROOT": "", "USER": ""}, clear=False):
             with patch.object(Path, "home", return_value=fake_home):
                 try:
@@ -650,7 +647,7 @@ class TestHierarchicalConfigMergingAndInteractiveBootstrap(unittest.TestCase):
             exit_code = main(["config"])
         self.assertEqual(exit_code, 0)
         output = stdout_capture.getvalue()
-        self.assertIn("Fontes (sources):", output)
+        self.assertIn("Sources:", output)
         self.assertIn("defaults", output)
         self.assertIn("cli", output)
 

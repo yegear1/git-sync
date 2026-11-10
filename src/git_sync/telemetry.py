@@ -8,13 +8,20 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
-from git_sync.engine.git import get_lfs_info as _engine_get_lfs_info, get_repo_remotes as _engine_get_repo_remotes
+from git_sync.engine.git import get_lfs_info as _engine_get_lfs_info
+from git_sync.engine.git import get_repo_remotes as _engine_get_repo_remotes
 from git_sync.engine.topology import (
     get_sparse_checkout_info as _engine_get_sparse_checkout_info,
+)
+from git_sync.engine.topology import (
     get_submodules_status as _engine_get_submodules_status,
+)
+from git_sync.engine.topology import (
     get_worktree_info as _engine_get_worktree_info,
+)
+from git_sync.engine.topology import (
     is_path_in_cone as _engine_is_path_in_cone,
 )
 
@@ -34,12 +41,12 @@ class TelemetryBenchmark:
     worker pool concurrency, and operational failure metrics.
     """
     start_time: float = field(default_factory=time.perf_counter)
-    end_time: Optional[float] = None
-    stages: Dict[str, float] = field(default_factory=dict)
+    end_time: float | None = None
+    stages: dict[str, float] = field(default_factory=dict)
     total_repos: int = 0
     workers: int | str = DEFAULT_WORKERS
     active_workers: int = 0
-    optimal_workers: Optional[int] = None
+    optimal_workers: int | None = None
     auto_tuned: bool = False
     cache_hits: int = 0
     cache_misses: int = 0
@@ -48,15 +55,15 @@ class TelemetryBenchmark:
     disk_latency_threshold: float = DEFAULT_DISK_LATENCY_THRESHOLD
     network_latency_threshold: float = DEFAULT_NETWORK_LATENCY_THRESHOLD
     failures_count: int = 0
-    failures_by_type: Dict[str, int] = field(default_factory=dict)
+    failures_by_type: dict[str, int] = field(default_factory=dict)
     retries_count: int = 0
     retries_recovered: int = 0
     total_stale_remote_refs: int = 0
     total_pruned_remote_refs: int = 0
     total_gone_branches: int = 0
     total_merged_branches: int = 0
-    hygiene_details: List[Dict[str, Any]] = field(default_factory=list)
-    alerts: List[Dict[str, Any]] = field(default_factory=list)
+    hygiene_details: list[dict[str, Any]] = field(default_factory=list)
+    alerts: list[dict[str, Any]] = field(default_factory=list)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def record_stage(self, stage: str, duration: float) -> None:
@@ -90,10 +97,10 @@ class TelemetryBenchmark:
     def record_hygiene(
         self,
         repo_rel: str,
-        stale_remote_refs: Optional[List[str]] = None,
-        pruned_remote_refs: Optional[List[str]] = None,
-        gone_branches: Optional[List[str]] = None,
-        merged_branches: Optional[List[str]] = None,
+        stale_remote_refs: list[str] | None = None,
+        pruned_remote_refs: list[str] | None = None,
+        gone_branches: list[str] | None = None,
+        merged_branches: list[str] | None = None,
     ) -> None:
         """Record branch health and reference pruning metrics for a repository."""
         stale = list(stale_remote_refs or [])
@@ -116,8 +123,8 @@ class TelemetryBenchmark:
 
     def evaluate_thresholds(
         self,
-        controller: Optional[AdaptiveConcurrencyController] = None,
-    ) -> List[Dict[str, Any]]:
+        controller: AdaptiveConcurrencyController | None = None,
+    ) -> list[dict[str, Any]]:
         """Evaluate recorded metrics against latency and worker saturation thresholds."""
         with self._lock:
             if controller is None:
@@ -153,7 +160,7 @@ class TelemetryBenchmark:
             return 0.0
         return round(self.total_repos / dur, 2)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert telemetry metrics to a structured dictionary."""
         if not self.alerts and (
             self.disk_latency_seconds > 0
@@ -266,15 +273,15 @@ class BulkCache:
     def __init__(self, enabled: bool = True):
         self.enabled = enabled
         self._lock = threading.Lock()
-        self._worktrees: Dict[str, Dict[str, Any]] = {}
-        self._remotes: Dict[str, Dict[str, str]] = {}
-        self._submodules: Dict[str, List[Dict[str, Any]]] = {}
-        self._sparse_checkout: Dict[str, Dict[str, Any]] = {}
-        self._lfs: Dict[str, Dict[str, Any]] = {}
+        self._worktrees: dict[str, dict[str, Any]] = {}
+        self._remotes: dict[str, dict[str, str]] = {}
+        self._submodules: dict[str, list[dict[str, Any]]] = {}
+        self._sparse_checkout: dict[str, dict[str, Any]] = {}
+        self._lfs: dict[str, dict[str, Any]] = {}
         self._hits = 0
         self._misses = 0
 
-    def get_worktree_info(self, repo_path: str, timeout: int = 5) -> Dict[str, Any]:
+    def get_worktree_info(self, repo_path: str, timeout: int = 5) -> dict[str, Any]:
         norm = os.path.abspath(repo_path)
         get_wt_info = _engine_get_worktree_info
         if not self.enabled:
@@ -304,7 +311,7 @@ class BulkCache:
                     }
         return info
 
-    def get_remotes(self, repo_path: str, timeout: int = 5) -> Dict[str, str]:
+    def get_remotes(self, repo_path: str, timeout: int = 5) -> dict[str, str]:
         norm = os.path.abspath(repo_path)
         get_remotes_fn = _engine_get_repo_remotes
         if not self.enabled:
@@ -327,7 +334,7 @@ class BulkCache:
         timeout: int = 5,
         recursive: bool = True,
         detailed: bool = False,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         # INVARIANT: If .gitmodules file does not exist, repository has no submodules; skip subprocess entirely
         if not os.path.isfile(os.path.join(repo_path, ".gitmodules")):
             return []
@@ -352,9 +359,9 @@ class BulkCache:
     def get_sparse_checkout_info(
         self,
         repo_path: str,
-        dirty_files: Optional[List[str]] = None,
+        dirty_files: list[str] | None = None,
         timeout: int = 5,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         norm = os.path.abspath(repo_path)
         get_sc_fn = _engine_get_sparse_checkout_info
         if not self.enabled:
@@ -379,7 +386,7 @@ class BulkCache:
             self._sparse_checkout[norm] = dict(info)
         return info
 
-    def get_lfs_info(self, repo_path: str, timeout: int = 5) -> Dict[str, Any]:
+    def get_lfs_info(self, repo_path: str, timeout: int = 5) -> dict[str, Any]:
         norm = os.path.abspath(repo_path)
         get_lfs_fn = _engine_get_lfs_info
         if not self.enabled:
@@ -425,7 +432,7 @@ class BulkCache:
             self._misses = 0
 
     @property
-    def stats(self) -> Dict[str, int]:
+    def stats(self) -> dict[str, int]:
         with self._lock:
             return {
                 "hits": self._hits,

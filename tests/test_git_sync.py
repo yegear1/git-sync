@@ -4,7 +4,6 @@ Unit tests for git-sync core functionality.
 
 import io
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -17,16 +16,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from git_sync.cli import main
 from git_sync.core import (
-    DEFAULT_PROTECTED_BRANCHES,
-    ClassifiedCommit,
     classify_commit,
     discover_repos,
     find_push_pending_repos,
     format_bytes_human,
     format_changelog_summary,
     get_lfs_info,
-    get_repo_commits,
-    get_repo_pending_changelog,
     get_submodules_status,
     get_worktree_info,
     inspect_git_lfs,
@@ -38,7 +33,6 @@ from git_sync.core import (
     parse_commit_log,
     preflight_push_check,
     prune_repo_worktrees,
-    pull_lfs_objects,
     pull_repo,
     push_repo,
     run_git,
@@ -444,7 +438,7 @@ class TestGitSyncCore(unittest.TestCase):
             ret = main(["--root", str(self.root), "status", "--no-fetch", "--submodules"])
         self.assertEqual(ret, 0)
         out = f_out.getvalue()
-        self.assertIn("submódulos", out)
+        self.assertIn("submodules", out)
         self.assertIn("vendor/cli_sub", out)
 
         # 2. status --json includes submodule_drift and remediation
@@ -464,7 +458,7 @@ class TestGitSyncCore(unittest.TestCase):
             ret = main(["--root", str(self.root), "pull", "cli_parent", "--submodules"])
         self.assertEqual(ret, 0)
         pull_out = f_pull.getvalue()
-        self.assertIn("Submódulo 'vendor/cli_sub':", pull_out)
+        self.assertIn("Submodule 'vendor/cli_sub':", pull_out)
 
         # Status after pull should no longer have drift
         status_clean = get_submodules_status(str(parent))
@@ -731,7 +725,7 @@ class TestGitSyncCore(unittest.TestCase):
         self.assertEqual(ret, 0)
         output = buf.getvalue()
         # Output must report worktree tag and branch isolation
-        self.assertIn("isolada", output)
+        self.assertIn("excluded", output)
         self.assertIn("topic-a", output)
         self.assertIn("[wt_topic_a] [worktree]", output)
 
@@ -820,8 +814,8 @@ class TestGitSyncCore(unittest.TestCase):
             ret = main(["--root", str(self.root), "status", "--no-fetch", "--compact"])
         self.assertEqual(ret, 0)
         out_text = buf_text_compact.getvalue()
-        self.assertIn("Total: 1 repositórios", out_text)
-        self.assertNotIn("STATUS          REPOSITÓRIO", out_text)
+        self.assertIn("Total: 1 repositories", out_text)
+        self.assertNotIn("STATUS          REPOSITORY", out_text)
 
     def test_status_compact_json_empty_root(self):
         empty_dir = self.root / "empty_workspace"
@@ -864,8 +858,8 @@ class TestGitSyncCore(unittest.TestCase):
             ret = main(["--root", str(self.root), "status", "--no-fetch"])
         self.assertEqual(ret, 0)
         output = buf_text.getvalue()
-        self.assertIn("sem remote configurado", output)
-        self.assertNotIn("❌ SEM REMOTE   pkg_offline              main         sincronizado", output)
+        self.assertIn("no remote configured", output)
+        self.assertNotIn("❌ NO REMOTE   pkg_offline              main         synced", output)
 
         # 2. JSON summary segregation
         buf_json = io.StringIO()
@@ -1262,7 +1256,7 @@ class TestGitSyncCore(unittest.TestCase):
         with patch("sys.stdout", buf_list):
             code_list = main(["worktree", "list", "--root", str(self.root)])
         self.assertEqual(code_list, 0)
-        self.assertIn("prunável", buf_list.getvalue())
+        self.assertIn("prunable", buf_list.getvalue())
 
         # 3. Test worktree prune --dry-run CLI
         buf_prune_dry = io.StringIO()
@@ -1278,7 +1272,7 @@ class TestGitSyncCore(unittest.TestCase):
         with patch("sys.stdout", buf_prune_live):
             code_live = main(["worktree", "prune", "--root", str(self.root)])
         self.assertEqual(code_live, 0)
-        self.assertIn("Prunado worktree", buf_prune_live.getvalue())
+        self.assertIn("Pruned worktree", buf_prune_live.getvalue())
 
         # 5. Subsequent status should be clean
         buf_after = io.StringIO()
@@ -1993,7 +1987,7 @@ class TestProtectedBranchAndPushPreflight(unittest.TestCase):
             ])
         self.assertEqual(code_prev, 0)
         prev_out = buf_prev.getvalue()
-        self.assertIn("branch(es) secundária(s) pendente(s) de envio", prev_out)
+        self.assertIn("auxiliary branch(es) pending push", prev_out)
 
         # 5. Test render_push_item with aux branches
         buf_render = io.StringIO()
@@ -2007,7 +2001,7 @@ class TestProtectedBranchAndPushPreflight(unittest.TestCase):
             ])
         self.assertEqual(code_render, 0)
         render_out = buf_render.getvalue()
-        self.assertIn("Branch auxiliar 'feat_smart': push previsto", render_out)
+        self.assertIn("Auxiliary branch 'feat_smart': push planned", render_out)
 
 
 
@@ -2035,7 +2029,6 @@ class TestGitLFSSupport(unittest.TestCase):
         return path
 
     def test_is_lfs_pointer_file(self):
-        from git_sync.core import is_lfs_pointer_file
         repo = self._init_repo(self.root / "lfs_detect")
         ptr_file = repo / "weights.bin"
         ptr_content = (
@@ -2053,7 +2046,6 @@ class TestGitLFSSupport(unittest.TestCase):
         self.assertFalse(is_lfs_pointer_file(str(repo / "nonexistent.bin")))
 
     def test_format_bytes_human(self):
-        from git_sync.core import format_bytes_human
         self.assertEqual(format_bytes_human(500), "500 B")
         self.assertEqual(format_bytes_human(1024), "1.0 KB")
         self.assertEqual(format_bytes_human(1024 * 512), "512.0 KB")
@@ -2061,7 +2053,6 @@ class TestGitLFSSupport(unittest.TestCase):
         self.assertEqual(format_bytes_human(1024 * 1024 * 1024 * 2), "2.00 GB")
 
     def test_get_lfs_info_no_lfs(self):
-        from git_sync.core import get_lfs_info
         repo = self._init_repo(self.root / "no_lfs")
         info = get_lfs_info(str(repo))
         self.assertFalse(info["has_lfs"])
@@ -2070,7 +2061,6 @@ class TestGitLFSSupport(unittest.TestCase):
         self.assertEqual(info["patterns"], [])
 
     def test_get_lfs_info_with_gitattributes(self):
-        from git_sync.core import get_lfs_info
         repo = self._init_repo(self.root / "with_lfs")
         (repo / ".gitattributes").write_text("*.onnx filter=lfs diff=lfs merge=lfs -text\n", encoding="utf-8")
 
@@ -2108,7 +2098,6 @@ class TestGitLFSSupport(unittest.TestCase):
         self.assertEqual(cache.stats["cached_lfs"], 0)
 
     def test_inspect_git_lfs_probe(self):
-        from git_sync.core import inspect_git_lfs
         with patch("subprocess.run") as mock_subproc:
             mock_subproc.return_value.returncode = 0
             mock_subproc.return_value.stdout = "git-lfs/3.4.0 (GitHub; linux amd64; go 1.20.5)\n"

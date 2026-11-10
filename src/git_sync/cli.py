@@ -11,11 +11,10 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from git_sync import __version__
 from git_sync.config import (
-    CONFIG_FILENAME,
     GitSyncConfig,
     get_default_config_path,
     init_config_file,
@@ -25,49 +24,38 @@ from git_sync.engine import (
     DEFAULT_COMPACT_DIFF_TOKENS,
     DEFAULT_PROTECTED_BRANCHES,
     DEFAULT_RETRIES,
-    DEFAULT_ROOT,
-    DEFAULT_TIMEOUT,
     DEFAULT_WORKERS,
     AdaptiveConcurrencyController,
-    DoctorSanityReport,
-    PullResult,
     PushResult,
     RepoStatusRecord,
     ResolveResult,
     audit_ssh_multiplexing,
-    benchmark_ssh_multiplexing,
-    calculate_optimal_workers,
     check_credentials_sanity,
-    diagnose_git_error,
     discover_repos,
     find_diverged_repos,
     find_locked_repos,
     find_push_pending_repos,
-    format_changelog_summary,
     get_divergence_details,
     get_divergence_diff,
     get_worktree_info,
-    inspect_credential_helpers,
-    inspect_github_cli,
     inspect_repo,
-    inspect_ssh_config,
-    inspect_token_env,
     is_branch_protected,
     match_repo,
-    preflight_push_check,
     prune_repo_worktrees,
-    prune_stale_ssh_control_sockets,
     pull_repo,
     push_repo,
-    recover_index_lock,
-    recover_repo_locks,
     resolve_divergence,
-    run_git_with_retry,
-    truncate_diff,
+)
+from git_sync.installer import (
+    generate_completion_script,
+    install_agent_skills,
+    install_completion,
+    install_symlink,
+    uninstall_agent_skills,
+    uninstall_symlink,
 )
 from git_sync.telemetry import BulkCache, TelemetryBenchmark
 from git_sync.ui import (
-    AnsiStyler,
     BulkActionItem,
     InteractiveDashboard,
     ProgressIndicator,
@@ -88,14 +76,7 @@ from git_sync.ui import (
     render_pull_item,
     render_push_item,
 )
-from git_sync.installer import (
-    generate_completion_script,
-    install_agent_skills,
-    install_completion,
-    install_symlink,
-    uninstall_agent_skills,
-    uninstall_symlink,
-)
+from git_sync.ui.formatters import legacy_preview_item
 
 
 def _parse_workers_arg(val: str) -> int | str:
@@ -113,11 +94,11 @@ def _parse_workers_arg(val: str) -> int | str:
 
 
 def _filter_by_group(
-    repos: List[str],
+    repos: list[str],
     root: str,
-    group: Optional[str] = None,
-    groups: Optional[List[str]] = None,
-) -> List[str]:
+    group: str | None = None,
+    groups: list[str] | None = None,
+) -> list[str]:
     """
     Filter repository paths by explicit CLI group or configured preferred workspace groups.
     # INVARIANT: CLI group takes precedence when non-empty; otherwise configured groups list is applied.
@@ -145,7 +126,7 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     ssh_flag = getattr(args, "ssh", False)
 
     if not args.json:
-        print(f"\n🩺 Executando diagnóstico de credenciais e conectividade em {root}...")
+        print(f"\n🩺 Running credential and connectivity diagnostics in {root}...")
 
     workers = getattr(args, "workers", DEFAULT_WORKERS)
     sanity = check_credentials_sanity(
@@ -187,20 +168,20 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     if getattr(args, "preflight", False):
         if not args.json:
-            print("🩺 Executando verificação prévia de credenciais...")
+            print("🩺 Running credential preflight checks...")
         preflight_res = check_credentials_sanity(root, group=getattr(args, "group", None), timeout=args.timeout, test_remotes=True)
         if not preflight_res["ok"]:
             if args.json:
                 print(json.dumps({"error": "Preflight credential sanity check failed", "preflight": preflight_res}, indent=2))
                 return 1
-            print("❌ Falha na verificação prévia de credenciais:")
+            print("❌ Credential preflight failed:")
             for err in preflight_res["errors"]:
                 print(f"  • {err}")
             for sug in preflight_res["suggestions"]:
                 print(f"  💡 {sug}")
             return 1
         elif not args.json:
-            print("✅ Pre-flight: credenciais verificadas com sucesso.")
+            print("✅ Pre-flight: credentials verified successfully.")
 
     t0 = time.perf_counter()
     all_repos = discover_repos(root, exclude=exclude)
@@ -229,7 +210,7 @@ def cmd_status(args: argparse.Namespace) -> int:
                     empty_summary["telemetry"] = benchmark.to_dict()
                 print(json.dumps(empty_summary, indent=2))
             else:
-                resp: Dict[str, Any] = {"error": f"No repositories found in {root}", "results": []}
+                resp: dict[str, Any] = {"error": f"No repositories found in {root}", "results": []}
                 if getattr(args, "benchmark", False):
                     resp["telemetry"] = benchmark.to_dict()
                 print(json.dumps(resp))
@@ -257,7 +238,7 @@ def cmd_status(args: argparse.Namespace) -> int:
                     config_path=getattr(cfg_obj, "config_path", None) if cfg_obj else None,
                 )
                 return dashboard.run()
-            print(f"Nenhum repositório encontrado em {root}")
+            print(f"No repositories found in {root}")
             if getattr(args, "benchmark", False):
                 _print_benchmark_output(benchmark, getattr(args, "json", False))
         return 0
@@ -270,7 +251,7 @@ def cmd_status(args: argparse.Namespace) -> int:
     )
 
     t1 = time.perf_counter()
-    results: List[RepoStatusRecord | Dict[str, Any]] = []
+    results: list[RepoStatusRecord | dict[str, Any]] = []
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
     retries = getattr(args, "retries", DEFAULT_RETRIES)
     is_fetch = not args.no_fetch
@@ -303,7 +284,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             ): r
             for r in all_repos
         }
-        with ProgressIndicator("Inspecionando repositórios...", total=len(all_repos), enabled=show_progress) as progress:
+        with ProgressIndicator("Inspecting repositories...", total=len(all_repos), enabled=show_progress) as progress:
             for future in concurrent.futures.as_completed(futures):
                 repo_path = futures[future]
                 res_item = future.result()
@@ -396,20 +377,20 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
     if getattr(args, "preflight", False):
         if not args.json:
-            print("🩺 Executando verificação prévia de credenciais...")
+            print("🩺 Running credential preflight checks...")
         preflight_res = check_credentials_sanity(root, group=getattr(args, "group", None), timeout=args.timeout, test_remotes=True)
         if not preflight_res["ok"]:
             if args.json:
                 print(json.dumps({"error": "Preflight credential sanity check failed", "preflight": preflight_res}, indent=2))
                 return 1
-            print("❌ Falha na verificação prévia de credenciais:")
+            print("❌ Credential preflight failed:")
             for err in preflight_res["errors"]:
                 print(f"  • {err}")
             for sug in preflight_res["suggestions"]:
                 print(f"  💡 {sug}")
             return 1
         elif not args.json:
-            print("✅ Pre-flight: credenciais verificadas com sucesso.")
+            print("✅ Pre-flight: credentials verified successfully.")
 
     t0 = time.perf_counter()
     all_repos = discover_repos(root, exclude=exclude)
@@ -421,15 +402,15 @@ def cmd_pull(args: argparse.Namespace) -> int:
     )
     t_disc = time.perf_counter() - t0
     benchmark.record_stage("discovery", t_disc)
-    targets: List[str] = []
+    targets: list[str] = []
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
 
     if args.all:
         if not args.json:
             mode_prefix = "[DRY-RUN] " if dry_run else ""
-            print(f"🔍 {mode_prefix}Identificando repositórios com atualizações pendentes...")
+            print(f"🔍 {mode_prefix}Identifying repositories with pending updates...")
         t1 = time.perf_counter()
-        inspections: List[RepoStatusRecord] = []
+        inspections: list[RepoStatusRecord] = []
         configured_w = None if auto_tuned else args.workers
         effective_workers = controller.determine_workers(
             len(all_repos),
@@ -443,7 +424,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 executor.submit(inspect_repo, r, root, True, args.timeout, cache, remote, benchmark, retries): r
                 for r in all_repos
             }
-            with ProgressIndicator("Auditando repositórios...", total=len(all_repos), enabled=show_progress) as progress:
+            with ProgressIndicator("Auditing repositories...", total=len(all_repos), enabled=show_progress) as progress:
                 for future in concurrent.futures.as_completed(futures):
                     res_item = future.result()
                     inspections.append(res_item)
@@ -476,13 +457,13 @@ def cmd_pull(args: argparse.Namespace) -> int:
         if not targets:
             benchmark.stop()
             if args.json:
-                res_obj: Dict[str, Any] = {"success": True, "message": "All repositories are already up to date.", "pulled": [], "dry_run": dry_run}
+                res_obj: dict[str, Any] = {"success": True, "message": "All repositories are already up to date.", "pulled": [], "dry_run": dry_run}
                 if getattr(args, "benchmark", False):
                     res_obj["telemetry"] = benchmark.to_dict()
                 print(json.dumps(res_obj))
             else:
                 mode_prefix = "[DRY-RUN] " if dry_run else ""
-                print(f"✅ {mode_prefix}Todos os repositórios já estão 100% atualizados.")
+                print(f"✅ {mode_prefix}All repositories are already up to date.")
                 if getattr(args, "benchmark", False):
                     _print_benchmark_output(benchmark, getattr(args, "json", False))
             return 0
@@ -491,7 +472,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
             if args.json:
                 print(json.dumps({"error": "Specify repository name(s) or pass --all"}))
             else:
-                print("Especifique um ou mais repositórios ou use --all")
+                print("Specify repository name(s) or pass --all")
             return 1
         for q in args.repos:
             matched = match_repo(q, all_repos, root)
@@ -499,7 +480,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 targets.append(matched)
             else:
                 if not args.json:
-                    print(f"❌ Repositório não encontrado para a busca: '{q}'")
+                    print(f"❌ No repository found matching: '{q}'")
 
     pull_results = []
     strategy = getattr(args, "strategy", None)
@@ -510,7 +491,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
     if (preview_mode or confirm_mode) and targets:
         insp_map = {r["path"]: r for r in inspections} if args.all else {}
-        preview_items: List[BulkActionItem] = []
+        preview_items: list[BulkActionItem] = []
         for r in targets:
             rel = os.path.relpath(r, root)
             if r in insp_map:
@@ -523,20 +504,20 @@ def cmd_pull(args: argparse.Namespace) -> int:
             is_dirty = bool(info.get("is_dirty", False))
             dirty_files_count = len(info.get("dirty_files", []))
             submodules_count = len(info.get("submodules", []))
-            warnings: List[str] = []
+            warnings: list[str] = []
             if is_dirty:
                 warnings.append(
-                    f"Árvore suja ({dirty_files_count} arquivo(s)) - autostash ativado"
+                    f"Dirty working tree ({dirty_files_count} file(s)) - autostash enabled"
                     if getattr(args, "autostash", True)
-                    else f"Árvore suja ({dirty_files_count} arquivo(s))"
+                    else f"Dirty working tree ({dirty_files_count} file(s))"
                 )
             if info.get("aux_branches_behind"):
-                warnings.append(f"{len(info['aux_branches_behind'])} branch(es) secundária(s) pendente(s)")
+                warnings.append(f"{len(info['aux_branches_behind'])} auxiliary branch(es) pending")
             if info.get("is_shallow"):
-                warnings.append("Repositório raso (shallow)")
+                warnings.append("Shallow repository")
             lfs_d = info.get("lfs") or {}
             if (info.get("has_lfs") or lfs_d.get("has_lfs")) and lfs_d.get("missing_objects", 0) > 0:
-                warnings.append(f"Git LFS: {lfs_d['missing_objects']} objeto(s) pendente(s) de download")
+                warnings.append(f"Git LFS: {lfs_d['missing_objects']} object(s) pending download")
             action_label = f"PULL ({strategy})" if strategy else "PULL (ff-only)"
             preview_items.append(
                 BulkActionItem(
@@ -556,25 +537,25 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
         if preview_mode:
             if args.json:
-                print(json.dumps({"preview": True, "action": "pull", "total": len(preview_items), "items": [i.to_dict() for i in preview_items]}, indent=2))
+                print(json.dumps({"preview": True, "action": "pull", "total": len(preview_items), "items": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
             else:
-                print(format_bulk_action_preview(preview_items, title="PRÉVIA DE PULL EM LOTE (BULK PULL PREVIEW)"))
+                print(format_bulk_action_preview(preview_items, title="BULK PULL PREVIEW"))
             return 0
 
         if confirm_mode:
             if args.json:
-                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [i.to_dict() for i in preview_items]}, indent=2))
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
                 return 1
             confirmed = prompt_bulk_confirmation(
                 preview_items,
-                title="PRÉVIA DE PULL EM LOTE (BULK PULL PREVIEW)",
-                prompt_text=f"Confirmar atualização em {len(preview_items)} repositório(s)? [y/N]: ",
+                title="BULK PULL PREVIEW",
+                prompt_text=f"Confirm update for {len(preview_items)} repository(s)? [y/N]: ",
             )
             if not confirmed:
                 return 0
 
     t2 = time.perf_counter()
-    msg_prog = "Simulando pull..." if dry_run else "Atualizando repositórios..."
+    msg_prog = "Simulating pull..." if dry_run else "Updating repositories..."
     with ProgressIndicator(msg_prog, total=len(targets), enabled=show_progress) as progress:
         for r in targets:
             rel = os.path.relpath(r, root)
@@ -661,13 +642,13 @@ def cmd_resolve(args: argparse.Namespace) -> int:
         group=getattr(args, "group", None),
         groups=getattr(args, "groups", None),
     )
-    targets: List[str] = []
+    targets: list[str] = []
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
 
     if getattr(args, "all", False):
         if not args.json:
             mode_prefix = "[DRY-RUN] " if dry_run else ""
-            print(f"🔍 {mode_prefix}Identificando repositórios com branches divergentes...")
+            print(f"🔍 {mode_prefix}Identifying repositories with diverged branches...")
         diverged = find_diverged_repos(
             all_repos,
             root,
@@ -681,14 +662,14 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                 print(json.dumps({"success": True, "message": "No diverged repositories found.", "resolved": [], "dry_run": dry_run}))
             else:
                 mode_prefix = "[DRY-RUN] " if dry_run else ""
-                print(f"✅ {mode_prefix}Nenhum repositório com divergência encontrado.")
+                print(f"✅ {mode_prefix}No diverged repositories found.")
             return 0
     else:
         if not getattr(args, "repos", None):
             if args.json:
                 print(json.dumps({"error": "Specify repository name(s) or pass --all"}))
             else:
-                print("Especifique um ou mais repositórios ou use --all")
+                print("Specify repository name(s) or pass --all")
             return 1
         for q in args.repos:
             matched = match_repo(q, all_repos, root)
@@ -696,9 +677,9 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                 targets.append(matched)
             else:
                 if not args.json:
-                    print(f"❌ Repositório não encontrado para a busca: '{q}'")
+                    print(f"❌ No repository found matching: '{q}'")
 
-    results: List[ResolveResult | Dict[str, Any]] = []
+    results: list[ResolveResult | dict[str, Any]] = []
     strategy = getattr(args, "strategy", None)
     show_diff_only = getattr(args, "diff", False)
     preview_mode = getattr(args, "preview", False)
@@ -713,7 +694,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
             dirty_count = len(details.get("dirty_files", []))
             warnings = []
             if is_dirty:
-                warnings.append(f"Árvore suja: {dirty_count} arquivo(s)")
+                warnings.append(f"Dirty working tree: {dirty_count} file(s)")
             preview_items.append(
                 BulkActionItem(
                     repo=r,
@@ -731,19 +712,19 @@ def cmd_resolve(args: argparse.Namespace) -> int:
 
         if preview_mode:
             if args.json:
-                print(json.dumps({"preview": True, "action": "resolve", "strategy": strategy, "total": len(preview_items), "items": [i.to_dict() for i in preview_items]}, indent=2))
+                print(json.dumps({"preview": True, "action": "resolve", "strategy": strategy, "total": len(preview_items), "items": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
             else:
-                print(format_bulk_action_preview(preview_items, title="PRÉVIA DE RESOLUÇÃO EM LOTE"))
+                print(format_bulk_action_preview(preview_items, title="BULK RESOLUTION PREVIEW"))
             return 0
 
         if confirm_mode:
             if args.json:
-                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [i.to_dict() for i in preview_items]}, indent=2))
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
                 return 1
             confirmed = prompt_bulk_confirmation(
                 preview_items,
-                title="PRÉVIA DE RESOLUÇÃO EM LOTE",
-                prompt_text=f"Confirmar resolução ({strategy}) em {len(preview_items)} repositório(s)? [y/N]: ",
+                title="BULK RESOLUTION PREVIEW",
+                prompt_text=f"Confirm resolution ({strategy}) for {len(preview_items)} repository(s)? [y/N]: ",
             )
             if not confirmed:
                 return 0
@@ -752,7 +733,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
         not args.json and not strategy and not show_diff_only and sys.stdin.isatty()
     ))
 
-    msg_prog = "Simulando resolução..." if dry_run else "Resolvendo divergências..."
+    msg_prog = "Simulating resolution..." if dry_run else "Resolving divergence..."
     with ProgressIndicator(msg_prog, total=len(targets), enabled=show_progress) as progress:
         for r in targets:
             rel = os.path.relpath(r, root)
@@ -771,13 +752,13 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                 if args.json:
                     results.append({"repo": r, "repo_rel": rel, "details": details, "diff": diff_text, "dry_run": dry_run})
                 else:
-                    print(f"\n📂 Diff de divergência para {rel} ({details.get('branch')} ↔ {details.get('upstream')}):")
+                    print(f"\n📂 Divergence diff for {rel} ({details.get('branch')} ↔ {details.get('upstream')}):")
                     print("=" * 60)
-                    print(format_diff_stat(diff_text) if diff_text else "(Nenhuma diferença ou sem upstream)")
+                    print(format_diff_stat(diff_text) if diff_text else "(No differences or no upstream)")
                 progress.advance(rel)
                 continue
 
-            res: ResolveResult | Dict[str, Any]
+            res: ResolveResult | dict[str, Any]
             if strategy:
                 res = resolve_divergence(r, strategy=strategy, branch=details.get("branch"), timeout=args.timeout, dry_run=dry_run)
                 res["repo_rel"] = rel
@@ -811,7 +792,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                 progress.advance(rel)
                 if not args.json:
                     mode_str = "[DRY-RUN] " if dry_run else ""
-                    print(f"⚠️ {mode_str}[{rel}] ({details.get('branch')} ↔ {details.get('upstream')}): {details.get('ahead')} à frente, {details.get('behind')} atrás")
+                    print(f"⚠️ {mode_str}[{rel}] ({details.get('branch')} ↔ {details.get('upstream')}): {details.get('ahead')} ahead, {details.get('behind')} behind")
 
     if args.json:
         print(json.dumps(results, indent=2))
@@ -833,20 +814,20 @@ def cmd_push(args: argparse.Namespace) -> int:
 
     if getattr(args, "preflight", False):
         if not args.json:
-            print("🩺 Executando verificação prévia de credenciais...")
+            print("🩺 Running credential preflight checks...")
         preflight_res = check_credentials_sanity(root, group=getattr(args, "group", None), timeout=args.timeout, test_remotes=True)
         if not preflight_res["ok"]:
             if args.json:
                 print(json.dumps({"error": "Preflight credential sanity check failed", "preflight": preflight_res}, indent=2))
                 return 1
-            print("❌ Falha na verificação prévia de credenciais:")
+            print("❌ Credential preflight failed:")
             for err in preflight_res["errors"]:
                 print(f"  • {err}")
             for sug in preflight_res["suggestions"]:
                 print(f"  💡 {sug}")
             return 1
         elif not args.json:
-            print("✅ Pre-flight: credenciais verificadas com sucesso.")
+            print("✅ Pre-flight: credentials verified successfully.")
 
     t0 = time.perf_counter()
     all_repos = discover_repos(root, exclude=exclude)
@@ -858,12 +839,12 @@ def cmd_push(args: argparse.Namespace) -> int:
     )
     t_disc = time.perf_counter() - t0
     benchmark.record_stage("discovery", t_disc)
-    targets: List[str] = []
+    targets: list[str] = []
 
     if args.all:
         if not args.json:
             mode_prefix = "[DRY-RUN] " if args.dry_run else ""
-            print(f"🔍 {mode_prefix}Identificando repositórios com commits pendentes de envio...")
+            print(f"🔍 {mode_prefix}Identifying repositories with commits pending push...")
         do_fetch = not getattr(args, "no_fetch", False)
         t1 = time.perf_counter()
         configured_w = None if auto_tuned else args.workers
@@ -883,12 +864,12 @@ def cmd_push(args: argparse.Namespace) -> int:
         if not targets:
             benchmark.stop()
             if args.json:
-                res_obj: Dict[str, Any] = {"success": True, "message": "No repositories have pending commits to push.", "pushed": []}
+                res_obj: dict[str, Any] = {"success": True, "message": "No repositories have pending commits to push.", "pushed": []}
                 if getattr(args, "benchmark", False):
                     res_obj["telemetry"] = benchmark.to_dict()
                 print(json.dumps(res_obj))
             else:
-                print("✅ Nenhum repositório possui commits pendentes de envio.")
+                print("✅ No repositories have commits pending push.")
                 if getattr(args, "benchmark", False):
                     _print_benchmark_output(benchmark, getattr(args, "json", False))
             return 0
@@ -897,7 +878,7 @@ def cmd_push(args: argparse.Namespace) -> int:
             if args.json:
                 print(json.dumps({"error": "Specify repository name(s) or pass --all"}))
             else:
-                print("Especifique um ou mais repositórios ou use --all")
+                print("Specify repository name(s) or pass --all")
             return 1
         for q in args.repos:
             matched = match_repo(q, all_repos, root)
@@ -905,9 +886,9 @@ def cmd_push(args: argparse.Namespace) -> int:
                 targets.append(matched)
             else:
                 if not args.json:
-                    print(f"❌ Repositório não encontrado para a busca: '{q}'")
+                    print(f"❌ No repository found matching: '{q}'")
 
-    push_results: List[PushResult | Dict[str, Any]] = []
+    push_results: list[PushResult | dict[str, Any]] = []
     preview_mode = getattr(args, "preview", False)
     confirm_mode = getattr(args, "confirm", False)
     force = getattr(args, "force", False)
@@ -917,10 +898,10 @@ def cmd_push(args: argparse.Namespace) -> int:
 
     if (preview_mode or confirm_mode) and targets:
         pending_map = {r["path"]: r for r in pending_repos} if args.all else {}
-        preview_items: List[BulkActionItem] = []
+        preview_items: list[BulkActionItem] = []
         for r in targets:
             rel = os.path.relpath(r, root)
-            chk_info: Dict[str, Any]
+            chk_info: dict[str, Any]
             if r in pending_map:
                 chk_info = dict(pending_map[r])
             else:
@@ -928,15 +909,15 @@ def cmd_push(args: argparse.Namespace) -> int:
             branch = str(chk_info.get("branch") or args.branch or "")
             ahead = int(chk_info.get("ahead", 0))
             is_prot = is_branch_protected(branch, prot_branches) if branch else False
-            warnings: List[str] = []
+            warnings: list[str] = []
             if is_prot:
-                warnings.append(f"Branch protegida: {branch}")
+                warnings.append(f"Protected branch: {branch}")
             if force:
-                warnings.append("Push forçado (--force)")
+                warnings.append("Force push (--force)")
             aux_ahead = chk_info.get("aux_branches_ahead") or {}
             if aux_ahead:
                 aux_desc = ", ".join(f"{b} (+{cnt})" for b, cnt in aux_ahead.items())
-                warnings.append(f"{len(aux_ahead)} branch(es) secundária(s) pendente(s) de envio ({aux_desc})")
+                warnings.append(f"{len(aux_ahead)} auxiliary branch(es) pending push ({aux_desc})")
             action_label = "PUSH (--force)" if force else "PUSH"
             preview_items.append(
                 BulkActionItem(
@@ -953,26 +934,26 @@ def cmd_push(args: argparse.Namespace) -> int:
 
         if preview_mode:
             if args.json:
-                print(json.dumps({"preview": True, "action": "push", "total": len(preview_items), "items": [i.to_dict() for i in preview_items]}, indent=2))
+                print(json.dumps({"preview": True, "action": "push", "total": len(preview_items), "items": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
             else:
-                print(format_bulk_action_preview(preview_items, title="PRÉVIA DE ENVIO EM LOTE (BULK PUSH PREVIEW)"))
+                print(format_bulk_action_preview(preview_items, title="BULK PUSH PREVIEW"))
             return 0
 
         if confirm_mode:
             if args.json:
-                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [i.to_dict() for i in preview_items]}, indent=2))
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
                 return 1
             confirmed = prompt_bulk_confirmation(
                 preview_items,
-                title="PRÉVIA DE ENVIO EM LOTE (BULK PUSH PREVIEW)",
-                prompt_text=f"Confirmar envio de commits em {len(preview_items)} repositório(s)? [y/N]: ",
+                title="BULK PUSH PREVIEW",
+                prompt_text=f"Confirm push for {len(preview_items)} repository(s)? [y/N]: ",
             )
             if not confirmed:
                 return 0
 
     t2 = time.perf_counter()
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
-    msg_prog = "Simulando push..." if args.dry_run else "Enviando commits..."
+    msg_prog = "Simulating push..." if args.dry_run else "Pushing commits..."
 
     with ProgressIndicator(msg_prog, total=len(targets), enabled=show_progress) as progress:
         for r in targets:
@@ -1128,21 +1109,21 @@ def cmd_config(args: argparse.Namespace, config: GitSyncConfig) -> int:
         print(json.dumps(config.to_dict(), indent=2))
         return 0
 
-    print("\n⚙️  Configuração ativa do git-sync:")
+    print("\n⚙️  Active git-sync configuration:")
     print("=" * 60)
-    print(f"  Arquivo de config:   {config.config_path or '(nenhum / padrões em uso)'}")
-    print(f"  Fontes (sources):    {', '.join(config.sources) if config.sources else 'defaults'}")
-    print(f"  Perfil ativo:        {config.active_profile or '(padrão / raiz)'}")
-    print(f"  Perfis disponíveis:  {', '.join(config.available_profiles) if config.available_profiles else '(nenhum)'}")
-    print(f"  Diretório raiz:      {args.root}")
+    print(f"  Config file:   {config.config_path or '(none / using defaults)'}")
+    print(f"  Sources:    {', '.join(config.sources) if config.sources else 'defaults'}")
+    print(f"  Active profile:        {config.active_profile or '(default / root)'}")
+    print(f"  Available profiles:  {', '.join(config.available_profiles) if config.available_profiles else '(none)'}")
+    print(f"  Root directory:      {args.root}")
     print(f"  Workers:             {args.workers}{' (auto-tuned)' if getattr(args, 'auto_tune', False) else ''}")
     print(f"  Auto-tune:           {getattr(args, 'auto_tune', config.auto_tune)}")
     print(f"  Timeout (s):         {args.timeout}")
-    print(f"  Exclusões:           {', '.join(args.exclude) if args.exclude else '(nenhuma)'}")
-    print(f"  Grupos preferidos:   {', '.join(args.groups) if args.groups else '(todos)'}")
+    print(f"  Exclusions:           {', '.join(args.exclude) if args.exclude else '(none)'}")
+    print(f"  Preferred groups:   {', '.join(args.groups) if args.groups else '(all)'}")
     print(f"  Pull (ff-only):      {getattr(args, 'ff_only', config.pull_ff_only)}")
     print(f"  Pull (sync-branches):{getattr(args, 'sync_branches', config.pull_sync_branches)}")
-    print(f"  Pull (strategy):     {getattr(args, 'strategy', config.pull_strategy) or '(nenhuma)'}")
+    print(f"  Pull (strategy):     {getattr(args, 'strategy', config.pull_strategy) or '(none)'}")
     print(f"  Pull (autostash):    {getattr(args, 'autostash', config.pull_autostash)}")
     print(f"  Pull (dry-run):      {args.dry_run if getattr(args, 'dry_run', None) is not None else config.pull_dry_run}")
     print(f"  Push (dry-run):      {args.dry_run if getattr(args, 'dry_run', None) is not None else config.push_dry_run}")
@@ -1153,7 +1134,7 @@ def cmd_config(args: argparse.Namespace, config: GitSyncConfig) -> int:
     print(f"  Status (compact):    {getattr(args, 'compact', config.status_compact)}")
     print(f"  Benchmark:           {getattr(args, 'benchmark', config.benchmark)}")
     print(f"  Bulk Cache:          {not getattr(args, 'no_cache', not config.use_cache)}")
-    print(f"  Remote:              {getattr(args, 'remote', config.remote) or '(automático / origin)'}")
+    print(f"  Remote:              {getattr(args, 'remote', config.remote) or '(automatic / origin)'}")
     print(f"  Retries:             {getattr(args, 'retries', config.retries)}")
     print(f"  Pre-flight:          {getattr(args, 'preflight', config.preflight)}")
     print("=" * 60 + "\n")
@@ -1194,7 +1175,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         return 0 if result["ok"] else 1
 
     if not result["ok"]:
-        print(f"❌ Erro na instalação: {result['error']}", file=sys.stderr)
+        print(f"❌ Installation error: {result['error']}", file=sys.stderr)
         return 1
 
     if result["action"] == "already_installed":
@@ -1204,17 +1185,15 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     for sk in skill_results:
         if sk.get("ok"):
-            if sk.get("action") == "installed":
-                print(f"🧠 {sk['message']}")
-            elif sk.get("action") == "already_installed":
+            if sk.get("action") == "installed" or sk.get("action") == "already_installed":
                 print(f"🧠 {sk['message']}")
         else:
             print(f"⚠️  {sk.get('error')}", file=sys.stderr)
 
     if not result["in_path"]:
         install_dir = str(Path(result["path"]).parent)
-        print("\n⚠️  ATENÇÃO: O diretório de instalação não está presente no seu PATH!")
-        print("   Adicione a seguinte linha ao seu ~/.bashrc ou ~/.zshrc:")
+        print("\n⚠️  WARNING: The installation directory is not in your PATH!")
+        print("   Add the following line to ~/.bashrc or ~/.zshrc:")
         print(f'   export PATH="{install_dir}:$PATH"\n')
 
     return 0
@@ -1273,7 +1252,7 @@ def cmd_unlock(args: argparse.Namespace) -> int:
         groups=getattr(args, "groups", None),
     )
 
-    targets: List[str] = []
+    targets: list[str] = []
     if getattr(args, "unlock_all", False):
         targets = filtered
     elif getattr(args, "repos", None):
@@ -1283,7 +1262,7 @@ def cmd_unlock(args: argparse.Namespace) -> int:
                 targets.append(matched)
             else:
                 if not args.json:
-                    print(f"⚠️  Repositório '{q}' não encontrado em {root}")
+                    print(f"⚠️  Repository '{q}' not found in {root}")
     else:
         targets = filtered
 
@@ -1293,7 +1272,7 @@ def cmd_unlock(args: argparse.Namespace) -> int:
         if args.json:
             print(json.dumps({"root": root, "total_locked": 0, "unlocked": []}, indent=2))
         else:
-            print(f"\n✅ Nenhum arquivo de lock ativo ou stale (.git/*.lock) encontrado em {root}.\n")
+            print(f"\n✅ No active or stale lock files (.git/*.lock) found in {root}.\n")
         return 0
 
     results = []
@@ -1371,7 +1350,7 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
         groups=getattr(args, "groups", None),
     )
 
-    targets: List[str] = []
+    targets: list[str] = []
     if getattr(args, "prune_all", False):
         targets = filtered
     elif getattr(args, "repos", None):
@@ -1381,7 +1360,7 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
                 targets.append(matched)
             else:
                 if not getattr(args, "json", False):
-                    print(f"⚠️  Repositório '{q}' não encontrado em {root}")
+                    print(f"⚠️  Repository '{q}' not found in {root}")
     else:
         targets = filtered
 
@@ -1392,7 +1371,7 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
     confirm_mode = getattr(args, "confirm", False)
 
     if (preview_mode or confirm_mode) and targets:
-        sim_pruned_repos: List[Dict[str, Any]] = []
+        sim_pruned_repos: list[dict[str, Any]] = []
         for repo_path in targets:
             res_sim = prune_repo_worktrees(
                 repo_path,
@@ -1405,7 +1384,7 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
             if res_sim["pruned"]:
                 sim_pruned_repos.append(res_sim)
 
-        preview_items: List[BulkActionItem] = []
+        preview_items: list[BulkActionItem] = []
         for pr in sim_pruned_repos:
             for p_item in pr["pruned"]:
                 preview_items.append(
@@ -1422,7 +1401,7 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({"preview": True, "action": "worktree_prune", "total": len(preview_items), "items": [i.to_dict() for i in preview_items]}, indent=2))
             else:
-                print(format_bulk_action_preview(preview_items, title="PRÉVIA DE LIMPEZA DE WORKTREES"))
+                print(format_bulk_action_preview(preview_items, title="WORKTREE PRUNE PREVIEW"))
             return 0
 
         if confirm_mode:
@@ -1432,14 +1411,14 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
             if preview_items:
                 confirmed = prompt_bulk_confirmation(
                     preview_items,
-                    title="PRÉVIA DE LIMPEZA DE WORKTREES",
-                    prompt_text=f"Confirmar poda de {len(preview_items)} worktree(s)? [y/N]: ",
+                    title="WORKTREE PRUNE PREVIEW",
+                    prompt_text=f"Confirm pruning of {len(preview_items)} worktree(s)? [y/N]: ",
                 )
                 if not confirmed:
                     return 0
 
-    pruned_repos: List[Dict[str, Any]] = []
-    all_warnings: List[str] = []
+    pruned_repos: list[dict[str, Any]] = []
+    all_warnings: list[str] = []
     total_pruned = 0
 
     for repo_path in targets:
@@ -1484,7 +1463,7 @@ def cmd_worktree_list(args: argparse.Namespace) -> int:
         groups=getattr(args, "groups", None),
     )
 
-    targets: List[str] = []
+    targets: list[str] = []
     if getattr(args, "repos", None):
         for q in args.repos:
             matched = match_repo(q, filtered, root)
@@ -1492,12 +1471,12 @@ def cmd_worktree_list(args: argparse.Namespace) -> int:
                 targets.append(matched)
             else:
                 if not getattr(args, "json", False):
-                    print(f"⚠️  Repositório '{q}' não encontrado em {root}")
+                    print(f"⚠️  Repository '{q}' not found in {root}")
     else:
         targets = filtered
 
     cache = BulkCache(enabled=not getattr(args, "no_cache", False))
-    entries: List[Dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
 
     for repo_path in targets:
         wt_info = cache.get_worktree_info(repo_path, timeout=args.timeout) if cache else get_worktree_info(repo_path, timeout=args.timeout)
@@ -1525,7 +1504,7 @@ def cmd_worktree_list(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Main CLI entrypoint with support for workspace profiles and custom configurations."""
     if argv is None:
         argv = sys.argv[1:]

@@ -35,6 +35,7 @@ htmlcov/
 *.egg-info/
 *.whl
 *.tar.gz
+uv.lock
 # --- Node ---
 # .next/
 # .nuxt/

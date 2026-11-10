@@ -10,35 +10,28 @@ import concurrent.futures
 import io
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import patch
 
 # Add src to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from git_sync.cli import main
 from git_sync.core import (
-    DEFAULT_TIMEOUT,
     BulkCache,
-    ProgressIndicator,
     TelemetryBenchmark,
-    check_credentials_sanity,
-    check_repo_dirty,
     diagnose_git_error,
     discover_repos,
-    find_locked_repos,
     find_repo_locks,
     inspect_repo,
     is_transient_network_error,
     pull_repo,
-    push_repo,
     recover_index_lock,
-    recover_repo_locks,
     run_git,
     run_git_with_retry,
 )
@@ -169,7 +162,7 @@ class TestMultiRepoConcurrencyStress(unittest.TestCase):
                 lambda r: inspect_repo(r, str(self.root), do_fetch=True, cache=cache, benchmark=benchmark),
                 discovered
             ))
-        elapsed = time.perf_counter() - t0
+        time.perf_counter() - t0
         benchmark.stop()
 
         self.assertEqual(len(inspections), 52)
@@ -313,7 +306,7 @@ class TestFaultInjectionAndHardening(unittest.TestCase):
         self.assertTrue(lock_file.exists())
 
         # Fresh lock with force=True: must be cleared
-        ok_force, msg_force = recover_index_lock(str(self.repo), force=True)
+        ok_force, _msg_force = recover_index_lock(str(self.repo), force=True)
         self.assertTrue(ok_force)
         self.assertFalse(lock_file.exists())
 

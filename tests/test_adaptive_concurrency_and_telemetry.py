@@ -7,25 +7,21 @@ from __future__ import annotations
 
 import io
 import json
-import os
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 # Ensure src is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from git_sync.cli import _parse_workers_arg, main
-from git_sync.config import GitSyncConfig, resolve_config
+from git_sync.config import resolve_config
 from git_sync.core import (
     DEFAULT_DISK_LATENCY_THRESHOLD,
     DEFAULT_NETWORK_LATENCY_THRESHOLD,
-    DEFAULT_WORKERS,
     AdaptiveConcurrencyController,
-    BulkCache,
     TelemetryBenchmark,
     calculate_optimal_workers,
     find_diverged_repos,

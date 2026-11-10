@@ -11,7 +11,6 @@ import sys
 import tempfile
 import unittest
 import warnings
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,9 +18,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+import build as build_tool  # type: ignore
+
 from git_sync import __version__
 from git_sync.cli import main
-import build as build_tool  # type: ignore
 
 
 class TestPackagingAndDistributionHygiene(unittest.TestCase):
@@ -167,8 +167,8 @@ class TestPackagingAndDistributionHygiene(unittest.TestCase):
         """Validate 100% symbol parity across git_sync.engine, engine.git, and git_sync.core."""
         import git_sync.core as core_mod
         import git_sync.engine as engine_mod
-        import git_sync.engine.git as engine_git_mod
         import git_sync.engine.concurrency as concurrency_mod
+        import git_sync.engine.git as engine_git_mod
 
         # Verify engine re-exports all symbols from engine.git and engine.concurrency
         expected_engine_symbols = set(engine_git_mod.__all__) | set(concurrency_mod.__all__)

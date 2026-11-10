@@ -13,27 +13,20 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 # Add src to sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from git_sync.cli import main
-from git_sync.config import GitSyncConfig, resolve_config
+from git_sync.config import resolve_config
 from git_sync.core import (
-    DEFAULT_BACKOFF_FACTOR,
-    DEFAULT_MAX_BACKOFF,
-    DEFAULT_RETRIES,
-    GRADE_A_THRESHOLD_SECONDS,
-    GRADE_B_THRESHOLD_SECONDS,
-    GRADE_C_THRESHOLD_SECONDS,
     TelemetryBenchmark,
     audit_multi_remote_matrix,
     audit_ssh_multiplexing,
     audit_worktree_health_batch,
     benchmark_ssh_multiplexing,
     check_credentials_sanity,
-    close_ssh_control_socket,
     compute_latency_grade,
     diagnose_git_error,
     find_ssh_control_sockets,
@@ -797,8 +790,8 @@ Host *
             exit_code = main(["doctor", "--prune-ssh"])
             self.assertEqual(exit_code, 0)
             output = "".join(captured)
-            self.assertIn("podado(s)", output)
-            self.assertIn("ativa(s)", output)
+            self.assertIn("pruned", output)
+            self.assertIn("active master connection(s)", output)
 
 
 class TestGitHubCliInspection(unittest.TestCase):
@@ -936,7 +929,7 @@ class TestOfflineAndRemediationDiagnostics(unittest.TestCase):
         repo_ok = self._init_repo(self.root / "repo_offline")
         subprocess.run(["git", "remote", "add", "origin", "https://github.com/org/repo.git"], cwd=repo_ok, check=True)
 
-        repo_no_remote = self._init_repo(self.root / "repo_no_remote")
+        self._init_repo(self.root / "repo_no_remote")
 
         mock_fetch.return_value = subprocess.CompletedProcess(
             args=["git", "fetch"],
@@ -1151,7 +1144,7 @@ class TestRemoteLatencyGradingAndDoctor(unittest.TestCase):
         out_text = "".join(captured)
         self.assertIn("Grade A (0.124s)", out_text)
         self.assertIn("Grade C (2.450s)", out_text)
-        self.assertIn("VERIFICAÇÃO DE REMOTES TESTADOS", out_text)
+        self.assertIn("REMOTE CONNECTIVITY CHECKS", out_text)
 
         # Test JSON Output
         captured_json = []
@@ -1401,7 +1394,7 @@ class TestCredentialHelperTriageAndExpiryDiagnostics(unittest.TestCase):
         self.assertTrue(res_dbus["helpers"][0]["ok"])
 
         # 3. Missing binary -> MISSING_BINARY
-        with patch("git_sync.engine.git._resolve_credential_helper_binary", return_value=None):
+        with patch("git_sync.engine.credentials._resolve_credential_helper_binary", return_value=None):
             res_missing = inspect_credential_helpers(
                 helpers=["libsecret"],
                 env={"DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus"},
@@ -1471,8 +1464,8 @@ class TestCredentialHelperTriageAndExpiryDiagnostics(unittest.TestCase):
 
         out_text = "".join(captured)
         self.assertIn("[cache] status=EXPIRED, timeout=900s, socket=EXPIRED", out_text)
-        self.assertIn("formato inválido ou placeholder", out_text)
-        self.assertIn("Token expirado ou inválido", out_text)
+        self.assertIn("invalid or placeholder format", out_text)
+        self.assertIn("Token expired or invalid", out_text)
 
 
 class TestMultiRemoteMatrixAndWorktreeHealthAudit(unittest.TestCase):
@@ -1725,11 +1718,11 @@ class TestMultiRemoteMatrixAndWorktreeHealthAudit(unittest.TestCase):
             self.assertEqual(exit_code, 0)
 
         out_text = "".join(captured)
-        self.assertIn("MATRIZ DE CONECTIVIDADE MULTI-REMOTE", out_text)
+        self.assertIn("MULTI-REMOTE CONNECTIVITY MATRIX", out_text)
         self.assertIn("app/core", out_text)
         self.assertIn("origin:✅A (0.12s)", out_text)
-        self.assertIn("AUDITORIA DE WORKTREES VINCULADOS", out_text)
-        self.assertIn("1 sujo(s)", out_text)
+        self.assertIn("LINKED WORKTREE AUDIT", out_text)
+        self.assertIn("1 dirty", out_text)
 
 
 if __name__ == "__main__":

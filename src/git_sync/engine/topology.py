@@ -10,7 +10,7 @@ import re
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from git_sync.telemetry import BulkCache
@@ -19,22 +19,22 @@ DEFAULT_TIMEOUT: int = 5
 DEFAULT_WORKERS: int = 8
 
 
-def _call_run_git(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOUT) -> Any:
+def _call_run_git(repo_path: str, args: list[str], timeout: int = DEFAULT_TIMEOUT) -> Any:
     from git_sync.engine.git import run_git
     return run_git(repo_path, args, timeout=timeout)
 
 
-def _call_run_git_with_retry(repo_path: str, args: List[str], timeout: int = DEFAULT_TIMEOUT, retries: int = 2) -> Any:
+def _call_run_git_with_retry(repo_path: str, args: list[str], timeout: int = DEFAULT_TIMEOUT, retries: int = 2) -> Any:
     from git_sync.engine.git import run_git_with_retry
     return run_git_with_retry(repo_path, args, timeout=timeout, retries=retries)
 
 
-def _call_check_repo_dirty(repo_path: str, timeout: int = DEFAULT_TIMEOUT) -> Tuple[bool, List[str]]:
+def _call_check_repo_dirty(repo_path: str, timeout: int = DEFAULT_TIMEOUT) -> tuple[bool, list[str]]:
     from git_sync.engine.git import check_repo_dirty
     return check_repo_dirty(repo_path, timeout=timeout)
 
 
-def _call_discover_repos(root_dir: str) -> List[str]:
+def _call_discover_repos(root_dir: str) -> list[str]:
     from git_sync.engine.git import discover_repos
     return discover_repos(root_dir)
 
@@ -83,7 +83,7 @@ def is_shallow_repository(repo_path: str) -> bool:
     return False
 
 
-def is_path_in_cone(path: str, cone_patterns: List[str]) -> bool:
+def is_path_in_cone(path: str, cone_patterns: list[str]) -> bool:
     """
     Check if a relative file path matches Git cone mode sparse-checkout rules:
     - Root-level files (no '/' in normalized path) are always included in cone.
@@ -114,9 +114,9 @@ def is_path_in_cone(path: str, cone_patterns: List[str]) -> bool:
 
 def get_sparse_checkout_info(
     repo_path: str,
-    dirty_files: Optional[List[str]] = None,
+    dirty_files: list[str] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Query git sparse-checkout configuration and active cone patterns for repo_path.
     Returns:
@@ -149,7 +149,7 @@ def get_sparse_checkout_info(
     p_idx = _call_run_git(repo_path, ["config", "--bool", "--get", "index.sparse"], timeout=timeout)
     sparse_index = (p_idx.returncode == 0 and p_idx.stdout.strip().lower() == "true")
 
-    patterns: List[str] = []
+    patterns: list[str] = []
     p_list = _call_run_git(repo_path, ["sparse-checkout", "list"], timeout=timeout)
     if p_list.returncode == 0:
         patterns = [l.strip() for l in p_list.stdout.splitlines() if l.strip()]
@@ -162,11 +162,11 @@ def get_sparse_checkout_info(
             except Exception:
                 patterns = []
 
-    out_of_cone_files: List[str] = []
+    out_of_cone_files: list[str] = []
     if cone_mode and dirty_files:
         out_of_cone_files = [f for f in dirty_files if not is_path_in_cone(f, patterns)]
 
-    warning: Optional[str] = None
+    warning: str | None = None
     if not cone_mode:
         warning = "Sparse checkout is configured in legacy non-cone pattern mode"
     elif out_of_cone_files:
@@ -189,7 +189,7 @@ def reapply_sparse_checkout(
     repo_path: str,
     cone: bool = True,
     timeout: int = DEFAULT_TIMEOUT,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Safely reapply sparse-checkout filters on repo_path to enforce cone boundaries
     and prevent unbounded working tree checkouts or conflicts.
@@ -209,7 +209,7 @@ def reapply_sparse_checkout(
     }
 
 
-def find_repo_locks(repo_path: str, stale_threshold_seconds: float = 300.0) -> List[Dict[str, Any]]:
+def find_repo_locks(repo_path: str, stale_threshold_seconds: float = 300.0) -> list[dict[str, Any]]:
     """
     Find all active or stale Git lock files in a repository (.git/*.lock or worktree gitdir).
     # INVARIANT: Safely inspects lock files without altering repository state.
@@ -218,7 +218,7 @@ def find_repo_locks(repo_path: str, stale_threshold_seconds: float = 300.0) -> L
     if not git_dir.is_dir():
         return []
 
-    locks: List[Dict[str, Any]] = []
+    locks: list[dict[str, Any]] = []
     now = time.time()
 
     candidate_locks = [
@@ -274,11 +274,11 @@ def find_repo_locks(repo_path: str, stale_threshold_seconds: float = 300.0) -> L
 
 def find_locked_repos(
     root_dir: str,
-    repos: Optional[List[str]] = None,
-    group: Optional[str] = None,
+    repos: list[str] | None = None,
+    group: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     stale_threshold_seconds: float = 300.0,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Scan repositories in root_dir for active or stale Git lock files (.git/*.lock).
     # INVARIANT: Identifies stale locks left by crashed or interrupted Git subshells.
@@ -289,7 +289,7 @@ def find_locked_repos(
         if group:
             target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
 
-    locked: List[Dict[str, Any]] = []
+    locked: list[dict[str, Any]] = []
     for r in target_repos:
         repo_locks = find_repo_locks(r, stale_threshold_seconds=stale_threshold_seconds)
         if repo_locks:
@@ -303,7 +303,7 @@ def recover_index_lock(
     repo_path: str,
     force: bool = False,
     max_age_seconds: float = 300.0,
-) -> Tuple[bool, str]:
+) -> tuple[bool, str]:
     """
     Safely recover from stale or crashed Git index locks (.git/index.lock).
     # INVARIANT: Preserves fresh locks (< max_age_seconds) unless force=True to prevent race conditions with running Git commands.
@@ -329,7 +329,7 @@ def recover_repo_locks(
     repo_path: str,
     force: bool = False,
     max_age_seconds: float = 300.0,
-) -> Tuple[bool, List[str]]:
+) -> tuple[bool, list[str]]:
     """
     Remove all stale or forced Git lock files in a repository.
     # INVARIANT: Prevents stale lock contention while respecting recent active operations.
@@ -338,8 +338,8 @@ def recover_repo_locks(
     if not locks:
         return True, ["No locks found"]
 
-    cleared: List[str] = []
-    errors: List[str] = []
+    cleared: list[str] = []
+    errors: list[str] = []
     for lk in locks:
         lock_path = Path(lk["lock_file"])
         age = lk["age_seconds"]
@@ -356,7 +356,7 @@ def recover_repo_locks(
     return success, cleared if success else (cleared + errors)
 
 
-def get_worktree_info(repo_path: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[str, Any]:
+def get_worktree_info(repo_path: str, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
     """
     Query worktree topology for the given repository or linked worktree.
     Returns:
@@ -375,8 +375,8 @@ def get_worktree_info(repo_path: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[st
             "stale_worktrees": [],
         }
 
-    worktrees: List[Dict[str, Any]] = []
-    current_entry: Dict[str, Any] = {}
+    worktrees: list[dict[str, Any]] = []
+    current_entry: dict[str, Any] = {}
 
     for line in proc.stdout.splitlines():
         line = line.strip()
@@ -433,7 +433,7 @@ def get_worktree_info(repo_path: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[st
                 if not wt.get("prunable_reason"):
                     wt["prunable_reason"] = "missing .git file"
 
-    stale_worktrees: List[Dict[str, Any]] = [w for w in worktrees if w.get("is_prunable")]
+    stale_worktrees: list[dict[str, Any]] = [w for w in worktrees if w.get("is_prunable")]
 
     norm_repo = os.path.abspath(repo_path)
     main_wt = worktrees[0]["path"] if worktrees else None
@@ -486,7 +486,7 @@ def get_worktree_info(repo_path: str, timeout: int = DEFAULT_TIMEOUT) -> Dict[st
         except OSError:
             pass
 
-    checked_out: Dict[str, str] = {}
+    checked_out: dict[str, str] = {}
     for wt in worktrees:
         if wt.get("branch") and wt["branch"] != "HEAD (detached)":
             checked_out[wt["branch"]] = wt["path"]
@@ -505,9 +505,9 @@ def prune_repo_worktrees(
     dry_run: bool = False,
     expire: str = "now",
     timeout: int = 10,
-    cache: Optional[BulkCache] = None,
-    root_dir: Optional[str] = None,
-) -> Dict[str, Any]:
+    cache: BulkCache | None = None,
+    root_dir: str | None = None,
+) -> dict[str, Any]:
     """
     Prune stale and orphaned worktree administrative metadata and audit linked worktrees for dirty state.
     # INVARIANT: Preserves active dirty linked worktrees and warns without deleting working files.
@@ -517,8 +517,8 @@ def prune_repo_worktrees(
     # 1. Audit worktree topology and warn on dirty linked worktrees
     wt_info = get_worktree_info(repo_path, timeout=timeout)
     worktrees = wt_info.get("worktrees", [])
-    dirty_linked: List[Dict[str, Any]] = []
-    warnings: List[str] = []
+    dirty_linked: list[dict[str, Any]] = []
+    warnings: list[str] = []
 
     for wt in worktrees:
         if not wt.get("is_main") and os.path.exists(wt["path"]):
@@ -542,7 +542,7 @@ def prune_repo_worktrees(
         cmd.append("--dry-run")
 
     proc = _call_run_git(repo_path, cmd, timeout=timeout)
-    pruned_entries: List[Dict[str, Any]] = []
+    pruned_entries: list[dict[str, Any]] = []
 
     combined_output = (proc.stdout or "") + "\n" + (proc.stderr or "")
     for line in combined_output.splitlines():
@@ -628,11 +628,11 @@ def prune_repo_worktrees(
 
 def audit_worktree_health_batch(
     root_dir: str,
-    repos: Optional[List[str]] = None,
-    group: Optional[str] = None,
+    repos: list[str] | None = None,
+    group: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     workers: int | str = DEFAULT_WORKERS,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Perform parallel batch audit of linked worktree topologies, uncommitted dirty states,
     and stale/orphaned worktree metadata across repositories.
@@ -645,7 +645,7 @@ def audit_worktree_health_batch(
         if group:
             target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
 
-    def _audit_repo_worktrees(r_path: str) -> Dict[str, Any]:
+    def _audit_repo_worktrees(r_path: str) -> dict[str, Any]:
         rel_p = os.path.relpath(r_path, root_dir) if root_dir else os.path.basename(r_path)
         info = get_worktree_info(r_path, timeout=timeout)
         raw_wts = info.get("worktrees", [])
@@ -653,7 +653,7 @@ def audit_worktree_health_batch(
         is_secondary = info.get("is_worktree", False)
         main_wt = info.get("main_worktree")
 
-        audited_wts: List[Dict[str, Any]] = []
+        audited_wts: list[dict[str, Any]] = []
         dirty_count = 0
         detached_count = 0
         prunable_count = len(stale_wts)
@@ -669,7 +669,7 @@ def audit_worktree_health_batch(
             lock_reason = wt.get("lock_reason")
 
             is_dirty = False
-            dirty_files: List[str] = []
+            dirty_files: list[str] = []
             if os.path.exists(w_path):
                 try:
                     is_dirty, dirty_files = _call_check_repo_dirty(w_path, timeout=timeout)
@@ -728,7 +728,7 @@ def audit_worktree_health_batch(
             "stale_worktrees": stale_wts,
         }
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     if target_repos:
         eff_wt_workers = min(len(target_repos), eff_workers)
         if eff_wt_workers > 1:
@@ -745,7 +745,7 @@ def audit_worktree_health_batch(
     total_stale = sum(r["stale_worktrees_count"] for r in results)
     total_detached = sum(r["detached_worktrees_count"] for r in results)
 
-    alerts: List[str] = []
+    alerts: list[str] = []
     for r in repos_with_worktrees:
         if r["dirty_worktrees_count"] > 0:
             alerts.append(f"Repo '{r['repo']}' has {r['dirty_worktrees_count']} dirty linked worktree(s) with uncommitted files.")
@@ -771,7 +771,7 @@ def get_submodules_status(
     timeout: int = DEFAULT_TIMEOUT,
     recursive: bool = True,
     detailed: bool = False,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """
     Query submodule status for repo_path.
     Returns a list of dicts:
@@ -794,7 +794,7 @@ def get_submodules_status(
     if proc.returncode != 0 or not proc.stdout.strip():
         return []
 
-    submodules: List[Dict[str, Any]] = []
+    submodules: list[dict[str, Any]] = []
     prefix_map = {
         " ": "UP_TO_DATE",
         "+": "MODIFIED",
@@ -851,8 +851,8 @@ def unshallow_submodule(
     repo_path: str,
     sub_path: str,
     timeout: int = DEFAULT_TIMEOUT,
-    remote: Optional[str] = None,
-) -> Dict[str, Any]:
+    remote: str | None = None,
+) -> dict[str, Any]:
     """
     Safely unshallow a truncated shallow submodule by fetching its complete commit history.
     # INVARIANT: If submodule is not shallow, skip --unshallow to prevent Git fatal error:
@@ -866,8 +866,8 @@ def _real_unshallow_submodule(
     repo_path: str,
     sub_path: str,
     timeout: int = DEFAULT_TIMEOUT,
-    remote: Optional[str] = None,
-) -> Dict[str, Any]:
+    remote: str | None = None,
+) -> dict[str, Any]:
     sub_dir = os.path.join(repo_path, sub_path)
     if not os.path.isdir(sub_dir):
         return {
@@ -917,8 +917,8 @@ def update_submodules(
     timeout: int = DEFAULT_TIMEOUT,
     dry_run: bool = False,
     unshallow: bool = False,
-    cache: Optional[BulkCache] = None,
-) -> Dict[str, Any]:
+    cache: BulkCache | None = None,
+) -> dict[str, Any]:
     """
     Update git submodules recursively with safe terminal prompt isolation (GIT_TERMINAL_PROMPT=0)
     and optional unshallow recovery for shallow submodules.
@@ -936,8 +936,8 @@ def _real_update_submodules(
     timeout: int = DEFAULT_TIMEOUT,
     dry_run: bool = False,
     unshallow: bool = False,
-    cache: Optional[BulkCache] = None,
-) -> Dict[str, Any]:
+    cache: BulkCache | None = None,
+) -> dict[str, Any]:
     if not os.path.isfile(os.path.join(repo_path, ".gitmodules")):
         return {
             "has_submodules": False,
@@ -995,8 +995,8 @@ def _real_update_submodules(
             "error": None,
         }
 
-    unshallowed_paths: List[str] = []
-    unshallow_errors: List[str] = []
+    unshallowed_paths: list[str] = []
+    unshallow_errors: list[str] = []
 
     # If unshallow requested, deepen any currently shallow submodules before checkout
     if unshallow:

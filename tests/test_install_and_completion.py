@@ -20,10 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from git_sync.cli import main
 from git_sync.installer import (
     generate_completion_script,
-    get_canonical_skill_dir,
-    get_default_completion_dir,
     get_default_install_dir,
-    get_default_skill_dirs,
     get_launcher_path,
     install_agent_skills,
     install_completion,

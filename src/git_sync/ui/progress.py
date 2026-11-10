@@ -4,11 +4,12 @@ Thread-safe terminal progress indicators and spinners for concurrent worker oper
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import os
 import sys
 import threading
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
 from git_sync.ui.style import AnsiStyler
 
@@ -25,8 +26,8 @@ class ProgressIndicator:
         self,
         message: str = "Processing...",
         total: int = 0,
-        enabled: Optional[bool] = None,
-        stream: Optional[Any] = None,
+        enabled: bool | None = None,
+        stream: Any | None = None,
     ) -> None:
         self.message = message
         self.total = total
@@ -89,7 +90,7 @@ class ProgressIndicator:
                 self.stream.write("\r" + " " * 79 + "\r")
                 self.stream.flush()
 
-    def __enter__(self) -> "ProgressIndicator":
+    def __enter__(self) -> ProgressIndicator:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -101,18 +102,18 @@ class BulkActionItem:
     """Structured representation of a planned repository mutation for preview and safety auditing."""
     repo: str
     action: str
-    repo_rel: Optional[str] = None
-    branch: Optional[str] = None
+    repo_rel: str | None = None
+    branch: str | None = None
     ahead: int = 0
     behind: int = 0
     is_dirty: bool = False
     dirty_files_count: int = 0
     is_protected: bool = False
     submodules_count: int = 0
-    warnings: List[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
     details: Mapping[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert item to structured dictionary."""
         return {
             "repo": self.repo,
@@ -131,10 +132,10 @@ class BulkActionItem:
 
 
 def format_bulk_action_preview(
-    items: Sequence[BulkActionItem | Dict[str, Any]],
+    items: Sequence[BulkActionItem | dict[str, Any]],
     title: str = "PRÉVIA DE AÇÕES EM LOTE (BULK ACTION PREVIEW)",
-    stream: Optional[Any] = None,
-    color: Optional[bool] = None,
+    stream: Any | None = None,
+    color: bool | None = None,
 ) -> str:
     """
     Format planned bulk repository mutations into a visual confirmation preview
@@ -142,7 +143,7 @@ def format_bulk_action_preview(
     # INVARIANT: Preserves exact text alignment and respects NO_COLOR / dumb terminals.
     """
     styler = AnsiStyler(enabled=color, stream=stream)
-    lines: List[str] = []
+    lines: list[str] = []
 
     # Border header
     box_width = 80
@@ -201,7 +202,7 @@ def format_bulk_action_preview(
                 aux_branches_total += len(aux_ahead_map)
 
         branch_part = f" [{branch}]" if branch else ""
-        meta_parts: List[str] = []
+        meta_parts: list[str] = []
         if behind > 0:
             meta_parts.append(f"{behind} commit(s) atrás")
         if ahead > 0:
@@ -210,7 +211,7 @@ def format_bulk_action_preview(
 
         line_repo = f"  • {styler.bold(repo_rel)}{branch_part} ↳ {action}{meta_str}"
 
-        tags: List[str] = []
+        tags: list[str] = []
         if is_dirty:
             tag_text = f"⚠️ [Árvore suja: {dirty_files_count} arquivo(s)]"
             tags.append(styler.yellow(tag_text))
@@ -232,9 +233,9 @@ def format_bulk_action_preview(
     if protected_count > 0:
         lines.append(f"  • Branches protegidas afetadas: {styler.magenta(str(protected_count))}")
     if submodules_total > 0:
-        lines.append(f"  • Submódulos com drift pendente: {str(submodules_total)}")
+        lines.append(f"  • Submódulos com drift pendente: {submodules_total!s}")
     if aux_branches_total > 0:
-        lines.append(f"  • Branches auxiliares pendentes de envio: {str(aux_branches_total)}")
+        lines.append(f"  • Branches auxiliares pendentes de envio: {aux_branches_total!s}")
 
     if dirty_count > 0 or protected_count > 0:
         lines.append("")
@@ -245,11 +246,11 @@ def format_bulk_action_preview(
 
 
 def prompt_bulk_confirmation(
-    items: Sequence[BulkActionItem | Dict[str, Any]],
+    items: Sequence[BulkActionItem | dict[str, Any]],
     title: str = "PRÉVIA DE AÇÕES EM LOTE (BULK ACTION PREVIEW)",
-    prompt_text: Optional[str] = None,
-    stream: Optional[Any] = None,
-    input_func: Optional[Any] = None,
+    prompt_text: str | None = None,
+    stream: Any | None = None,
+    input_func: Any | None = None,
     auto_yes: bool = False,
 ) -> bool:
     """

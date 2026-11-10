@@ -5,27 +5,20 @@ Core business logic and Git automation engine for git-sync.
 from __future__ import annotations
 
 import concurrent.futures
-from dataclasses import dataclass, field
-import errno
 import fnmatch
 import os
 import re
 import shutil
-import socket
-import stat
 import subprocess
-import sys
-import tempfile
-import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, cast
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
+
 from git_sync.engine.concurrency import AdaptiveConcurrencyController
 from git_sync.engine.types import (
     DoctorSanityReport,
-    GitLfsStatusDict,
     GithubCliStatusDict,
+    GitLfsStatusDict,
     LfsInfoDict,
     PreflightPushCheckResult,
     PullResult,
@@ -51,7 +44,7 @@ def resolve_default_root() -> str:
     if env_root and env_root.strip():
         return env_root.strip()
 
-    candidate_homes: List[Path] = []
+    candidate_homes: list[Path] = []
     try:
         candidate_homes.append(Path.home())
     except Exception:
@@ -97,7 +90,8 @@ from git_sync.engine.diff import (
     DEFAULT_CHARS_PER_TOKEN,
     DEFAULT_COMPACT_DIFF_TOKENS,
 )
-DEFAULT_PROTECTED_BRANCHES: List[str] = ["main", "master", "release/*", "production", "prod"]
+
+DEFAULT_PROTECTED_BRANCHES: list[str] = ["main", "master", "release/*", "production", "prod"]
 from git_sync.engine.credentials import (
     GRADE_A_THRESHOLD_SECONDS,
     GRADE_B_THRESHOLD_SECONDS,
@@ -129,7 +123,7 @@ TOOL_DIR_PREFIXES = (
     ".gemini",
 )
 
-def get_git_env(extra_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def get_git_env(extra_env: dict[str, str] | None = None) -> dict[str, str]:
     """
     Dynamically build subprocess execution environment inheriting active os.environ while enforcing safety invariants.
     # INVARIANT: GIT_TERMINAL_PROMPT=0 guarantees git never blocks on interactive auth/passphrase prompts.
@@ -148,15 +142,14 @@ GIT_ENV = get_git_env()
 
 def _real_run_git(
     repo_path: str,
-    args: List[str],
+    args: list[str],
     timeout: int = DEFAULT_TIMEOUT,
-    extra_env: Optional[Dict[str, str]] = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     cmd = ["git", "-C", repo_path] + args
     return subprocess.run(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         timeout=timeout,
         env=get_git_env(extra_env=extra_env),
@@ -164,10 +157,10 @@ def _real_run_git(
 
 
 GitRunner = Any
-_git_runner: Optional[Any] = None
+_git_runner: Any | None = None
 
 
-def set_git_runner(runner: Optional[Any]) -> None:
+def set_git_runner(runner: Any | None) -> None:
     """Set custom git execution runner hook (for dependency injection or testing)."""
     global _git_runner
     _git_runner = runner
@@ -175,9 +168,9 @@ def set_git_runner(runner: Optional[Any]) -> None:
 
 def run_git(
     repo_path: str,
-    args: List[str],
+    args: list[str],
     timeout: int = DEFAULT_TIMEOUT,
-    extra_env: Optional[Dict[str, str]] = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute a git command within a repository directory with safe timeouts and environment."""
     if _git_runner is not None:
@@ -186,7 +179,7 @@ def run_git(
     return _real_run_git(repo_path, args, timeout=timeout, extra_env=extra_env)
 
 
-def diagnose_git_error(error_text: str, remote_url: Optional[str] = None) -> Optional[Dict[str, str]]:
+def diagnose_git_error(error_text: str, remote_url: str | None = None) -> dict[str, str] | None:
     """
     Analyze Git or SSH error output and produce actionable diagnostic guidance.
     Returns a dict with category, message, suggestion, and action_required, or None if no match.
@@ -353,7 +346,7 @@ def diagnose_git_error(error_text: str, remote_url: Optional[str] = None) -> Opt
     return None
 
 
-def is_transient_network_error(exc: Optional[Exception], stderr: str) -> bool:
+def is_transient_network_error(exc: Exception | None, stderr: str) -> bool:
     """
     Determine if an error is a transient network issue suitable for retry with exponential backoff.
     # INVARIANT: Permanent authentication failures and invalid repository paths MUST NOT be retried.
@@ -415,22 +408,22 @@ def is_transient_network_error(exc: Optional[Exception], stderr: str) -> bool:
 
 def run_git_with_retry(
     repo_path: str,
-    args: List[str],
+    args: list[str],
     timeout: int = DEFAULT_TIMEOUT,
     retries: int = DEFAULT_RETRIES,
     backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
     max_backoff: float = DEFAULT_MAX_BACKOFF,
-    benchmark: Optional[TelemetryBenchmark] = None,
+    benchmark: TelemetryBenchmark | None = None,
     sleep_func: Any = time.sleep,
-    extra_env: Optional[Dict[str, str]] = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """
     Execute a Git command with safe timeout, environment, and bounded exponential backoff
     for transient network errors.
     # INVARIANT: Retries only transient network errors; auth and fatal repository errors fail fast.
     """
-    last_proc: Optional[subprocess.CompletedProcess[str]] = None
-    last_timeout_exc: Optional[subprocess.TimeoutExpired] = None
+    last_proc: subprocess.CompletedProcess[str] | None = None
+    last_timeout_exc: subprocess.TimeoutExpired | None = None
 
     for attempt in range(retries + 1):
         try:
@@ -465,7 +458,7 @@ def run_git_with_retry(
                 delay = min(max_backoff, backoff_factor * (2 ** attempt))
                 sleep_func(delay)
                 continue
-            raise exc
+            raise
 
     if last_timeout_exc:
         raise last_timeout_exc
@@ -484,7 +477,6 @@ from git_sync.engine.topology import (
 )
 
 
-
 def is_lfs_pointer_file(file_path: str | Path) -> bool:
     """
     Check if a file on disk is an unsmudged Git LFS pointer text file.
@@ -501,7 +493,7 @@ def is_lfs_pointer_file(file_path: str | Path) -> bool:
         return False
 
 
-def inspect_git_lfs(timeout: int = 5) -> Dict[str, Any]:
+def inspect_git_lfs(timeout: int = 5) -> dict[str, Any]:
     """
     Probe host environment for git-lfs CLI extension availability and version.
     # INVARIANT: Uses GIT_TERMINAL_PROMPT=0 to guarantee probing never hangs in automated environments.
@@ -509,8 +501,7 @@ def inspect_git_lfs(timeout: int = 5) -> Dict[str, Any]:
     try:
         proc = subprocess.run(
             ["git", "lfs", "version"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=timeout,
             env=get_git_env(),
@@ -542,7 +533,7 @@ def format_bytes_human(num_bytes: int) -> str:
     return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-def get_lfs_info(repo_path: str, timeout: int = 5) -> Dict[str, Any]:
+def get_lfs_info(repo_path: str, timeout: int = 5) -> dict[str, Any]:
     """
     Inspect Git LFS tracking configuration, tracked patterns, storage size, and pointer objects.
     # INVARIANT: Zero external dependencies; fast on-disk inspection before optional CLI queries.
@@ -552,7 +543,7 @@ def get_lfs_info(repo_path: str, timeout: int = 5) -> Dict[str, Any]:
 
     # 1. Parse .gitattributes for filter=lfs patterns
     gitattributes_file = repo / ".gitattributes"
-    patterns: List[str] = []
+    patterns: list[str] = []
     if gitattributes_file.is_file():
         try:
             content = gitattributes_file.read_text(encoding="utf-8", errors="replace")
@@ -610,7 +601,7 @@ def get_lfs_info(repo_path: str, timeout: int = 5) -> Dict[str, Any]:
         }
 
     # 3. Query git lfs ls-files if available, or fall back to scanning files matching patterns
-    files_tracked: List[str] = []
+    files_tracked: list[str] = []
     pointers_count = 0
     proc = run_git(repo_path, ["lfs", "ls-files"], timeout=timeout)
     if proc.returncode == 0:
@@ -673,10 +664,10 @@ def get_lfs_info(repo_path: str, timeout: int = 5) -> Dict[str, Any]:
 
 def pull_lfs_objects(
     repo_path: str,
-    remote: Optional[str] = None,
+    remote: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     dry_run: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Explicitly pull Git LFS objects for the current checkout via `git lfs pull`.
     # INVARIANT: GIT_TERMINAL_PROMPT=0 guarantees authentication failures never block the process.
@@ -704,28 +695,6 @@ def pull_lfs_objects(
 
 
 # Re-exported from git_sync.engine.topology
-from git_sync.engine.topology import (
-    find_locked_repos,
-    find_repo_locks,
-    recover_index_lock,
-    recover_repo_locks,
-)
-
-
-
-# Re-exported from git_sync.engine.ssh
-from git_sync.engine.ssh import (
-    _parse_ssh_config_content,
-    audit_ssh_multiplexing,
-    benchmark_ssh_multiplexing,
-    close_ssh_control_socket,
-    find_ssh_control_sockets,
-    inspect_ssh_config,
-    inspect_ssh_control_socket,
-    prune_stale_ssh_control_sockets,
-)
-
-
 # Re-exported from git_sync.engine.credentials
 from git_sync.engine.credentials import (
     _resolve_credential_helper_binary,
@@ -737,15 +706,32 @@ from git_sync.engine.credentials import (
     probe_remote_reachability,
 )
 
+# Re-exported from git_sync.engine.ssh
+from git_sync.engine.ssh import (
+    audit_ssh_multiplexing,
+    benchmark_ssh_multiplexing,
+    close_ssh_control_socket,
+    find_ssh_control_sockets,
+    inspect_ssh_config,
+    inspect_ssh_control_socket,
+    prune_stale_ssh_control_sockets,
+)
+from git_sync.engine.topology import (
+    find_locked_repos,
+    find_repo_locks,
+    recover_index_lock,
+    recover_repo_locks,
+)
+
 
 def audit_multi_remote_matrix(
     root_dir: str,
-    repos: Optional[List[str]] = None,
-    group: Optional[str] = None,
+    repos: list[str] | None = None,
+    group: str | None = None,
     timeout: int = 5,
     workers: int | str = DEFAULT_WORKERS,
     max_remotes_to_test: int = 30,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Perform parallel multi-remote reachability probing and construct a reachability matrix across all configured remotes.
     # INVARIANT: Probes are executed in parallel across unique remote endpoints with GIT_TERMINAL_PROMPT=0.
@@ -758,14 +744,14 @@ def audit_multi_remote_matrix(
             target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
 
     # 1. Map each repo to its configured remotes
-    repo_remotes_map: Dict[str, Dict[str, str]] = {}
-    unique_remotes_to_sample: Dict[str, str] = {}  # url -> sample_repo
+    repo_remotes_map: dict[str, dict[str, str]] = {}
+    unique_remotes_to_sample: dict[str, str] = {}  # url -> sample_repo
 
     for r_path in target_repos:
         r_map = get_repo_remotes(r_path, timeout=timeout)
         if r_map:
             repo_remotes_map[r_path] = r_map
-            for _, r_url in r_map.items():
+            for r_url in r_map.values():
                 if r_url and r_url not in unique_remotes_to_sample:
                     if len(unique_remotes_to_sample) < max_remotes_to_test:
                         unique_remotes_to_sample[r_url] = r_path
@@ -773,13 +759,13 @@ def audit_multi_remote_matrix(
     # 2. Probe unique remotes concurrently
     probe_fn = probe_remote_reachability
 
-    def _probe_worker(item: Tuple[str, str]) -> Tuple[str, Dict[str, Any]]:
+    def _probe_worker(item: tuple[str, str]) -> tuple[str, dict[str, Any]]:
         url, sample_repo = item
         res = probe_fn(remote_url=url, sample_repo=sample_repo, timeout=timeout)
         return url, res
 
     items_to_probe = list(unique_remotes_to_sample.items())
-    probed_results: Dict[str, Dict[str, Any]] = {}
+    probed_results: dict[str, dict[str, Any]] = {}
     if items_to_probe:
         eff_probe_workers = min(len(items_to_probe), eff_workers)
         if eff_probe_workers > 1:
@@ -791,8 +777,8 @@ def audit_multi_remote_matrix(
                 probed_results[u] = probe_fn(remote_url=u, sample_repo=sample_repo, timeout=timeout)
 
     # 3. Build repository matrix entries
-    matrix_entries: List[Dict[str, Any]] = []
-    grade_distribution: Dict[str, int] = {"A": 0, "B": 0, "C": 0, "F": 0}
+    matrix_entries: list[dict[str, Any]] = []
+    grade_distribution: dict[str, int] = {"A": 0, "B": 0, "C": 0, "F": 0}
     total_endpoints_tested = 0
     healthy_endpoints = 0
     unreachable_endpoints = 0
@@ -800,8 +786,8 @@ def audit_multi_remote_matrix(
     for r_path in target_repos:
         rel_p = os.path.relpath(r_path, root_dir) if root_dir else os.path.basename(r_path)
         r_map = repo_remotes_map.get(r_path, {})
-        remotes_detail: Dict[str, Dict[str, Any]] = {}
-        repo_grades: Dict[str, str] = {}
+        remotes_detail: dict[str, dict[str, Any]] = {}
+        repo_grades: dict[str, str] = {}
         has_unreachable = False
 
         for r_name, r_url in r_map.items():
@@ -849,7 +835,7 @@ def audit_multi_remote_matrix(
             "remotes": remotes_detail,
             "grades": repo_grades,
             "has_unreachable": has_unreachable,
-            "primary_grade": repo_grades.get("origin") or (list(repo_grades.values())[0] if repo_grades else "N/A"),
+            "primary_grade": repo_grades.get("origin") or (next(iter(repo_grades.values())) if repo_grades else "N/A"),
         })
 
     multi_remote_count = sum(1 for m in matrix_entries if m["multi_remote"])
@@ -874,10 +860,7 @@ from git_sync.engine.topology import (
 )
 
 
-
-
-
-def get_repo_remotes(repo_path: str, timeout: int = 5) -> Dict[str, str]:
+def get_repo_remotes(repo_path: str, timeout: int = 5) -> dict[str, str]:
     """
     Query all configured Git remotes and their fetch URLs for repo_path.
     Returns a mapping of remote_name -> fetch_url.
@@ -886,7 +869,7 @@ def get_repo_remotes(repo_path: str, timeout: int = 5) -> Dict[str, str]:
     proc = run_git(repo_path, ["remote", "-v"], timeout=timeout)
     if proc.returncode != 0:
         return {}
-    remotes: Dict[str, str] = {}
+    remotes: dict[str, str] = {}
     for line in proc.stdout.splitlines():
         line = line.strip()
         if "(fetch)" in line:
@@ -907,16 +890,13 @@ def get_repo_remotes(repo_path: str, timeout: int = 5) -> Dict[str, str]:
 
 # Re-exported from git_sync.engine.topology
 from git_sync.engine.topology import (
-    _real_unshallow_submodule,
-    _real_update_submodules,
     get_submodules_status,
     unshallow_submodule,
     update_submodules,
 )
 
 
-
-def discover_repos(root_dir: str, exclude: Optional[List[str]] = None) -> List[str]:
+def discover_repos(root_dir: str, exclude: list[str] | None = None) -> list[str]:
     """
     Recursively discover all git repositories under root_dir, including secondary linked worktrees.
     Submodules are deliberately excluded to prevent duplicate audit operations.
@@ -925,7 +905,7 @@ def discover_repos(root_dir: str, exclude: Optional[List[str]] = None) -> List[s
     # INVARIANT: dirnames must not strip '.git' before checking its presence, otherwise no repos are found.
     # INVARIANT: excluded directory trees are pruned early to prevent traversal overhead into large vendor/archive trees.
     """
-    repos: List[str] = []
+    repos: list[str] = []
     root = Path(root_dir).resolve()
     if not root.is_dir():
         return []
@@ -936,7 +916,7 @@ def discover_repos(root_dir: str, exclude: Optional[List[str]] = None) -> List[s
         if dname in DEFAULT_IGNORE_DIRS:
             return True
         for prefix in TOOL_DIR_PREFIXES:
-            if dname == prefix or dname.startswith(prefix + "-") or dname.startswith(prefix + "_") or dname.startswith(prefix + "/"):
+            if dname == prefix or dname.startswith((prefix + "-", prefix + "_", prefix + "/")):
                 return True
         return False
 
@@ -993,7 +973,7 @@ def discover_repos(root_dir: str, exclude: Optional[List[str]] = None) -> List[s
     return sorted(repos)
 
 
-def match_repo(query: str, all_repos: List[str], root_dir: str) -> Optional[str]:
+def match_repo(query: str, all_repos: list[str], root_dir: str) -> str | None:
     """Match a user/agent query string against discovered repositories."""
     query_norm = query.strip().rstrip("/")
     if not query_norm:
@@ -1025,10 +1005,10 @@ def match_repo(query: str, all_repos: List[str], root_dir: str) -> Optional[str]
 
 def check_repo_dirty(
     repo_path: str,
-    worktrees: Optional[List[Dict[str, Any]]] = None,
+    worktrees: list[dict[str, Any]] | None = None,
     timeout: int = DEFAULT_TIMEOUT,
-    cache: Optional[BulkCache] = None,
-) -> Tuple[bool, List[str]]:
+    cache: BulkCache | None = None,
+) -> tuple[bool, list[str]]:
     """
     Check if a repository contains uncommitted or untracked changes.
     # INVARIANT: Filter out linked worktree directories located inside repo_path to avoid false dirty flags.
@@ -1043,7 +1023,7 @@ def check_repo_dirty(
         wt_info = cache.get_worktree_info(repo_path, timeout=timeout) if cache else get_worktree_info(repo_path, timeout=timeout)
         worktrees = wt_info.get("worktrees", [])
 
-    wt_inside_relpaths: List[str] = []
+    wt_inside_relpaths: list[str] = []
     repo_abs = os.path.abspath(repo_path)
     for wt in worktrees:
         wt_abs = wt.get("path", "")
@@ -1052,7 +1032,7 @@ def check_repo_dirty(
             wt_inside_relpaths.append(rel.rstrip(os.sep))
             wt_inside_relpaths.append(rel.rstrip(os.sep) + "/")
 
-    filtered_dirty_lines: List[str] = []
+    filtered_dirty_lines: list[str] = []
     for line in raw_dirty_lines:
         is_wt_artifact = False
         entry_path = line[3:].strip() if len(line) > 3 else ""
@@ -1069,9 +1049,9 @@ def check_repo_dirty(
 
 def stash_changes(
     repo_path: str,
-    message: Optional[str] = None,
+    message: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
-) -> Tuple[bool, str, Optional[str]]:
+) -> tuple[bool, str, str | None]:
     """
     Safely stash uncommitted changes including staged, unstaged, and untracked files.
     # INVARIANT: git stash push -u preserves untracked files and staged/unstaged separation without data loss.
@@ -1091,7 +1071,7 @@ def stash_changes(
 def restore_stash(
     repo_path: str,
     timeout: int = DEFAULT_TIMEOUT,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Safely restore stashed changes with index preservation and conflict safeguards.
     # INVARIANT: Tries git stash pop --index first to reinstate staged and unstaged index changes.
@@ -1123,7 +1103,7 @@ def restore_stash(
 
     # Check if there are conflict files in working copy
     p_status = run_git(repo_path, ["status", "--porcelain"], timeout=timeout)
-    conflict_files: List[str] = []
+    conflict_files: list[str] = []
     for line in p_status.stdout.splitlines():
         line = line.strip()
         if len(line) >= 3:
@@ -1154,7 +1134,7 @@ def restore_stash(
         }
 
     p_status2 = run_git(repo_path, ["status", "--porcelain"], timeout=timeout)
-    conflict_files2: List[str] = []
+    conflict_files2: list[str] = []
     for line in p_status2.stdout.splitlines():
         line = line.strip()
         if len(line) >= 3:
@@ -1185,13 +1165,13 @@ def restore_stash(
 
 def prune_repo_remotes(
     repo_path: str,
-    remote: Optional[str] = None,
+    remote: str | None = None,
     dry_run: bool = False,
     timeout: int = DEFAULT_TIMEOUT,
-    benchmark: Optional[TelemetryBenchmark] = None,
+    benchmark: TelemetryBenchmark | None = None,
     retries: int = DEFAULT_RETRIES,
-    cache: Optional[BulkCache] = None,
-) -> Dict[str, Any]:
+    cache: BulkCache | None = None,
+) -> dict[str, Any]:
     """
     Proactively audit and safely prune stale remote-tracking references (e.g. deleted remote branches).
     # INVARIANT: GIT_TERMINAL_PROMPT=0 prevents interactive prompts during network inspection.
@@ -1199,7 +1179,7 @@ def prune_repo_remotes(
     """
     remotes_dict = cache.get_remotes(repo_path, timeout=timeout) if cache else get_repo_remotes(repo_path, timeout=timeout)
 
-    target_remotes: List[str] = []
+    target_remotes: list[str] = []
     if remote:
         if remote in remotes_dict:
             target_remotes.append(remote)
@@ -1229,10 +1209,10 @@ def prune_repo_remotes(
             "errors": [],
         }
 
-    stale_refs: List[str] = []
-    pruned_refs: List[str] = []
-    would_prune_refs: List[str] = []
-    errors: List[str] = []
+    stale_refs: list[str] = []
+    pruned_refs: list[str] = []
+    would_prune_refs: list[str] = []
+    errors: list[str] = []
 
     for r_name in target_remotes:
         # Step 1: Detect stale refs via --dry-run
@@ -1299,12 +1279,12 @@ def prune_repo_remotes(
 
 def audit_branch_hygiene(
     repo_path: str,
-    default_branch: Optional[str] = None,
+    default_branch: str | None = None,
     audit_stale_remotes: bool = False,
     timeout: int = 5,
-    benchmark: Optional[TelemetryBenchmark] = None,
-    cache: Optional[BulkCache] = None,
-) -> Dict[str, Any]:
+    benchmark: TelemetryBenchmark | None = None,
+    cache: BulkCache | None = None,
+) -> dict[str, Any]:
     """
     Proactively audit local and remote-tracking branch health across a repository.
     Identifies:
@@ -1329,10 +1309,10 @@ def audit_branch_hygiene(
         ["for-each-ref", "--format=%(refname:short)|%(upstream:short)|%(upstream:track)", "refs/heads/"],
         timeout=timeout,
     )
-    all_local_branches: List[str] = []
-    gone_branches: List[str] = []
-    untracked_branches: List[str] = []
-    tracking_branches: Dict[str, str] = {}
+    all_local_branches: list[str] = []
+    gone_branches: list[str] = []
+    untracked_branches: list[str] = []
+    tracking_branches: dict[str, str] = {}
 
     for line in p_branches.stdout.splitlines():
         parts = line.split("|")
@@ -1364,7 +1344,7 @@ def audit_branch_hygiene(
     if not target_default:
         target_default = curr_branch or "main"
 
-    merged_branches: List[str] = []
+    merged_branches: list[str] = []
     if target_default in all_local_branches or f"origin/{target_default}" in tracking_branches.values():
         p_merged = run_git(repo_path, ["branch", "--merged", target_default], timeout=timeout)
         if p_merged.returncode == 0:
@@ -1380,7 +1360,7 @@ def audit_branch_hygiene(
 
     untracked_branches = [b for b in untracked_branches if b != target_default and b != curr_branch]
 
-    stale_remote_refs: List[str] = []
+    stale_remote_refs: list[str] = []
     if audit_stale_remotes:
         prune_audit = prune_repo_remotes(repo_path, dry_run=True, timeout=timeout, benchmark=benchmark, cache=cache)
         stale_remote_refs = prune_audit.get("stale_refs", [])
@@ -1407,12 +1387,12 @@ def audit_branch_hygiene(
 
 def delete_local_branches(
     repo_path: str,
-    branches: List[str],
+    branches: list[str],
     force: bool = False,
     dry_run: bool = False,
     timeout: int = 5,
-    cache: Optional[BulkCache] = None,
-) -> Dict[str, Any]:
+    cache: BulkCache | None = None,
+) -> dict[str, Any]:
     """
     Safely delete obsolete local branches.
     # INVARIANT: NEVER deletes the currently checked out branch or branches checked out in other worktrees.
@@ -1426,10 +1406,10 @@ def delete_local_branches(
     if curr_branch:
         checked_out.add(curr_branch)
 
-    deleted: List[str] = []
-    would_delete: List[str] = []
-    skipped: List[Dict[str, str]] = []
-    errors: Dict[str, str] = {}
+    deleted: list[str] = []
+    would_delete: list[str] = []
+    skipped: list[dict[str, str]] = []
+    errors: dict[str, str] = {}
 
     for b in branches:
         if not b:
@@ -1463,10 +1443,8 @@ def delete_local_branches(
 
 # Re-exported from git_sync.engine.changelog
 from git_sync.engine.changelog import (
-    BREAKING_CHANGE_REGEX,
     CHANGELOG_CATEGORY_ORDER,
     CONVENTIONAL_CATEGORY_MAP,
-    CONVENTIONAL_COMMIT_REGEX,
     ClassifiedCommit,
     classify_commit,
     format_changelog_summary,
@@ -1482,9 +1460,9 @@ def inspect_repo(
     root_dir: str,
     do_fetch: bool = True,
     timeout: int = DEFAULT_TIMEOUT,
-    cache: Optional[BulkCache] = None,
-    remote: Optional[str] = None,
-    benchmark: Optional[TelemetryBenchmark] = None,
+    cache: BulkCache | None = None,
+    remote: str | None = None,
+    benchmark: TelemetryBenchmark | None = None,
     retries: int = DEFAULT_RETRIES,
     prune: bool = False,
     audit_hygiene: bool = False,
@@ -1816,15 +1794,15 @@ def inspect_repo(
 
 def pull_repo(
     repo_path: str,
-    remote: Optional[str] = None,
+    remote: str | None = None,
     ff_only: bool = True,
     sync_branches: bool = True,
-    strategy: Optional[str] = None,
+    strategy: str | None = None,
     autostash: bool = True,
     timeout: int = DEFAULT_TIMEOUT,
-    cache: Optional[BulkCache] = None,
+    cache: BulkCache | None = None,
     dry_run: bool = False,
-    benchmark: Optional[TelemetryBenchmark] = None,
+    benchmark: TelemetryBenchmark | None = None,
     retries: int = DEFAULT_RETRIES,
     recover_stale_lock: bool = False,
     prune: bool = False,
@@ -1857,11 +1835,11 @@ def pull_repo(
     sparse_info = cache.get_sparse_checkout_info(repo_path, timeout=5) if cache else get_sparse_checkout_info(repo_path, timeout=5)
     lfs_info = cache.get_lfs_info(repo_path, timeout=5) if cache else get_lfs_info(repo_path, timeout=5)
     repo_has_lfs = lfs_info.get("has_lfs", False)
-    pull_extra_env: Optional[Dict[str, str]] = {"GIT_LFS_SKIP_SMUDGE": "1"} if no_lfs else None
+    pull_extra_env: dict[str, str] | None = {"GIT_LFS_SKIP_SMUDGE": "1"} if no_lfs else None
 
     if dry_run:
         is_dirty, dirty_files = check_repo_dirty(repo_path, timeout=timeout, cache=cache)
-        autostash_info: Dict[str, Any] = {
+        autostash_info: dict[str, Any] = {
             "stashed": False,
             "restored": False,
             "conflict": False,
@@ -1872,7 +1850,7 @@ def pull_repo(
             "dirty_files": dirty_files if is_dirty else [],
         }
 
-        prune_res: Dict[str, Any] = {"stale_refs": [], "pruned_refs": [], "would_prune_refs": []}
+        prune_res: dict[str, Any] = {"stale_refs": [], "pruned_refs": [], "would_prune_refs": []}
         if prune:
             prune_res = prune_repo_remotes(
                 repo_path,
@@ -1885,7 +1863,7 @@ def pull_repo(
             )
 
         repo_is_shallow = is_shallow_repository(repo_path)
-        submodules_res: Optional[Dict[str, Any]] = None
+        submodules_res: dict[str, Any] | None = None
         if submodules or unshallow:
             submodules_res = update_submodules(
                 repo_path,
@@ -1942,7 +1920,7 @@ def pull_repo(
             ahead_count = 0
             behind_count = 0
 
-        resolved_info: Optional[ResolveResult | Dict[str, Any]] = None
+        resolved_info: ResolveResult | dict[str, Any] | None = None
         if ahead_count == 0 and behind_count > 0:
             success = True
             stdout = f"[DRY-RUN] Fast-forward update possible ({behind_count} commit(s) behind {upstream})"
@@ -1963,8 +1941,8 @@ def pull_repo(
                 stdout = ""
                 stderr = f"[DRY-RUN] Cannot fast-forward: branch diverged ({ahead_count} ahead, {behind_count} behind {upstream})"
 
-        aux_results: Dict[str, bool] = {}
-        worktree_isolated: Dict[str, str] = {}
+        aux_results: dict[str, bool] = {}
+        worktree_isolated: dict[str, str] = {}
         if sync_branches and success:
             repo_abs = os.path.abspath(repo_path)
 
@@ -1988,7 +1966,7 @@ def pull_repo(
             prefix = f"[DRY-RUN] Reapplying sparse-checkout cone filters ({sc_pat_cnt} pattern(s))\n"
             stdout = (prefix + stdout).strip() if stdout else prefix.strip()
 
-        lfs_res: Dict[str, Any] = {
+        lfs_res: dict[str, Any] = {
             "has_lfs": repo_has_lfs,
             "skipped": no_lfs,
             "fetched": lfs,
@@ -2044,7 +2022,6 @@ def pull_repo(
         )
 
     stashed = False
-    stash_tag: Optional[str] = None
     autostash_info = {
         "stashed": False,
         "restored": False,
@@ -2063,7 +2040,7 @@ def pull_repo(
                 if stash_diag and stash_diag.get("category") == "INDEX_LOCKED":
                     rec_ok, _ = recover_index_lock(repo_path, force=False, max_age_seconds=300.0)
                     if rec_ok:
-                        stash_ok, tag, stash_err = stash_changes(repo_path, timeout=timeout)
+                        stash_ok, _tag, stash_err = stash_changes(repo_path, timeout=timeout)
 
             if stash_err == "NO_CHANGES":
                 stashed = False
@@ -2095,7 +2072,6 @@ def pull_repo(
                 }
             else:
                 stashed = True
-                stash_tag = tag
                 autostash_info["stashed"] = True
 
     repo_is_shallow = is_shallow_repository(repo_path)
@@ -2123,7 +2099,7 @@ def pull_repo(
     stdout = proc.stdout.strip()
     stderr = proc.stderr.strip()
     resolved_info = None
-    diagnostic: Optional[Dict[str, str]] = None
+    diagnostic: dict[str, str] | None = None
 
     if not success:
         diagnostic = diagnose_git_error(stderr, None)
@@ -2212,7 +2188,7 @@ def pull_repo(
             sub_err = submodules_res.get("stderr") or "Submodule update failed"
             stderr = f"{stderr}\n{sub_err}".strip() if stderr else sub_err
 
-    sparse_reapply_res: Optional[Dict[str, Any]] = None
+    sparse_reapply_res: dict[str, Any] | None = None
     if reapply_sparse and sparse_info.get("enabled") and success:
         sparse_reapply_res = reapply_sparse_checkout(
             repo_path,
@@ -2223,7 +2199,7 @@ def pull_repo(
             reapply_err = sparse_reapply_res.get("stderr") or "Failed to reapply sparse-checkout"
             stderr = f"{stderr}\n{reapply_err}".strip() if stderr else reapply_err
 
-    lfs_pull_res: Optional[Dict[str, Any]] = None
+    lfs_pull_res: dict[str, Any] | None = None
     if success and lfs and not no_lfs and repo_has_lfs:
         lfs_pull_res = pull_lfs_objects(repo_path, timeout=timeout)
         if not lfs_pull_res.get("success"):
@@ -2274,7 +2250,7 @@ def pull_repo(
     return result_dict
 
 
-def is_branch_protected(branch: str, patterns: Optional[List[str]] = None) -> bool:
+def is_branch_protected(branch: str, patterns: list[str] | None = None) -> bool:
     """
     Determine if a branch name matches protected branch configuration patterns.
     # INVARIANT: Standard protected branch patterns default to main, master, release/*, production, and prod.
@@ -2290,15 +2266,15 @@ def is_branch_protected(branch: str, patterns: Optional[List[str]] = None) -> bo
 
 def preflight_push_check(
     repo_path: str,
-    branch: Optional[str] = None,
-    remote: Optional[str] = None,
+    branch: str | None = None,
+    remote: str | None = None,
     force: bool = False,
-    protected_branches: Optional[List[str]] = None,
+    protected_branches: list[str] | None = None,
     block_protected: bool = False,
     allow_protected: bool = False,
-    cache: Optional[BulkCache] = None,
+    cache: BulkCache | None = None,
     timeout: int = 5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Proactive pre-flight telemetry and safety analysis prior to executing Git push.
     # INVARIANT: Evaluates branch protection, force-push defense, divergence, and uncommitted tree status.
@@ -2321,7 +2297,7 @@ def preflight_push_check(
     if not remotes_map and is_worktree and worktree_main_path:
         remotes_map = cache.get_remotes(worktree_main_path, timeout=timeout) if cache else get_repo_remotes(worktree_main_path, timeout=timeout)
 
-    target_remote: Optional[str] = None
+    target_remote: str | None = None
     if remotes_map:
         if remote:
             target_remote = remote if remote in remotes_map else None
@@ -2526,7 +2502,7 @@ def preflight_push_check(
     # Upstream and divergence inspection
     ahead_count = 0
     behind_count = 0
-    upstream: Optional[str] = None
+    upstream: str | None = None
     upstream_configured = False
 
     p_up = run_git(repo_path, ["rev-parse", "--abbrev-ref", f"{target_branch}@{{u}}"], timeout=timeout)
@@ -2675,16 +2651,16 @@ def preflight_push_check(
 
 def push_repo(
     repo_path: str,
-    branch: Optional[str] = None,
-    remote: Optional[str] = None,
+    branch: str | None = None,
+    remote: str | None = None,
     dry_run: bool = False,
     force: bool = False,
-    protected_branches: Optional[List[str]] = None,
+    protected_branches: list[str] | None = None,
     block_protected: bool = False,
     allow_protected: bool = False,
     timeout: int = DEFAULT_TIMEOUT,
-    cache: Optional[BulkCache] = None,
-    benchmark: Optional[TelemetryBenchmark] = None,
+    cache: BulkCache | None = None,
+    benchmark: TelemetryBenchmark | None = None,
     retries: int = DEFAULT_RETRIES,
     sync_branches: bool = False,
 ) -> PushResult:
@@ -2760,7 +2736,7 @@ def push_repo(
     success = (proc.returncode == 0)
     stdout = proc.stdout.strip()
     stderr = proc.stderr.strip()
-    diagnostic: Optional[Dict[str, str]] = None
+    diagnostic: dict[str, str] | None = None
 
     if not success:
         diagnostic = diagnose_git_error(proc.stderr.strip(), None)
@@ -2768,8 +2744,8 @@ def push_repo(
             fail_type = diagnostic["category"].lower() if diagnostic else "push_error"
             benchmark.record_failure(fail_type)
 
-    aux_results: Dict[str, Any] = {}
-    aux_diagnostics: Dict[str, Any] = {}
+    aux_results: dict[str, Any] = {}
+    aux_diagnostics: dict[str, Any] = {}
 
     if sync_branches and success:
         # Discover auxiliary tracking branches ahead of upstream
@@ -2857,14 +2833,14 @@ def push_repo(
 
 
 def find_push_pending_repos(
-    all_repos: List[str],
+    all_repos: list[str],
     root_dir: str,
     do_fetch: bool = False,
     workers: int | str = DEFAULT_WORKERS,
     timeout: int = DEFAULT_TIMEOUT,
-    cache: Optional[BulkCache] = None,
-    remote: Optional[str] = None,
-) -> List[RepoStatusRecord]:
+    cache: BulkCache | None = None,
+    remote: str | None = None,
+) -> list[RepoStatusRecord]:
     """Find all repositories with pending commits to push (ahead > 0 or aux_branches_ahead)."""
     ctrl = AdaptiveConcurrencyController()
     eff_workers = ctrl.determine_workers(len(all_repos), is_fetch=do_fetch, configured_workers=workers)
@@ -2874,14 +2850,14 @@ def find_push_pending_repos(
 
 
 def find_diverged_repos(
-    all_repos: List[str],
+    all_repos: list[str],
     root_dir: str,
     do_fetch: bool = False,
     workers: int | str = DEFAULT_WORKERS,
     timeout: int = DEFAULT_TIMEOUT,
-    cache: Optional[BulkCache] = None,
-    remote: Optional[str] = None,
-) -> List[RepoStatusRecord]:
+    cache: BulkCache | None = None,
+    remote: str | None = None,
+) -> list[RepoStatusRecord]:
     """Find all repositories with divergent branches (ahead > 0 and behind > 0)."""
     ctrl = AdaptiveConcurrencyController()
     eff_workers = ctrl.determine_workers(len(all_repos), is_fetch=do_fetch, configured_workers=workers)
@@ -2902,7 +2878,7 @@ from git_sync.engine.diff import (
 def resolve_divergence(
     repo_path: str,
     strategy: str,
-    branch: Optional[str] = None,
+    branch: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
     dry_run: bool = False,
 ) -> ResolveResult:
@@ -3080,7 +3056,6 @@ def resolve_divergence(
 __all__ = [
     "CHANGELOG_CATEGORY_ORDER",
     "CONVENTIONAL_CATEGORY_MAP",
-    "ClassifiedCommit",
     "DEFAULT_BACKOFF_FACTOR",
     "DEFAULT_CHARS_PER_TOKEN",
     "DEFAULT_COMPACT_DIFF_TOKENS",
@@ -3095,15 +3070,24 @@ __all__ = [
     "DEFAULT_ROOT",
     "DEFAULT_TIMEOUT",
     "DEFAULT_WORKERS",
-    "DoctorSanityReport",
     "GIT_ENV",
-    "GitLfsStatusDict",
-    "GithubCliStatusDict",
     "GRADE_A_THRESHOLD_SECONDS",
     "GRADE_B_THRESHOLD_SECONDS",
     "GRADE_C_THRESHOLD_SECONDS",
-    "LfsInfoDict",
     "TOOL_DIR_PREFIXES",
+    "ClassifiedCommit",
+    "DoctorSanityReport",
+    "GitLfsStatusDict",
+    "GithubCliStatusDict",
+    "LfsInfoDict",
+    "PreflightPushCheckResult",
+    "PullResult",
+    "PushResult",
+    "RepoStatusRecord",
+    "ResolveResult",
+    "SparseCheckoutInfoDict",
+    "SshAgentStatusDict",
+    "SshMultiplexInfoDict",
     "audit_branch_hygiene",
     "audit_multi_remote_matrix",
     "audit_ssh_multiplexing",
@@ -3136,8 +3120,8 @@ __all__ = [
     "get_submodules_status",
     "get_worktree_info",
     "inspect_credential_helpers",
-    "inspect_github_cli",
     "inspect_git_lfs",
+    "inspect_github_cli",
     "inspect_repo",
     "inspect_ssh_config",
     "inspect_ssh_control_socket",
@@ -3149,7 +3133,6 @@ __all__ = [
     "is_transient_network_error",
     "match_repo",
     "parse_commit_log",
-    "PreflightPushCheckResult",
     "preflight_push_check",
     "probe_remote_reachability",
     "prune_repo_remotes",
@@ -3157,24 +3140,17 @@ __all__ = [
     "prune_stale_ssh_control_sockets",
     "pull_lfs_objects",
     "pull_repo",
-    "PullResult",
     "push_repo",
-    "PushResult",
     "reapply_sparse_checkout",
     "recover_index_lock",
     "recover_repo_locks",
-    "RepoStatusRecord",
     "resolve_default_root",
     "resolve_divergence",
-    "ResolveResult",
     "restore_stash",
     "run_git",
     "run_git_with_retry",
     "set_git_runner",
-    "SparseCheckoutInfoDict",
     "split_diff_files",
-    "SshAgentStatusDict",
-    "SshMultiplexInfoDict",
     "stash_changes",
     "summarize_commit_categories",
     "truncate_diff",

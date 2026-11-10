@@ -10,7 +10,8 @@ from __future__ import annotations
 import concurrent.futures
 import os
 import sys
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from collections.abc import Callable, Sequence
+from typing import Any
 
 from git_sync.engine import (
     DEFAULT_RETRIES,
@@ -32,7 +33,7 @@ from git_sync.ui.style import AnsiStyler, format_diff_stat
 
 EXIT_CODE_SIGINT = 130
 
-STATUS_BADGES: Dict[str, tuple[str, str]] = {
+STATUS_BADGES: dict[str, tuple[str, str]] = {
     "UP_TO_DATE": ("✅ OK", "green"),
     "PULL_PENDING": ("⬇️ PULL", "cyan"),
     "PUSH_PENDING": ("⬆️ PUSH", "magenta"),
@@ -45,7 +46,7 @@ STATUS_BADGES: Dict[str, tuple[str, str]] = {
 }
 
 
-def read_single_key(stream: Optional[Any] = None) -> str:
+def read_single_key(stream: Any | None = None) -> str:
     """
     Read a single keypress or command token from input stream.
     Uses raw tty mode when stream is a real TTY with termios support; falls back to readline() otherwise.
@@ -105,11 +106,11 @@ def read_single_key(stream: Optional[Any] = None) -> str:
     return stripped
 
 
-def get_repo_diff_stat(repo_path: str, branch: Optional[str] = None, timeout: int = DEFAULT_TIMEOUT) -> str:
+def get_repo_diff_stat(repo_path: str, branch: str | None = None, timeout: int = DEFAULT_TIMEOUT) -> str:
     """
     Retrieve combined working tree `git diff --stat` (HEAD or staged/unstaged) and divergence stat if applicable.
     """
-    parts: List[str] = []
+    parts: list[str] = []
     proc_wt = run_git(repo_path, ["diff", "HEAD", "--stat"], timeout=timeout)
     if proc_wt.returncode != 0 or not proc_wt.stdout.strip():
         proc_wt = run_git(repo_path, ["diff", "--stat"], timeout=timeout)
@@ -140,30 +141,30 @@ class InteractiveDashboard:
     def __init__(
         self,
         root: str,
-        repos: Optional[Sequence[RepoStatusRecord | Dict[str, Any]]] = None,
+        repos: Sequence[RepoStatusRecord | dict[str, Any]] | None = None,
         do_fetch: bool = False,
         workers: int | str = DEFAULT_WORKERS,
         timeout: int = DEFAULT_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
-        remote: Optional[str] = None,
-        exclude: Optional[List[str]] = None,
-        group: Optional[str] = None,
-        groups: Optional[List[str]] = None,
+        remote: str | None = None,
+        exclude: list[str] | None = None,
+        group: str | None = None,
+        groups: list[str] | None = None,
         ff_only: bool = True,
         sync_branches: bool = True,
         autostash: bool = True,
         dry_run: bool = False,
-        stream: Optional[Any] = None,
-        color_enabled: Optional[bool] = None,
-        key_reader: Optional[Callable[[], str]] = None,
-        inspect_fn: Optional[Callable[..., List[RepoStatusRecord | Dict[str, Any]]]] = None,
-        pull_fn: Optional[Callable[..., PullResult | Dict[str, Any]]] = None,
-        diff_stat_fn: Optional[Callable[[RepoStatusRecord | Dict[str, Any]], str]] = None,
-        config: Optional[Any] = None,
-        active_profile: Optional[str] = None,
-        available_profiles: Optional[List[str]] = None,
-        raw_config: Optional[Dict[str, Any]] = None,
-        config_path: Optional[str] = None,
+        stream: Any | None = None,
+        color_enabled: bool | None = None,
+        key_reader: Callable[[], str] | None = None,
+        inspect_fn: Callable[..., list[RepoStatusRecord | dict[str, Any]]] | None = None,
+        pull_fn: Callable[..., PullResult | dict[str, Any]] | None = None,
+        diff_stat_fn: Callable[[RepoStatusRecord | dict[str, Any]], str] | None = None,
+        config: Any | None = None,
+        active_profile: str | None = None,
+        available_profiles: list[str] | None = None,
+        raw_config: dict[str, Any] | None = None,
+        config_path: str | None = None,
     ) -> None:
         self.root = root
         self.do_fetch = do_fetch
@@ -185,7 +186,7 @@ class InteractiveDashboard:
         self._pull_fn = pull_fn
         self._diff_stat_fn = diff_stat_fn
         self._has_initial_repos = repos is not None
-        self.repos: List[RepoStatusRecord | Dict[str, Any]] = list(repos) if repos is not None else []
+        self.repos: list[RepoStatusRecord | dict[str, Any]] = list(repos) if repos is not None else []
         self.selected_idx: int = 0
         self.last_message: str = ""
 
@@ -199,7 +200,7 @@ class InteractiveDashboard:
         elif config and getattr(config, "available_profiles", None):
             self.available_profiles = list(config.available_profiles)
         elif raw_config and isinstance(raw_config.get("profiles"), dict):
-            self.available_profiles = sorted(list(raw_config["profiles"].keys()))
+            self.available_profiles = sorted(raw_config["profiles"].keys())
         else:
             self.available_profiles = []
 
@@ -207,7 +208,7 @@ class InteractiveDashboard:
         self.stream.write(text + "\n")
         self.stream.flush()
 
-    def refresh_repos(self, do_fetch: Optional[bool] = None) -> List[RepoStatusRecord | Dict[str, Any]]:
+    def refresh_repos(self, do_fetch: bool | None = None) -> list[RepoStatusRecord | dict[str, Any]]:
         """Inspect all workspace repositories concurrently and update dashboard state."""
         fetch_flag = self.do_fetch if do_fetch is None else do_fetch
         if self._inspect_fn is not None:
@@ -233,7 +234,7 @@ class InteractiveDashboard:
                 is_fetch=fetch_flag,
                 configured_workers=configured_w,
             )
-            inspected: List[RepoStatusRecord | Dict[str, Any]] = []
+            inspected: list[RepoStatusRecord | dict[str, Any]] = []
             with concurrent.futures.ThreadPoolExecutor(max_workers=eff_workers) as executor:
                 futures = [
                     executor.submit(
@@ -260,7 +261,7 @@ class InteractiveDashboard:
             self.selected_idx = 0
         return self.repos
 
-    def switch_profile(self, profile_name: str, do_fetch: Optional[bool] = None) -> bool:
+    def switch_profile(self, profile_name: str, do_fetch: bool | None = None) -> bool:
         """
         Dynamically switch the dashboard to a named profile and reload scoped settings.
         # INVARIANT: Updates root, workers, exclusions, groups, and remote without restarting dashboard.
@@ -320,7 +321,7 @@ class InteractiveDashboard:
         )
         return True
 
-    def action_switch_profile(self, profile_name: Optional[str] = None) -> Optional[str]:
+    def action_switch_profile(self, profile_name: str | None = None) -> str | None:
         """
         Interactive action to cycle or switch to a target profile.
         If profile_name is None, cycles to the next available profile.
@@ -341,7 +342,7 @@ class InteractiveDashboard:
         success = self.switch_profile(target)
         return target if success else None
 
-    def format_row(self, repo: RepoStatusRecord | Dict[str, Any], selected: bool = False) -> str:
+    def format_row(self, repo: RepoStatusRecord | dict[str, Any], selected: bool = False) -> str:
         """Render a single compact repository row for the dashboard table."""
         pointer = self.styler.bold(self.styler.cyan("▸")) if selected else " "
         raw_status = repo.get("status", "UNKNOWN")
@@ -364,7 +365,7 @@ class InteractiveDashboard:
             branch = branch[:11] + "..."
         padded_branch = self.styler.cyan(f"{branch:<14}")
 
-        details: List[str] = []
+        details: list[str] = []
         if repo.get("behind", 0) > 0:
             details.append(self.styler.cyan(f"↓{repo['behind']}"))
         if repo.get("ahead", 0) > 0:
@@ -401,14 +402,14 @@ class InteractiveDashboard:
 
     def render(self) -> str:
         """Render full high-density dashboard screen string."""
-        lines: List[str] = []
+        lines: list[str] = []
         header_prof = f" [{self.styler.cyan(f'perfil: {self.active_profile}')}]" if self.active_profile else ""
         header_title = self.styler.bold(f"📊 GIT-SYNC DASHBOARD — {self.root}") + header_prof
         lines.append(header_title)
         lines.append("=" * 92)
 
         if self.available_profiles:
-            prof_badges: List[str] = []
+            prof_badges: list[str] = []
             for p in self.available_profiles:
                 if p == self.active_profile:
                     prof_badges.append(self.styler.bold(self.styler.cyan(f"[{p}]")))
@@ -461,7 +462,7 @@ class InteractiveDashboard:
         self._write(output)
         return output
 
-    def _execute_pull(self, target_repo: RepoStatusRecord | Dict[str, Any]) -> PullResult | Dict[str, Any]:
+    def _execute_pull(self, target_repo: RepoStatusRecord | dict[str, Any]) -> PullResult | dict[str, Any]:
         if self._pull_fn is not None:
             return self._pull_fn(target_repo)
         return pull_repo(
@@ -475,7 +476,7 @@ class InteractiveDashboard:
             retries=self.retries,
         )
 
-    def action_pull_pending(self) -> List[PullResult | Dict[str, Any]]:
+    def action_pull_pending(self) -> list[PullResult | dict[str, Any]]:
         """Pull all repositories that have pending upstream changes."""
         pending = [
             r for r in self.repos
@@ -485,7 +486,7 @@ class InteractiveDashboard:
             self.last_message = self.styler.green("✅ Nenhum repositório pendente de pull.")
             return []
 
-        results: List[PullResult | Dict[str, Any]] = []
+        results: list[PullResult | dict[str, Any]] = []
         ok_count = 0
         for r in pending:
             res = self._execute_pull(r)
@@ -503,7 +504,7 @@ class InteractiveDashboard:
             )
         return results
 
-    def action_pull_selected(self) -> Optional[PullResult | Dict[str, Any]]:
+    def action_pull_selected(self) -> PullResult | dict[str, Any] | None:
         """Pull the currently selected repository."""
         if not self.repos:
             self.last_message = self.styler.yellow("⚠️ Nenhum repositório selecionado.")
@@ -534,7 +535,7 @@ class InteractiveDashboard:
         if not targets:
             targets = [selected]
 
-        blocks: List[str] = []
+        blocks: list[str] = []
         for r in targets:
             rel = r.get("rel_path", r.get("name", ""))
             dirty_files = r.get("dirty_files", [])
@@ -585,7 +586,7 @@ class InteractiveDashboard:
             )
             selected["changelog"] = cl
 
-        lines: List[str] = []
+        lines: list[str] = []
         header = self.styler.bold(f"📋 Changelog: {rel} ({selected.get('branch', '-')})")
         lines.append(header)
 
@@ -636,7 +637,7 @@ class InteractiveDashboard:
                     self.action_pull_selected()
                 elif norm_key in ("w", "W", "TAB"):
                     self.action_switch_profile()
-                elif norm_key.startswith("w ") or norm_key.startswith("profile "):
+                elif norm_key.startswith(("w ", "profile ")):
                     parts = norm_key.split(maxsplit=1)
                     if len(parts) > 1:
                         self.action_switch_profile(parts[1].strip())
@@ -673,8 +674,8 @@ class InteractiveDashboard:
 
 __all__ = [
     "EXIT_CODE_SIGINT",
-    "InteractiveDashboard",
     "STATUS_BADGES",
+    "InteractiveDashboard",
     "get_repo_diff_stat",
     "read_single_key",
 ]

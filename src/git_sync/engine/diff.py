@@ -4,21 +4,20 @@ Token-budget aware diff chunking, truncation, and divergence diff inspection.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
-
+from typing import Any
 
 DEFAULT_COMPACT_DIFF_TOKENS = 1000
 DEFAULT_CHARS_PER_TOKEN = 4
 
 
-def split_diff_files(diff: str) -> List[str]:
+def split_diff_files(diff: str) -> list[str]:
     """
     Split a unified git diff into per-file diff chunks based on 'diff --git ' headers.
     Preserves all lines and chunk content.
     """
     lines = diff.splitlines(keepends=True)
-    chunks: List[str] = []
-    current: List[str] = []
+    chunks: list[str] = []
+    current: list[str] = []
 
     for line in lines:
         if line.startswith("diff --git ") and any(c.startswith("diff --git ") for c in current):
@@ -33,7 +32,7 @@ def split_diff_files(diff: str) -> List[str]:
 
 def truncate_diff(
     diff: str,
-    max_tokens: Optional[int] = None,
+    max_tokens: int | None = None,
     chars_per_token: int = DEFAULT_CHARS_PER_TOKEN,
 ) -> str:
     """
@@ -56,7 +55,7 @@ def truncate_diff(
     if not chunks:
         return diff
 
-    kept_chunks: List[str] = []
+    kept_chunks: list[str] = []
     current_len = 0
     for chunk in chunks:
         if current_len + len(chunk) <= max_chars:
@@ -99,10 +98,10 @@ def truncate_diff(
 
 def get_divergence_diff(
     repo_path: str,
-    branch: Optional[str] = None,
+    branch: str | None = None,
     stat_only: bool = False,
     timeout: int = 5,
-    max_tokens: Optional[int] = None,
+    max_tokens: int | None = None,
 ) -> str:
     """
     Generate diff text between local branch and remote upstream tracking branch.
@@ -135,9 +134,9 @@ def get_divergence_diff(
 
 def get_divergence_details(
     repo_path: str,
-    branch: Optional[str] = None,
+    branch: str | None = None,
     timeout: int = 5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Inspect divergence details between local branch and remote tracking upstream.
     Returns ahead/behind counts, commit logs (local and remote), merge-base, diffstat, and dirty status.
@@ -190,7 +189,7 @@ def get_divergence_details(
     merge_base = p_mb.stdout.strip() if p_mb.returncode == 0 else None
 
     # Local commits (ahead of upstream)
-    local_commits: List[Dict[str, str]] = []
+    local_commits: list[dict[str, str]] = []
     if ahead > 0:
         p_log_local = run_git_fn(
             repo_path,
@@ -208,7 +207,7 @@ def get_divergence_details(
                 local_commits.append({"hash": parts[0], "author": "", "subject": ""})
 
     # Remote commits (behind upstream)
-    remote_commits: List[Dict[str, str]] = []
+    remote_commits: list[dict[str, str]] = []
     if behind > 0:
         p_log_remote = run_git_fn(
             repo_path,

@@ -5,7 +5,6 @@ and automated batch strategies (rebase, merge, abort, stash).
 
 import io
 import json
-import os
 import sys
 import tempfile
 import unittest
@@ -17,7 +16,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from git_sync.cli import _prompt_resolution_choice, main
 from git_sync.core import (
-    DEFAULT_COMPACT_DIFF_TOKENS,
     find_diverged_repos,
     get_divergence_details,
     get_divergence_diff,
@@ -172,7 +170,7 @@ class TestDivergenceAndResolution(unittest.TestCase):
         local_repo = self._create_diverged_repo_pair("rebase-conflict")
 
         # Modify same file base.txt in remote
-        remote_path = self.root / "rebase-conflict-remote.git"
+        self.root / "rebase-conflict-remote.git"
         setup_clone = self.root / "rebase-conflict-setup"
         (setup_clone / "base.txt").write_text("remote conflicting line\n", encoding="utf-8")
         run_git(str(setup_clone), ["add", "base.txt"])
@@ -200,7 +198,7 @@ class TestDivergenceAndResolution(unittest.TestCase):
         local_repo = self._create_diverged_repo_pair("merge-conflict")
 
         # Modify base.txt in remote
-        remote_path = self.root / "merge-conflict-remote.git"
+        self.root / "merge-conflict-remote.git"
         setup_clone = self.root / "merge-conflict-setup"
         (setup_clone / "base.txt").write_text("remote edit for merge conflict\n", encoding="utf-8")
         run_git(str(setup_clone), ["add", "base.txt"])
@@ -281,7 +279,7 @@ class TestDivergenceAndResolution(unittest.TestCase):
         self.assertFalse(details["is_diverged"])
 
     def test_cli_resolve_json_output(self):
-        local_repo = self._create_diverged_repo_pair("cli-resolve-json")
+        self._create_diverged_repo_pair("cli-resolve-json")
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
             exit_code = main([
@@ -298,7 +296,7 @@ class TestDivergenceAndResolution(unittest.TestCase):
         self.assertTrue(payload[0]["details"]["is_diverged"])
 
     def test_cli_resolve_diff_flag(self):
-        local_repo = self._create_diverged_repo_pair("cli-resolve-diff")
+        self._create_diverged_repo_pair("cli-resolve-diff")
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
             exit_code = main([
@@ -308,7 +306,7 @@ class TestDivergenceAndResolution(unittest.TestCase):
                 "--no-fetch",
             ])
         self.assertEqual(exit_code, 0)
-        self.assertIn("Diff de divergência", stdout_capture.getvalue())
+        self.assertIn("Divergence diff", stdout_capture.getvalue())
         self.assertIn("remote_file.txt", stdout_capture.getvalue())
 
     def test_interactive_resolution_prompt_rebase(self):
@@ -454,7 +452,7 @@ class TestDivergenceAndResolution(unittest.TestCase):
         self.assertIn("[... truncated", truncated_diff)
 
     def test_cli_resolve_diff_with_max_tokens(self):
-        local_repo = self._create_diverged_repo_pair("cli-diff-tokens")
+        self._create_diverged_repo_pair("cli-diff-tokens")
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
             exit_code = main([
@@ -466,11 +464,11 @@ class TestDivergenceAndResolution(unittest.TestCase):
             ])
         self.assertEqual(exit_code, 0)
         output = stdout_capture.getvalue()
-        self.assertIn("Diff de divergência", output)
+        self.assertIn("Divergence diff", output)
         self.assertIn("truncated", output)
 
     def test_cli_resolve_diff_compact_default(self):
-        local_repo = self._create_diverged_repo_pair("cli-diff-compact")
+        self._create_diverged_repo_pair("cli-diff-compact")
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
             exit_code = main([
@@ -482,10 +480,10 @@ class TestDivergenceAndResolution(unittest.TestCase):
             ])
         self.assertEqual(exit_code, 0)
         output = stdout_capture.getvalue()
-        self.assertIn("Diff de divergência", output)
+        self.assertIn("Divergence diff", output)
 
     def test_cli_resolve_diff_json_with_max_tokens(self):
-        local_repo = self._create_diverged_repo_pair("cli-diff-json-tokens")
+        self._create_diverged_repo_pair("cli-diff-json-tokens")
         stdout_capture = io.StringIO()
         with patch("sys.stdout", stdout_capture):
             exit_code = main([

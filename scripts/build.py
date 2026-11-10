@@ -14,7 +14,6 @@ import tarfile
 import warnings
 import zipfile
 from pathlib import Path
-from typing import List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -30,7 +29,7 @@ def clean_artifacts(repo_root: Path = REPO_ROOT) -> None:
                 p.unlink(missing_ok=True)
 
 
-def build_distribution(dist_dir: Path, repo_root: Path = REPO_ROOT) -> Tuple[Path, Path]:
+def build_distribution(dist_dir: Path, repo_root: Path = REPO_ROOT) -> tuple[Path, Path]:
     """
     Build sdist (.tar.gz) and binary wheel (.whl) into dist_dir.
     Uses setuptools.build_meta to avoid external build dependencies.
@@ -56,12 +55,12 @@ def build_distribution(dist_dir: Path, repo_root: Path = REPO_ROOT) -> Tuple[Pat
         clean_artifacts(repo_root)
 
 
-def validate_sdist(sdist_path: Path) -> List[str]:
+def validate_sdist(sdist_path: Path) -> list[str]:
     """
     Validate sdist tarball contents and hygiene.
     Returns a list of error messages (empty if valid).
     """
-    errors: List[str] = []
+    errors: list[str] = []
     if not sdist_path.exists():
         return [f"sdist archive not found: {sdist_path}"]
 
@@ -111,12 +110,12 @@ def validate_sdist(sdist_path: Path) -> List[str]:
     return errors
 
 
-def validate_wheel(wheel_path: Path) -> List[str]:
+def validate_wheel(wheel_path: Path) -> list[str]:
     """
     Validate binary wheel archive contents, metadata, and entry-points.
     Returns a list of error messages (empty if valid).
     """
-    errors: List[str] = []
+    errors: list[str] = []
     if not wheel_path.exists():
         return [f"wheel archive not found: {wheel_path}"]
 
@@ -204,7 +203,7 @@ def check_dist(dist_dir: Path) -> bool:
     return all_ok
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="git-sync release packaging, build, and distribution hygiene validator."
     )

@@ -3,7 +3,6 @@ Unit tests for git-sync autostash automation, dirty tree preservation, and unsta
 """
 
 import json
-import os
 import sys
 import tempfile
 import unittest
@@ -16,7 +15,6 @@ from git_sync.cli import main
 from git_sync.config import GitSyncConfig, load_config
 from git_sync.core import (
     check_repo_dirty,
-    inspect_repo,
     pull_repo,
     restore_stash,
     run_git,
@@ -108,11 +106,11 @@ class TestGitAutostash(unittest.TestCase):
         (repo / "new_untracked.txt").write_text("new file\n")
 
         # Verify dirty
-        is_dirty, files = check_repo_dirty(str(repo))
+        is_dirty, _files = check_repo_dirty(str(repo))
         self.assertTrue(is_dirty)
 
         # Stash
-        stash_ok, tag, err = stash_changes(str(repo))
+        stash_ok, _tag, err = stash_changes(str(repo))
         self.assertTrue(stash_ok)
         self.assertIsNone(err)
 

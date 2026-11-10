@@ -8,7 +8,6 @@ import json
 import os
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -17,20 +16,14 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from git_sync.cli import main
-from git_sync.config import GitSyncConfig, load_config
 from git_sync.core import (
     BulkActionItem,
-    BulkCache,
-    DEFAULT_ROOT,
-    DEFAULT_WORKERS,
     ProgressIndicator,
     TelemetryBenchmark,
     check_repo_dirty,
     format_bulk_action_preview,
-    inspect_repo,
     prompt_bulk_confirmation,
     pull_repo,
-    push_repo,
     resolve_divergence,
     run_git,
 )
@@ -556,8 +549,34 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
 
         return remote_dir, seed_dir, local_dir
 
+    def test_preview_json_preserves_existing_warning_values(self):
+        from git_sync.ui.formatters import legacy_preview_item
+
+        warnings = [
+            "Dirty working tree (2 file(s)) - autostash enabled",
+            "3 auxiliary branch(es) pending",
+            "Shallow repository",
+            "Git LFS: 4 object(s) pending download",
+            "Dirty working tree: 2 file(s)",
+            "Protected branch: main",
+            "Force push (--force)",
+            "1 auxiliary branch(es) pending push (feature (+1))",
+        ]
+        item = {"warnings": warnings}
+        self.assertEqual(legacy_preview_item(item)["warnings"], [
+            "Árvore suja (2 arquivo(s)) - autostash ativado",
+            "3 branch(es) secundária(s) pendente(s)",
+            "Repositório raso (shallow)",
+            "Git LFS: 4 objeto(s) pendente(s) de download",
+            "Árvore suja: 2 arquivo(s)",
+            "Branch protegida: main",
+            "Push forçado (--force)",
+            "1 branch(es) secundária(s) pendente(s) de envio (feature (+1))",
+        ])
+        self.assertEqual(item["warnings"], warnings)
+
     def test_cli_pull_preview_mode_text_and_json(self):
-        remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
+        _remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
         # Fetch remote updates
         run_git(str(local_dir), ["fetch"])
 
@@ -567,7 +586,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
             exit_code = main(["pull", "repo1", "--root", str(self.root), "--preview"])
         self.assertEqual(exit_code, 0)
         out = stdout_capture.getvalue()
-        self.assertIn("PRÉVIA DE PULL EM LOTE", out)
+        self.assertIn("BULK PULL PREVIEW", out)
         self.assertIn("repo1 [main] ↳ PULL (ff-only)", out)
 
         # INVARIANT: HEAD MUST NOT change during preview mode
@@ -588,7 +607,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
         self.assertEqual(parsed["items"][0]["behind"], 1)
 
     def test_cli_pull_confirm_interactive_denied_aborts(self):
-        remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
+        _remote_dir, _seed_dir, local_dir = self._setup_repos_with_remote()
         run_git(str(local_dir), ["fetch"])
         head_before = run_git(str(local_dir), ["rev-parse", "HEAD"]).stdout.strip()
 
@@ -599,7 +618,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         out = stdout_capture.getvalue()
-        self.assertIn("PRÉVIA DE PULL EM LOTE", out)
+        self.assertIn("BULK PULL PREVIEW", out)
         self.assertIn("Operação cancelada pelo usuário.", out)
 
         # INVARIANT: Repository MUST NOT be modified when confirmation is denied
@@ -607,7 +626,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
         self.assertEqual(head_before, head_after)
 
     def test_cli_pull_confirm_interactive_accepted_executes_mutation(self):
-        remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
+        _remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
         run_git(str(local_dir), ["fetch"])
         seed_head = run_git(str(seed_dir), ["rev-parse", "HEAD"]).stdout.strip()
 
@@ -618,7 +637,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         out = stdout_capture.getvalue()
-        self.assertIn("PRÉVIA DE PULL EM LOTE", out)
+        self.assertIn("BULK PULL PREVIEW", out)
         self.assertIn("✅ [repo1]", out)
 
         # INVARIANT: Mutation MUST be applied upon confirmation
@@ -626,7 +645,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
         self.assertEqual(head_after, seed_head)
 
     def test_cli_pull_confirm_yes_flag_bypasses_prompt(self):
-        remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
+        _remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
         run_git(str(local_dir), ["fetch"])
         seed_head = run_git(str(seed_dir), ["rev-parse", "HEAD"]).stdout.strip()
 
@@ -642,7 +661,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
         self.assertEqual(input_mock.call_count, 0)
 
     def test_cli_pull_confirm_json_without_yes_returns_error(self):
-        remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()
+        _remote_dir, _seed_dir, local_dir = self._setup_repos_with_remote()
         run_git(str(local_dir), ["fetch"])
 
         stdout_capture = io.StringIO()
@@ -671,7 +690,7 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
             exit_code = main(["push", "push_repo", "--root", str(self.root), "--preview"])
         self.assertEqual(exit_code, 0)
         out = stdout_capture.getvalue()
-        self.assertIn("PRÉVIA DE ENVIO EM LOTE", out)
+        self.assertIn("BULK PUSH PREVIEW", out)
         self.assertIn("push_repo [main] ↳ PUSH", out)
 
         # 2. Confirm push denied

@@ -3,12 +3,11 @@ Configuration loader and profile resolver for git-sync.
 Handles persistent workspace configurations via .git-sync.json.
 """
 
-from dataclasses import dataclass, field
-import fnmatch
 import json
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from git_sync.core import (
     DEFAULT_DISK_LATENCY_THRESHOLD,
@@ -22,12 +21,12 @@ from git_sync.core import (
 CONFIG_FILENAME = ".git-sync.json"
 
 
-def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """
     Recursively deep-merge two configuration dictionaries.
     # INVARIANT: Child dictionaries are merged recursively; scalar values and lists at higher precedence override base.
     """
-    merged: Dict[str, Any] = dict(base)
+    merged: dict[str, Any] = dict(base)
     for k, v in override.items():
         if k in merged and isinstance(merged[k], dict) and isinstance(v, dict):
             merged[k] = deep_merge(merged[k], v)
@@ -40,7 +39,7 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
     return merged
 
 
-DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
+DEFAULT_CONFIG_TEMPLATE: dict[str, Any] = {
     "workers": "auto",
     "auto_tune": True,
     "timeout": DEFAULT_TIMEOUT,
@@ -78,7 +77,7 @@ DEFAULT_CONFIG_TEMPLATE: Dict[str, Any] = {
 }
 
 
-def get_default_config_path(global_config: bool = False, custom_path: Optional[str] = None) -> str:
+def get_default_config_path(global_config: bool = False, custom_path: str | None = None) -> str:
     """Determine target configuration file path for init or edit operations."""
     if custom_path:
         return str(Path(custom_path).expanduser().resolve())
@@ -90,10 +89,10 @@ def get_default_config_path(global_config: bool = False, custom_path: Optional[s
 
 
 def init_config_file(
-    target_path: Optional[str] = None,
+    target_path: str | None = None,
     global_config: bool = False,
-    root: Optional[str] = None,
-) -> Dict[str, Any]:
+    root: str | None = None,
+) -> dict[str, Any]:
     """
     Initialize a configuration template file if missing without clobbering existing configuration.
     # INVARIANT: Preserves existing files idempotently and generates valid zero-dependency JSON templates.
@@ -145,13 +144,13 @@ class GitSyncConfig:
     timeout: int = DEFAULT_TIMEOUT
     disk_latency_threshold: float = DEFAULT_DISK_LATENCY_THRESHOLD
     network_latency_threshold: float = DEFAULT_NETWORK_LATENCY_THRESHOLD
-    exclude: List[str] = field(default_factory=list)
-    groups: List[str] = field(default_factory=list)
-    sources: List[str] = field(default_factory=lambda: ["defaults"])
+    exclude: list[str] = field(default_factory=list)
+    groups: list[str] = field(default_factory=list)
+    sources: list[str] = field(default_factory=lambda: ["defaults"])
     pull_ff_only: bool = True
     pull_sync_branches: bool = True
     pull_all: bool = False
-    pull_strategy: Optional[str] = None
+    pull_strategy: str | None = None
     pull_autostash: bool = True
     pull_dry_run: bool = False
     pull_confirm: bool = False
@@ -163,8 +162,8 @@ class GitSyncConfig:
     push_sync_branches: bool = False
     push_confirm: bool = False
     push_all: bool = False
-    push_branch: Optional[str] = None
-    push_protected_branches: List[str] = field(default_factory=lambda: ["main", "master", "release/*", "production", "prod"])
+    push_branch: str | None = None
+    push_protected_branches: list[str] = field(default_factory=lambda: ["main", "master", "release/*", "production", "prod"])
     push_block_protected: bool = False
     push_allow_protected: bool = False
     push_force: bool = False
@@ -183,15 +182,15 @@ class GitSyncConfig:
     use_cache: bool = True
     retries: int = 2
     preflight: bool = False
-    remote: Optional[str] = None
-    pull_remote: Optional[str] = None
-    push_remote: Optional[str] = None
-    max_tokens: Optional[int] = None
-    active_profile: Optional[str] = None
-    config_path: Optional[str] = None
-    available_profiles: List[str] = field(default_factory=list)
+    remote: str | None = None
+    pull_remote: str | None = None
+    push_remote: str | None = None
+    max_tokens: int | None = None
+    active_profile: str | None = None
+    config_path: str | None = None
+    available_profiles: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert configuration to structured JSON-serializable dictionary."""
         return {
             "root": self.root,
@@ -255,7 +254,7 @@ class GitSyncConfig:
         }
 
 
-def find_config_file(custom_path: Optional[str] = None) -> Optional[str]:
+def find_config_file(custom_path: str | None = None) -> str | None:
     """
     Locate configuration file following standard precedence:
     1. Explicit custom path (must exist or raises FileNotFoundError)
@@ -295,7 +294,7 @@ def find_config_file(custom_path: Optional[str] = None) -> Optional[str]:
     return None
 
 
-def load_config_file(path: str) -> Dict[str, Any]:
+def load_config_file(path: str) -> dict[str, Any]:
     """
     Load and parse a JSON configuration file.
     Raises ValueError on syntax or type invalidity, OSError on read failure.
@@ -315,10 +314,10 @@ def load_config_file(path: str) -> Dict[str, Any]:
 
 
 def resolve_config(
-    data: Optional[Dict[str, Any]] = None,
-    profile_name: Optional[str] = None,
-    config_path: Optional[str] = None,
-    sources: Optional[List[str]] = None,
+    data: dict[str, Any] | None = None,
+    profile_name: str | None = None,
+    config_path: str | None = None,
+    sources: list[str] | None = None,
 ) -> GitSyncConfig:
     """
     Merge raw configuration dictionary, apply workspace profile inheritance, and validate types.
@@ -328,20 +327,20 @@ def resolve_config(
     if not isinstance(cfg_data, dict):
         raise ValueError(f"Configuration data must be a dictionary, got {type(cfg_data).__name__}")
 
-    effective_sources: List[str] = list(sources) if sources is not None else ["defaults"]
+    effective_sources: list[str] = list(sources) if sources is not None else ["defaults"]
     if config_path and config_path not in effective_sources:
         effective_sources.append(config_path)
 
     # Extract available profiles
     profiles_raw = cfg_data.get("profiles")
-    available_profiles: List[str] = []
+    available_profiles: list[str] = []
     if isinstance(profiles_raw, dict):
-        available_profiles = sorted(list(profiles_raw.keys()))
+        available_profiles = sorted(profiles_raw.keys())
     elif profiles_raw is not None:
         raise ValueError(f"'profiles' must be a dictionary, got {type(profiles_raw).__name__}")
 
     # Determine targeted profile
-    target_profile: Optional[str] = None
+    target_profile: str | None = None
     if profile_name:
         if not profiles_raw or profile_name not in profiles_raw:
             raise ValueError(f"Profile '{profile_name}' not found in configuration")
@@ -355,7 +354,7 @@ def resolve_config(
         target_profile = "default"
 
     # Merge base configuration with profile overrides using deep_merge
-    combined: Dict[str, Any] = {}
+    combined: dict[str, Any] = {}
     for k, v in cfg_data.items():
         if k not in ("profiles", "default_profile"):
             combined[k] = v.copy() if isinstance(v, dict) else v
@@ -437,7 +436,7 @@ def resolve_config(
 
     # Parse pull section & flags
     pull_raw = combined.get("pull")
-    pull_cfg: Dict[str, Any] = pull_raw if isinstance(pull_raw, dict) else {}
+    pull_cfg: dict[str, Any] = pull_raw if isinstance(pull_raw, dict) else {}
     pull_ff_only = bool(pull_cfg.get("ff_only", combined.get("ff_only", True)))
     pull_sync_branches = bool(pull_cfg.get("sync_branches", combined.get("sync_branches", True)))
     pull_all = bool(pull_cfg.get("all", combined.get("pull_all", False)))
@@ -460,7 +459,7 @@ def resolve_config(
 
     # Parse push section & flags
     push_raw = combined.get("push")
-    push_cfg: Dict[str, Any] = push_raw if isinstance(push_raw, dict) else {}
+    push_cfg: dict[str, Any] = push_raw if isinstance(push_raw, dict) else {}
     push_dry_run = bool(push_cfg.get("dry_run", combined.get("dry_run", False)))
     push_sync_branches = bool(push_cfg.get("sync_branches", combined.get("push_sync_branches", False)))
     push_confirm = bool(push_cfg.get("confirm", combined.get("push_confirm", confirm)))
@@ -485,7 +484,7 @@ def resolve_config(
 
     # Parse status section & flags
     status_raw = combined.get("status")
-    status_cfg: Dict[str, Any] = status_raw if isinstance(status_raw, dict) else {}
+    status_cfg: dict[str, Any] = status_raw if isinstance(status_raw, dict) else {}
     status_no_fetch = bool(status_cfg.get("no_fetch", combined.get("no_fetch", False)))
     status_pending = bool(status_cfg.get("pending", combined.get("pending", False)))
     status_compact = bool(status_cfg.get("compact", combined.get("compact", False)))
@@ -503,8 +502,7 @@ def resolve_config(
     retries_raw = combined.get("retries", 2)
     try:
         retries = int(retries_raw)
-        if retries < 0:
-            retries = 0
+        retries = max(retries, 0)
     except (TypeError, ValueError):
         retries = 2
     preflight = bool(combined.get("preflight", False))
@@ -575,8 +573,8 @@ def resolve_config(
 
 
 def load_config(
-    config_path: Optional[str] = None,
-    profile_name: Optional[str] = None,
+    config_path: str | None = None,
+    profile_name: str | None = None,
 ) -> GitSyncConfig:
     """
     Discover, load, and hierarchically deep-merge configuration across precedence layers:
@@ -588,9 +586,9 @@ def load_config(
         if env_prof and env_prof.strip():
             profile_name = env_prof.strip()
 
-    sources: List[str] = ["defaults"]
-    accumulated: Dict[str, Any] = {}
-    last_file_path: Optional[str] = None
+    sources: list[str] = ["defaults"]
+    accumulated: dict[str, Any] = {}
+    last_file_path: str | None = None
     files_loaded = 0
 
     # Layer 1: XDG Base Directory specification ($XDG_CONFIG_HOME/git-sync/config.json or ~/.config/git-sync/config.json)
@@ -653,7 +651,7 @@ def load_config(
                     files_loaded += 1
 
     # Layer 4: Environment Variables (GIT_SYNC_*)
-    env_overrides: Dict[str, Any] = {}
+    env_overrides: dict[str, Any] = {}
     if "GIT_SYNC_ROOT" in os.environ and os.environ["GIT_SYNC_ROOT"].strip():
         env_overrides["root"] = os.environ["GIT_SYNC_ROOT"].strip()
     if "GIT_SYNC_WORKERS" in os.environ and os.environ["GIT_SYNC_WORKERS"].strip():

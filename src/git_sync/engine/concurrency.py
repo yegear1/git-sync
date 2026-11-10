@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from git_sync.telemetry import TelemetryBenchmark
@@ -21,7 +21,7 @@ DEFAULT_NETWORK_LATENCY_THRESHOLD = 2.0
 def calculate_optimal_workers(
     repo_count: int,
     is_fetch: bool = True,
-    cpu_count: Optional[int] = None,
+    cpu_count: int | None = None,
     min_workers: int = DEFAULT_MIN_WORKERS,
     max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> int:
@@ -62,7 +62,7 @@ class AdaptiveConcurrencyController:
         self,
         repo_count: int,
         is_fetch: bool = True,
-        configured_workers: Optional[int | str] = None,
+        configured_workers: int | str | None = None,
     ) -> int:
         """
         Determine effective worker count.
@@ -120,12 +120,12 @@ class AdaptiveConcurrencyController:
 
         return max(self.min_workers, tuned)
 
-    def evaluate_telemetry(self, benchmark: TelemetryBenchmark) -> List[Dict[str, Any]]:
+    def evaluate_telemetry(self, benchmark: TelemetryBenchmark) -> list[dict[str, Any]]:
         """
         Evaluate a TelemetryBenchmark against latency thresholds and concurrency saturation.
         Attaches structured alerts to the benchmark.
         """
-        alerts: List[Dict[str, Any]] = []
+        alerts: list[dict[str, Any]] = []
         total = benchmark.total_repos
         if total <= 0:
             return alerts

@@ -4,15 +4,12 @@ Automated unit tests for performance telemetry, bulk cache optimizations, and mu
 
 import io
 import json
-import os
-import shutil
 import sys
 import tempfile
 import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 # Ensure src is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -20,14 +17,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from git_sync.cli import main
 from git_sync.core import (
     BulkCache,
-    DEFAULT_ROOT,
-    DEFAULT_WORKERS,
     TelemetryBenchmark,
     get_repo_remotes,
-    get_submodules_status,
-    get_worktree_info,
     inspect_repo,
-    pull_repo,
     push_repo,
     run_git,
 )
@@ -155,7 +147,7 @@ class TestBulkCache(unittest.TestCase):
 
         # If .gitmodules exists
         (repo / ".gitmodules").write_text("[submodule \"vendor/lib\"]\n\tpath = vendor/lib\n\turl = https://github.com/org/lib.git\n")
-        subs_with_file = cache.get_submodules_status(str(repo))
+        cache.get_submodules_status(str(repo))
         self.assertEqual(cache.stats["misses"], 1)
 
     def test_worktree_family_bulk_population(self):

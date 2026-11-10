@@ -13,8 +13,9 @@ import stat
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any
 
 from git_sync.engine.concurrency import DEFAULT_WORKERS
 from git_sync.engine.types import DoctorSanityReport
@@ -24,12 +25,12 @@ GRADE_B_THRESHOLD_SECONDS: float = 1.50
 GRADE_C_THRESHOLD_SECONDS: float = 3.00
 
 
-def _get_git_env() -> Dict[str, str]:
+def _get_git_env() -> dict[str, str]:
     from git_sync.engine.git import get_git_env
     return get_git_env()
 
 
-def compute_latency_grade(rtt_seconds: Optional[float], ok: bool = True) -> str:
+def compute_latency_grade(rtt_seconds: float | None, ok: bool = True) -> str:
     """
     Compute latency performance grade (A/B/C/F) for remote Git handshake round-trip times.
     # INVARIANT: Failed or timed out probes unconditionally receive grade 'F'.
@@ -51,7 +52,7 @@ def compute_latency_grade(rtt_seconds: Optional[float], ok: bool = True) -> str:
     return "F"
 
 
-def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
+def inspect_github_cli(timeout: int = 3) -> dict[str, Any]:
     """
     Inspect local GitHub CLI (gh) installation, authentication state, and token expiry status.
     # INVARIANT: Uses short execution timeout to prevent blocking during doctor checks.
@@ -75,8 +76,7 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
     try:
         proc = subprocess.run(
             [gh_bin, "auth", "status"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=timeout,
             env=_get_git_env(),
@@ -97,10 +97,10 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
             is_expired = True
 
         if proc.returncode == 0 and not is_expired:
-            account: Optional[str] = None
-            host: Optional[str] = None
-            protocol: Optional[str] = None
-            scopes: List[str] = []
+            account: str | None = None
+            host: str | None = None
+            protocol: str | None = None
+            scopes: list[str] = []
 
             m_account = re.search(r"account\s+([a-zA-Z0-9_\-]+)", combined, re.IGNORECASE)
             if m_account:
@@ -179,7 +179,7 @@ def inspect_github_cli(timeout: int = 3) -> Dict[str, Any]:
         }
 
 
-def inspect_token_env(env: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
+def inspect_token_env(env: Mapping[str, str] | None = None) -> dict[str, Any]:
     """
     Inspect environment variables for Git authentication tokens (GITHUB_TOKEN, GH_TOKEN, GITLAB_TOKEN)
     and validate format without leaking secret token values.
@@ -187,8 +187,8 @@ def inspect_token_env(env: Optional[Mapping[str, str]] = None) -> Dict[str, Any]
     """
     eff_env = env if env is not None else os.environ
     token_vars = ["GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "BITBUCKET_TOKEN"]
-    present_vars: List[str] = []
-    primary_val: Optional[str] = None
+    present_vars: list[str] = []
+    primary_val: str | None = None
 
     for var in token_vars:
         val = eff_env.get(var)
@@ -249,7 +249,7 @@ def inspect_token_env(env: Optional[Mapping[str, str]] = None) -> Dict[str, Any]
 def _resolve_credential_helper_binary(
     helper_type: str,
     raw_spec: str,
-) -> Optional[str]:
+) -> str | None:
     """
     Resolve the executable path for an OS Git credential helper (libsecret, osxkeychain, wincred, manager).
     # INVARIANT: Checks explicit file paths, PATH, and standard Git exec-path directories without spawning subshells.
@@ -299,13 +299,13 @@ def _resolve_credential_helper_binary(
 
 
 def inspect_credential_helpers(
-    helpers: Optional[List[str]] = None,
+    helpers: list[str] | None = None,
     timeout: int = 3,
-    gh_info: Optional[Dict[str, Any]] = None,
-    env: Optional[Dict[str, str]] = None,
-    platform: Optional[str] = None,
-    home_dir: Optional[Path] = None,
-) -> Dict[str, Any]:
+    gh_info: dict[str, Any] | None = None,
+    env: dict[str, str] | None = None,
+    platform: str | None = None,
+    home_dir: Path | None = None,
+) -> dict[str, Any]:
     """
     Perform fine-grained triage of configured Git credential helpers (libsecret, osxkeychain,
     wincred, manager, store, cache, gh) and detect expired cache sockets, missing helper
@@ -318,15 +318,14 @@ def inspect_credential_helpers(
     eff_platform = (platform or sys.platform).lower()
     eff_home = Path(home_dir) if home_dir is not None else Path.home()
 
-    raw_list: List[str] = []
+    raw_list: list[str] = []
     if helpers is not None:
         raw_list = list(helpers)
     else:
         try:
             p_helper = subprocess.run(
                 ["git", "config", "--get-all", "credential.helper"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
                 timeout=timeout,
                 env=eff_env if eff_env is not None else _get_git_env(),
@@ -338,9 +337,9 @@ def inspect_credential_helpers(
 
     token_report = inspect_token_env(env=eff_env)
 
-    warnings: List[str] = []
-    errors: List[str] = []
-    suggestions: List[str] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+    suggestions: list[str] = []
 
     if token_report.get("warning"):
         warnings.append(token_report["warning"])
@@ -348,7 +347,7 @@ def inspect_credential_helpers(
         suggestions.append(token_report["suggestion"])
 
     # Compute effective helper chain (an empty string "" in credential.helper resets prior entries)
-    effective_raw: List[str] = []
+    effective_raw: list[str] = []
     chain_reset = False
     for raw_item in raw_list:
         stripped = raw_item.strip()
@@ -358,14 +357,14 @@ def inspect_credential_helpers(
         else:
             effective_raw.append(stripped)
 
-    helper_reports: List[Dict[str, Any]] = []
-    expired_caches: List[str] = []
-    missing_binaries: List[str] = []
-    insecure_stores: List[str] = []
+    helper_reports: list[dict[str, Any]] = []
+    expired_caches: list[str] = []
+    missing_binaries: list[str] = []
+    insecure_stores: list[str] = []
 
     for h_raw in effective_raw:
         h_low = h_raw.lower()
-        entry: Dict[str, Any] = {
+        entry: dict[str, Any] = {
             "raw": h_raw,
             "type": "custom",
             "status": "HEALTHY",
@@ -390,7 +389,7 @@ def inspect_credential_helpers(
                 sock_candidates.append(eff_home / ".cache" / "git" / "credential" / "socket")
                 sock_candidates.append(eff_home / ".git-credential-cache" / "socket")
 
-            existing_sock: Optional[Path] = None
+            existing_sock: Path | None = None
             for cand in sock_candidates:
                 if cand.exists():
                     existing_sock = cand
@@ -469,7 +468,7 @@ def inspect_credential_helpers(
                     cfg_base / "git" / "credentials",
                 ]
 
-            existing_store: Optional[Path] = None
+            existing_store: Path | None = None
             for cand in store_candidates:
                 if cand.is_file():
                     existing_store = cand
@@ -499,7 +498,7 @@ def inspect_credential_helpers(
                 except Exception:
                     entry["insecure_permissions"] = False
 
-                hosts: List[str] = []
+                hosts: list[str] = []
                 entries_count = 0
                 has_invalid_token = False
                 try:
@@ -660,7 +659,7 @@ def inspect_credential_helpers(
             entry["type"] = "custom"
             bin_path = _resolve_credential_helper_binary(h_raw, h_raw)
             entry["binary_path"] = bin_path
-            if bin_path is None and (h_raw.startswith("/") or h_raw.startswith("~") or h_raw.startswith("!")):
+            if bin_path is None and (h_raw.startswith(("/", "~", "!"))):
                 entry["status"] = "MISSING_BINARY"
                 entry["ok"] = False
                 missing_binaries.append(h_raw)
@@ -691,14 +690,14 @@ def inspect_credential_helpers(
 
 def probe_remote_reachability(
     remote_url: str,
-    sample_repo: Optional[str] = None,
+    sample_repo: str | None = None,
     timeout: int = 5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Probe single remote reachability, measuring handshake RTT and computing latency grade.
     # INVARIANT: Uses GIT_TERMINAL_PROMPT=0 to guarantee probing never hangs in automated environments.
     """
-    from git_sync.engine.git import run_git, diagnose_git_error
+    from git_sync.engine.git import diagnose_git_error, run_git
 
     is_ssh = "@" in remote_url or remote_url.startswith("ssh://")
     protocol = "ssh" if is_ssh else "https"
@@ -786,8 +785,8 @@ def probe_remote_reachability(
 
 def check_credentials_sanity(
     root_dir: str,
-    repos: Optional[List[str]] = None,
-    group: Optional[str] = None,
+    repos: list[str] | None = None,
+    group: str | None = None,
     timeout: int = 5,
     test_remotes: bool = True,
     max_remotes_to_test: int = 15,
@@ -812,13 +811,12 @@ def check_credentials_sanity(
     # 1. SSH Agent & Identities
     ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK")
     agent_status = "NO_AGENT"
-    identities: List[str] = []
+    identities: list[str] = []
 
     try:
         p_ssh_add = subprocess.run(
             ["ssh-add", "-l"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=timeout,
             env=_get_git_env(),
@@ -837,7 +835,7 @@ def check_credentials_sanity(
         agent_status = "NO_AGENT"
 
     # 2. Local SSH Key Files
-    ssh_keys_found: List[str] = []
+    ssh_keys_found: list[str] = []
     ssh_dir = Path.home() / ".ssh"
     if ssh_dir.is_dir():
         for key_name in ("id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"):
@@ -846,13 +844,12 @@ def check_credentials_sanity(
                 ssh_keys_found.append(key_name)
 
     # 3. Credential Helpers & Tokens
-    raw_helper_lines: List[str] = []
-    credential_helpers: List[str] = []
+    raw_helper_lines: list[str] = []
+    credential_helpers: list[str] = []
     try:
         p_helper = subprocess.run(
             ["git", "config", "--get-all", "credential.helper"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=timeout,
             env=_get_git_env(),
@@ -885,8 +882,8 @@ def check_credentials_sanity(
             target_repos = [r for r in target_repos if os.path.relpath(r, root_dir).startswith(group)]
 
     # 4. Multi-Remote Matrix & Reachability Probing
-    multi_remote_matrix: Dict[str, Any] = {}
-    remotes_tested: Dict[str, Dict[str, Any]] = {}
+    multi_remote_matrix: dict[str, Any] = {}
+    remotes_tested: dict[str, dict[str, Any]] = {}
     if test_remotes:
         multi_remote_matrix = audit_multi_remote_matrix(
             root_dir=root_dir,
@@ -907,12 +904,12 @@ def check_credentials_sanity(
         workers=workers,
     )
 
-    warnings: List[str] = []
-    errors: List[str] = []
-    suggestions: List[str] = []
+    warnings: list[str] = []
+    errors: list[str] = []
+    suggestions: list[str] = []
 
     has_ssh_remotes = any("@" in u or u.startswith("ssh://") for u in remotes_tested)
-    has_http_remotes = any(u.startswith("http://") or u.startswith("https://") for u in remotes_tested)
+    has_http_remotes = any(u.startswith(("http://", "https://")) for u in remotes_tested)
 
     ssh_mux_host = "github.com"
     for u in remotes_tested:
@@ -1062,7 +1059,7 @@ def check_credentials_sanity(
 
     # 8. Git LFS audit
     git_lfs = inspect_git_lfs(timeout=timeout)
-    lfs_repos: List[str] = []
+    lfs_repos: list[str] = []
     for r_path in target_repos:
         l_info = get_lfs_info(r_path, timeout=timeout)
         if l_info.get("has_lfs"):

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -15,17 +15,17 @@ class ClassifiedCommit:
     subject: str
     body: str = ""
     commit_type: str = "other"
-    scope: Optional[str] = None
+    scope: str | None = None
     description: str = ""
     is_breaking: bool = False
     category: str = "Changed"
-    breaking_note: Optional[str] = None
+    breaking_note: str | None = None
 
     @property
     def type(self) -> str:
         return self.commit_type
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "hash": self.hash,
             "subject": self.subject,
@@ -94,7 +94,7 @@ def classify_commit(hash_val: str, subject: str, body: str = "") -> ClassifiedCo
     clean_subj = subject.strip()
     clean_body = body.strip()
     is_breaking = False
-    breaking_note: Optional[str] = None
+    breaking_note: str | None = None
 
     m_body_break = BREAKING_CHANGE_REGEX.search(clean_body)
     if m_body_break:
@@ -160,7 +160,7 @@ def classify_commit(hash_val: str, subject: str, body: str = "") -> ClassifiedCo
     )
 
 
-def parse_commit_log(log_output: str) -> List[ClassifiedCommit]:
+def parse_commit_log(log_output: str) -> list[ClassifiedCommit]:
     """
     Parse git log output formatted with %h%x00%s%x00%b%x1f into a list of ClassifiedCommit objects.
     # INVARIANT: Uses ASCII unit separator 0x1F to delimit commits and null byte 0x00 to delimit fields.
@@ -168,7 +168,7 @@ def parse_commit_log(log_output: str) -> List[ClassifiedCommit]:
     if not log_output or not log_output.strip():
         return []
 
-    commits: List[ClassifiedCommit] = []
+    commits: list[ClassifiedCommit] = []
     records = log_output.split("\x1f")
     for rec in records:
         rec_clean = rec.strip("\r\n")
@@ -186,12 +186,12 @@ def parse_commit_log(log_output: str) -> List[ClassifiedCommit]:
     return commits
 
 
-def summarize_commit_categories(commits: List[ClassifiedCommit]) -> Dict[str, int]:
+def summarize_commit_categories(commits: list[ClassifiedCommit]) -> dict[str, int]:
     """Summarize commit counts per Keep-a-Changelog category in canonical order."""
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
     for c in commits:
         counts[c.category] = counts.get(c.category, 0) + 1
-    sorted_counts: Dict[str, int] = {}
+    sorted_counts: dict[str, int] = {}
     for cat in CHANGELOG_CATEGORY_ORDER:
         if cat in counts:
             sorted_counts[cat] = counts[cat]
@@ -201,7 +201,7 @@ def summarize_commit_categories(commits: List[ClassifiedCommit]) -> Dict[str, in
     return sorted_counts
 
 
-def format_changelog_summary(categories: Dict[str, int]) -> str:
+def format_changelog_summary(categories: dict[str, int]) -> str:
     """Format category count dictionary into a concise human-readable summary string."""
     if not categories:
         return ""
@@ -215,7 +215,7 @@ def format_changelog_summary(categories: Dict[str, int]) -> str:
     return ", ".join(parts)
 
 
-def get_repo_commits(repo_path: str, revision_range: str, timeout: int = 5) -> List[ClassifiedCommit]:
+def get_repo_commits(repo_path: str, revision_range: str, timeout: int = 5) -> list[ClassifiedCommit]:
     """Retrieve and classify commits in the specified revision range using git log formatting."""
     from git_sync.engine.git import run_git
 
@@ -228,28 +228,24 @@ def get_repo_commits(repo_path: str, revision_range: str, timeout: int = 5) -> L
 
 def get_repo_pending_changelog(
     repo_path: str,
-    upstream: Optional[str] = None,
+    upstream: str | None = None,
     ahead: int = 0,
     behind: int = 0,
     timeout: int = 5,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Retrieve and categorize incoming and outgoing commits between HEAD and upstream.
     Uses ahead/behind counts to avoid subshells when there are no pending changes.
     """
-    incoming_commits: List[ClassifiedCommit] = []
-    outgoing_commits: List[ClassifiedCommit] = []
+    incoming_commits: list[ClassifiedCommit] = []
+    outgoing_commits: list[ClassifiedCommit] = []
 
     up_ref = upstream or "@{u}"
 
-    if behind > 0:
-        incoming_commits = get_repo_commits(repo_path, f"HEAD..{up_ref}", timeout=timeout)
-    elif upstream is None and ahead == 0 and behind == 0:
+    if behind > 0 or upstream is None and ahead == 0 and behind == 0:
         incoming_commits = get_repo_commits(repo_path, f"HEAD..{up_ref}", timeout=timeout)
 
-    if ahead > 0:
-        outgoing_commits = get_repo_commits(repo_path, f"{up_ref}..HEAD", timeout=timeout)
-    elif upstream is None and ahead == 0 and behind == 0:
+    if ahead > 0 or upstream is None and ahead == 0 and behind == 0:
         outgoing_commits = get_repo_commits(repo_path, f"{up_ref}..HEAD", timeout=timeout)
 
     inc_cats = summarize_commit_categories(incoming_commits)

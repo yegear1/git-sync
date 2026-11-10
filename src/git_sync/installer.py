@@ -8,7 +8,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 def get_default_install_dir() -> Path:
@@ -17,7 +17,7 @@ def get_default_install_dir() -> Path:
     if xdg_bin:
         return Path(xdg_bin).expanduser().resolve()
 
-    candidates: List[Path] = [Path.home() / ".local" / "bin"]
+    candidates: list[Path] = [Path.home() / ".local" / "bin"]
 
     # Check host user home if running inside an isolated profile
     try:
@@ -77,10 +77,10 @@ def is_in_path(directory: Path) -> bool:
 
 
 def install_symlink(
-    target_dir: Optional[str] = None,
-    launcher_path: Optional[str] = None,
+    target_dir: str | None = None,
+    launcher_path: str | None = None,
     force: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Safely and idempotently install a symlink to git-sync launcher in target_dir.
     # INVARIANT: Uses atomic symlink replacement (via tempfile and os.replace)
@@ -193,8 +193,8 @@ def install_symlink(
 
 
 def uninstall_symlink(
-    target_dir: Optional[str] = None,
-) -> Dict[str, Any]:
+    target_dir: str | None = None,
+) -> dict[str, Any]:
     """Safely uninstall the git-sync global symlink."""
     target_dir_path = Path(target_dir).expanduser().resolve() if target_dir else get_default_install_dir()
     dest_link = target_dir_path / "git-sync"
@@ -232,12 +232,12 @@ def get_canonical_skill_dir() -> Path:
     return repo_root / "skills" / "git-sync"
 
 
-def get_default_skill_dirs() -> List[Path]:
+def get_default_skill_dirs() -> list[Path]:
     """
     Resolve candidate directories across Antigravity profiles and Cursor for skill discovery.
     # INVARIANT: Scans current user home and host profile homes without raising on missing paths.
     """
-    candidates: List[Path] = []
+    candidates: list[Path] = []
     seen: set[str] = set()
 
     def add_candidate(p: Path) -> None:
@@ -277,7 +277,7 @@ def get_default_skill_dirs() -> List[Path]:
         add_candidate(Path(f"/home/{user}/.cursor/skills"))
 
     # Return only candidates whose parent config directory exists or that already exist
-    valid_dirs: List[Path] = []
+    valid_dirs: list[Path] = []
     for c in candidates:
         if c.is_dir() or c.parent.is_dir():
             valid_dirs.append(c)
@@ -286,10 +286,10 @@ def get_default_skill_dirs() -> List[Path]:
 
 
 def install_agent_skills(
-    target_dirs: Optional[List[str]] = None,
+    target_dirs: list[str] | None = None,
     force: bool = False,
-    skill_src: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    skill_src: str | None = None,
+) -> list[dict[str, Any]]:
     """
     Safely deploy symlinks to the canonical git-sync skill into host agent skill directories.
     # INVARIANT: Uses atomic symlink replacement via temporary symlinks to prevent broken links.
@@ -308,7 +308,7 @@ def install_agent_skills(
     else:
         dirs_to_check = get_default_skill_dirs()
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
 
     for s_dir in dirs_to_check:
         try:
@@ -389,17 +389,17 @@ def install_agent_skills(
 
 
 def uninstall_agent_skills(
-    target_dirs: Optional[List[str]] = None,
-    skill_src: Optional[str] = None,
-) -> List[Dict[str, Any]]:
+    target_dirs: list[str] | None = None,
+    skill_src: str | None = None,
+) -> list[dict[str, Any]]:
     """Safely remove git-sync agent skill symlinks from host skill directories."""
-    src_path = Path(skill_src).expanduser().resolve() if skill_src else get_canonical_skill_dir()
+    Path(skill_src).expanduser().resolve() if skill_src else get_canonical_skill_dir()
     if target_dirs:
         dirs_to_check = [Path(d).expanduser().resolve() for d in target_dirs]
     else:
         dirs_to_check = get_default_skill_dirs()
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for s_dir in dirs_to_check:
         dest_link = s_dir / "git-sync"
         if not dest_link.is_symlink() and not dest_link.exists():
@@ -457,8 +457,8 @@ def generate_completion_script(shell: str) -> str:
 
 def install_completion(
     shell: str,
-    target_dir: Optional[str] = None,
-) -> Dict[str, Any]:
+    target_dir: str | None = None,
+) -> dict[str, Any]:
     """Install autocompletion script to user's shell completion directory."""
     try:
         script = generate_completion_script(shell)

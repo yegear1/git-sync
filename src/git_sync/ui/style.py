@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import re
 import sys
-from typing import Any, Optional
+from typing import Any
 
 ANSI_RESET = "\033[0m"
 ANSI_BOLD = "\033[1m"
@@ -34,7 +34,7 @@ _COLOR_CODES = {
 }
 
 
-def should_use_color(stream: Optional[Any] = None, force: Optional[bool] = None) -> bool:
+def should_use_color(stream: Any | None = None, force: bool | None = None) -> bool:
     """
     Determine whether ANSI color escape sequences should be emitted.
     # INVARIANT: NO_COLOR (when present and non-empty) unconditionally disables ANSI colors unless force=True.
@@ -67,7 +67,7 @@ class AnsiStyler:
     Terminal ANSI styling helper that gracefully degrades to plain text when color is disabled.
     """
 
-    def __init__(self, enabled: Optional[bool] = None, stream: Optional[Any] = None) -> None:
+    def __init__(self, enabled: bool | None = None, stream: Any | None = None) -> None:
         self.stream = stream if stream is not None else sys.stdout
         self.enabled = should_use_color(stream=self.stream, force=enabled)
 
@@ -108,8 +108,8 @@ class AnsiStyler:
 def style_text(
     text: str,
     *styles: str,
-    enabled: Optional[bool] = None,
-    stream: Optional[Any] = None,
+    enabled: bool | None = None,
+    stream: Any | None = None,
 ) -> str:
     """Convenience function to style text with ANSI codes when enabled."""
     return AnsiStyler(enabled=enabled, stream=stream).style(text, *styles)
@@ -122,8 +122,8 @@ _DIFF_SUMMARY_DELETE_RE = re.compile(r"(\d+\s+deletions?\(-\))")
 
 def format_diff_stat(
     stat_text: str,
-    enabled: Optional[bool] = None,
-    stream: Optional[Any] = None,
+    enabled: bool | None = None,
+    stream: Any | None = None,
 ) -> str:
     """
     Format `git diff --stat` output or unified diff lines with ANSI colors:
@@ -175,7 +175,7 @@ def format_diff_stat(
             continue
 
         # Unified diff lines fallback (+ / - lines)
-        if content.startswith("+++") or content.startswith("---"):
+        if content.startswith(("+++", "---")):
             formatted_lines.append(f"{styler.bold(content)}{ending}")
         elif content.startswith("+"):
             formatted_lines.append(f"{styler.green(content)}{ending}")

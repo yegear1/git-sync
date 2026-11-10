@@ -7,37 +7,36 @@ from __future__ import annotations
 import errno
 import fnmatch
 import os
-import shutil
 import socket
 import stat
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 
-def _get_git_env() -> Dict[str, str]:
+def _get_git_env() -> dict[str, str]:
     from git_sync.engine.git import get_git_env
     return get_git_env()
 
 
-def _diagnose_git_error(err_text: str, remote_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def _diagnose_git_error(err_text: str, remote_url: str | None = None) -> dict[str, Any] | None:
     from git_sync.engine.git import diagnose_git_error
     return diagnose_git_error(err_text, remote_url)
 
 
 def _parse_ssh_config_content(
     content: str, host: str = "github.com"
-) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None, str | None]:
     """
     Parse SSH configuration text and extract ControlMaster, ControlPath, and ControlPersist for target host.
     Follows OpenSSH first-match-wins semantics across matching Host blocks.
     # INVARIANT: Options prior to the first Host block apply globally to all hosts.
     """
-    control_master: Optional[str] = None
-    control_path: Optional[str] = None
-    control_persist: Optional[str] = None
+    control_master: str | None = None
+    control_path: str | None = None
+    control_persist: str | None = None
 
     current_matches = True
     for raw_line in content.splitlines():
@@ -82,11 +81,11 @@ def _parse_ssh_config_content(
 
 
 def inspect_ssh_config(
-    config_path: Optional[Path | str] = None,
+    config_path: Path | str | None = None,
     host: str = "github.com",
     query_ssh_g: bool = True,
     timeout: int = 2,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Inspect ~/.ssh/config and evaluate OpenSSH effective configuration for socket
     reuse directives (ControlMaster, ControlPath, ControlPersist).
@@ -97,9 +96,9 @@ def inspect_ssh_config(
     resolved_path = Path(config_path) if config_path else (Path.home() / ".ssh" / "config")
     exists = resolved_path.is_file()
 
-    control_master: Optional[str] = None
-    control_path: Optional[str] = None
-    control_persist: Optional[str] = None
+    control_master: str | None = None
+    control_path: str | None = None
+    control_persist: str | None = None
 
     if exists:
         try:
@@ -144,14 +143,14 @@ def inspect_ssh_config(
         control_master and control_master.lower() in ("auto", "yes", "autoask")
     )
 
-    socket_dir: Optional[str] = None
+    socket_dir: str | None = None
     socket_dir_exists = False
     if control_path and control_path.lower() != "none":
         expanded = os.path.expanduser(control_path)
         socket_dir = os.path.dirname(expanded)
         socket_dir_exists = os.path.isdir(socket_dir) if socket_dir else True
 
-    recommendation: Optional[str] = None
+    recommendation: str | None = None
     if not is_enabled:
         recommendation = (
             "Enable SSH multiplexing in ~/.ssh/config to speed up multi-repository Git operations:\n"
@@ -183,7 +182,7 @@ def inspect_ssh_config(
     }
 
 
-def inspect_ssh_control_socket(sock_path: str | Path) -> Dict[str, Any]:
+def inspect_ssh_control_socket(sock_path: str | Path) -> dict[str, Any]:
     """
     Inspect an SSH ControlMaster socket path and determine if it is ACTIVE, STALE, or CORRUPTED.
 
@@ -227,7 +226,7 @@ def inspect_ssh_control_socket(sock_path: str | Path) -> Dict[str, Any]:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.settimeout(0.3)
     status = "UNKNOWN"
-    err: Optional[str] = None
+    err: str | None = None
     try:
         sock.connect(str(p))
         status = "ACTIVE"
@@ -261,18 +260,18 @@ def inspect_ssh_control_socket(sock_path: str | Path) -> Dict[str, Any]:
 
 
 def find_ssh_control_sockets(
-    socket_dir: Optional[str | Path] = None,
-    control_path_pattern: Optional[str] = None,
-    config_path: Optional[Path | str] = None,
-) -> List[Dict[str, Any]]:
+    socket_dir: str | Path | None = None,
+    control_path_pattern: str | None = None,
+    config_path: Path | str | None = None,
+) -> list[dict[str, Any]]:
     """
     Find and inspect all SSH ControlMaster unix sockets in configured or default socket directories.
 
     # INVARIANT: Probes candidate files safely and whitelists socket naming patterns to prevent
     # inspecting or touching regular SSH keys, credentials, or config files.
     """
-    dirs_to_check: List[Path] = []
-    pattern_prefix: Optional[str] = None
+    dirs_to_check: list[Path] = []
+    pattern_prefix: str | None = None
 
     if socket_dir:
         p = Path(socket_dir).expanduser()
@@ -327,7 +326,7 @@ def find_ssh_control_sockets(
     }
     ignored_extensions = (".pub", ".pem", ".key", ".conf", ".config", ".txt", ".bak", ".old")
 
-    found_sockets: List[Dict[str, Any]] = []
+    found_sockets: list[dict[str, Any]] = []
     seen_paths: set[str] = set()
 
     for d in dirs_to_check:
@@ -410,11 +409,11 @@ def close_ssh_control_socket(
 
 
 def prune_stale_ssh_control_sockets(
-    socket_dir: Optional[str | Path] = None,
-    config_path: Optional[Path | str] = None,
+    socket_dir: str | Path | None = None,
+    config_path: Path | str | None = None,
     dry_run: bool = False,
     force: bool = False,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Safely detect and prune defunct (stale) or corrupted SSH ControlMaster sockets.
     # INVARIANT: Preserves ACTIVE sockets unless force=True.
@@ -426,14 +425,14 @@ def prune_stale_ssh_control_sockets(
     stale = [s for s in sockets if s.get("status") == "STALE"]
     corrupted = [s for s in sockets if s.get("status") == "CORRUPTED"]
 
-    to_prune: List[Dict[str, Any]] = list(stale) + list(corrupted)
+    to_prune: list[dict[str, Any]] = list(stale) + list(corrupted)
     if force:
         for act in active:
             close_ssh_control_socket(act["path"])
             to_prune.append(act)
 
-    pruned: List[str] = []
-    errors: List[Dict[str, str]] = []
+    pruned: list[str] = []
+    errors: list[dict[str, str]] = []
 
     if not dry_run:
         for item in to_prune:
@@ -461,9 +460,9 @@ def prune_stale_ssh_control_sockets(
 def benchmark_ssh_multiplexing(
     remote_url: str,
     host: str = "github.com",
-    sample_repo: Optional[str] = None,
+    sample_repo: str | None = None,
     timeout: int = 10,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Measure remote fetch handshake latency with and without SSH socket multiplexing.
 
@@ -494,8 +493,7 @@ def benchmark_ssh_multiplexing(
         t0 = time.perf_counter()
         proc_no_mux = subprocess.run(
             ["git", "ls-remote", "--heads", remote_url],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
             timeout=timeout,
             env=env_no_mux,
@@ -556,19 +554,18 @@ def benchmark_ssh_multiplexing(
             f"ssh -o ControlMaster=auto -o ControlPath={sock_path} -o ControlPersist=60s -o BatchMode=yes -o ConnectTimeout=5"
         )
 
-        with_multiplexing_initial_s: Optional[float] = None
-        with_multiplexing_reused_s: Optional[float] = None
+        with_multiplexing_initial_s: float | None = None
+        with_multiplexing_reused_s: float | None = None
         supported = False
-        err_msg: Optional[str] = None
-        diag_mux: Optional[Dict[str, Any]] = None
+        err_msg: str | None = None
+        diag_mux: dict[str, Any] | None = None
 
         try:
             # First handshake (creates the master socket)
             t2 = time.perf_counter()
             proc_mux_init = subprocess.run(
                 ["git", "ls-remote", "--heads", remote_url],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
                 timeout=timeout,
                 env=env_mux,
@@ -582,8 +579,7 @@ def benchmark_ssh_multiplexing(
                 t4 = time.perf_counter()
                 proc_mux_reuse = subprocess.run(
                     ["git", "ls-remote", "--heads", remote_url],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     text=True,
                     timeout=timeout,
                     env=env_mux,
@@ -616,8 +612,8 @@ def benchmark_ssh_multiplexing(
             except Exception:
                 pass
 
-    speedup: Optional[float] = None
-    savings: Optional[float] = None
+    speedup: float | None = None
+    savings: float | None = None
     if supported and without_multiplexing_s is not None and with_multiplexing_reused_s is not None:
         if with_multiplexing_reused_s > 0:
             speedup = round(without_multiplexing_s / with_multiplexing_reused_s, 2)
@@ -641,14 +637,14 @@ def benchmark_ssh_multiplexing(
 
 
 def audit_ssh_multiplexing(
-    root_dir: Optional[str] = None,
-    repos: Optional[List[str]] = None,
-    group: Optional[str] = None,
+    root_dir: str | None = None,
+    repos: list[str] | None = None,
+    group: str | None = None,
     timeout: int = 10,
-    config_path: Optional[Path | str] = None,
+    config_path: Path | str | None = None,
     run_benchmark: bool = True,
-    target_host: Optional[str] = None,
-) -> Dict[str, Any]:
+    target_host: str | None = None,
+) -> dict[str, Any]:
     """
     Execute full SSH multiplexing diagnostic audit and latency benchmark.
     # INVARIANT: Probing strictly respects GIT_TERMINAL_PROMPT=0 and never blocks.
@@ -663,12 +659,12 @@ def audit_ssh_multiplexing(
             target_repos = [r for r in target_repos if os.path.relpath(r, effective_root).startswith(group)]
 
     # Collect unique SSH remotes
-    ssh_remotes: Dict[str, Tuple[str, str]] = {}  # host -> (remote_url, sample_repo)
+    ssh_remotes: dict[str, tuple[str, str]] = {}  # host -> (remote_url, sample_repo)
     from git_sync.engine.git import get_repo_remotes
 
     for r_path in target_repos:
         r_map = get_repo_remotes(r_path, timeout=timeout)
-        for _, r_url in r_map.items():
+        for r_url in r_map.values():
             if r_url and ("@" in r_url or r_url.startswith("ssh://")):
                 host = ""
                 if "@" in r_url and ":" in r_url:
@@ -679,7 +675,7 @@ def audit_ssh_multiplexing(
                 if host not in ssh_remotes:
                     ssh_remotes[host] = (r_url, r_path)
 
-    primary_host = target_host or (list(ssh_remotes.keys())[0] if ssh_remotes else "github.com")
+    primary_host = target_host or (next(iter(ssh_remotes.keys())) if ssh_remotes else "github.com")
     config_info = inspect_ssh_config(
         config_path=config_path, host=primary_host
     )
@@ -689,7 +685,7 @@ def audit_ssh_multiplexing(
         dry_run=False,
     )
 
-    benchmark_result: Optional[Dict[str, Any]] = None
+    benchmark_result: dict[str, Any] | None = None
     if run_benchmark:
         if ssh_remotes:
             sample_url, sample_repo = (
@@ -717,8 +713,8 @@ def audit_ssh_multiplexing(
                 "savings_pct": None,
             }
 
-    warnings: List[str] = []
-    suggestions: List[str] = []
+    warnings: list[str] = []
+    suggestions: list[str] = []
 
     if config_info.get("recommendation"):
         suggestions.append(config_info["recommendation"])
