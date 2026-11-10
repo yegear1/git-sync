@@ -202,7 +202,63 @@ class DoctorSanityReport(TypedDict, total=False):
     suggestions: list[str]
 
 
+class DiffStatSummaryDict(TypedDict, total=False):
+    files_changed: int
+    insertions: int
+    deletions: int
+
+
+class CompactPullResult(TypedDict, total=False):
+    repo: str
+    repo_rel: str | None
+    branch: str
+    remote: str | None
+    success: bool
+    files_changed: int
+    insertions: int
+    deletions: int
+    diffstat: DiffStatSummaryDict
+    ahead: int
+    behind: int
+    dry_run: bool
+    is_worktree: bool
+    worktree_main_path: str | None
+    stderr: str
+    diagnostic: dict[str, Any] | None
+    aux_branches: dict[str, Any]
+    worktree_isolated: dict[str, Any]
+    stale_refs: list[str]
+    pruned_refs: list[str]
+    would_prune_refs: list[str]
+    submodules: dict[str, Any]
+    autostash: dict[str, Any]
+    resolved: ResolveResult | dict[str, Any] | None
+
+
+class CompactPushResult(TypedDict, total=False):
+    repo: str
+    repo_rel: str | None
+    branch: str
+    remote: str | None
+    success: bool
+    files_changed: int
+    insertions: int
+    deletions: int
+    diffstat: DiffStatSummaryDict
+    ahead: int
+    dry_run: bool
+    is_worktree: bool
+    worktree_main_path: str | None
+    stderr: str
+    diagnostic: dict[str, Any] | None
+    aux_branches: dict[str, Any]
+    aux_diagnostics: dict[str, Any]
+
+
 __all__ = [
+    "CompactPullResult",
+    "CompactPushResult",
+    "DiffStatSummaryDict",
     "DoctorSanityReport",
     "GitLfsStatusDict",
     "GithubCliStatusDict",

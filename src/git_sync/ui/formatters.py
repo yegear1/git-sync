@@ -21,6 +21,7 @@ from git_sync.engine import (
     ResolveResult,
     format_changelog_summary,
     get_divergence_diff,
+    parse_diffstat,
     resolve_divergence,
 )
 from git_sync.telemetry import TelemetryBenchmark
@@ -894,6 +895,202 @@ def render_push_item(res: PushResult | dict[str, Any], dry_run: bool = False) ->
         print(f"{aux_icon} Auxiliary branch '{aux_b}': {aux_status}")
 
 
+def is_pull_updated(res: PullResult | dict[str, Any]) -> bool:
+    """Determine whether a pull result represents an active update or was already up to date."""
+    if not res.get("success"):
+        return False
+    stdout = str(res.get("stdout") or "")
+    if "Already up to date" in stdout or "Already up-to-date" in stdout:
+        aux = res.get("aux_branches") or {}
+        return any(bool(v) for v in aux.values())
+    if res.get("dry_run"):
+        return bool(int(res.get("behind", 0)) > 0 or any(bool(v) for v in (res.get("aux_branches") or {}).values()))
+    stat = parse_diffstat(stdout)
+    if stat["files_changed"] > 0 or stat["insertions"] > 0 or stat["deletions"] > 0:
+        return True
+    if any(bool(v) for v in (res.get("aux_branches") or {}).values()):
+        return True
+    return "Fast-forward" in stdout or "Updating " in stdout
+
+
+def is_push_updated(res: PushResult | dict[str, Any]) -> bool:
+    """Determine whether a push result represents committed commits successfully pushed."""
+    if not res.get("success"):
+        return False
+    stdout = str(res.get("stdout") or "")
+    if "Everything up-to-date" in stdout or "Everything up to date" in stdout:
+        aux = res.get("aux_branches") or {}
+        return any(bool(v) for v in aux.values())
+    if int(res.get("ahead", 0)) > 0 or any(bool(v) for v in (res.get("aux_branches") or {}).values()):
+        return True
+    return False
+
+
+def format_compact_summary_line(
+    total: int,
+    updated: int,
+    uptodate: int,
+    errors: int,
+) -> str:
+    """Format single-line concise summary for human compact mode."""
+    return f"Total: {total} repos | Updated: {updated} | Up-to-date: {uptodate} | Errors: {errors}"
+
+
+def compact_pull_item(res: PullResult | dict[str, Any]) -> dict[str, Any]:
+    """
+    Transform a verbose PullResult into a token-budget compact entry (<150 tokens):
+    - Parses raw stdout into structured diffstat metrics (files_changed, insertions, deletions)
+    - Omits raw bloated stdout diffs
+    - Prunes empty/null collections (stderr: "", stale_refs: [], pruned_refs: [],
+      would_prune_refs: [], worktree_isolated: {}, empty aux_branches, empty submodules)
+    - Summarizes uncommitted file listings in autostash
+    """
+    compact: dict[str, Any] = {
+        "repo": str(res.get("repo", "")),
+        "repo_rel": res.get("repo_rel"),
+        "branch": str(res.get("branch", "")),
+        "remote": res.get("remote"),
+        "success": bool(res.get("success", False)),
+    }
+
+    if "is_worktree" in res:
+        compact["is_worktree"] = bool(res.get("is_worktree", False))
+        if res.get("worktree_main_path"):
+            compact["worktree_main_path"] = res["worktree_main_path"]
+
+    if res.get("dry_run"):
+        compact["dry_run"] = True
+
+    if "ahead" in res:
+        compact["ahead"] = int(res["ahead"])
+    if "behind" in res:
+        compact["behind"] = int(res["behind"])
+
+    stat = parse_diffstat(str(res.get("stdout") or ""))
+    if res.get("success") or stat["files_changed"] > 0:
+        compact["files_changed"] = stat["files_changed"]
+        compact["insertions"] = stat["insertions"]
+        compact["deletions"] = stat["deletions"]
+
+    if res.get("diagnostic"):
+        compact["diagnostic"] = res["diagnostic"]
+
+    stderr = str(res.get("stderr") or "").strip()
+    if stderr:
+        compact["stderr"] = stderr
+
+    aux = res.get("aux_branches")
+    if aux and isinstance(aux, dict) and len(aux) > 0:
+        compact["aux_branches"] = aux
+
+    wt_iso = res.get("worktree_isolated")
+    if wt_iso and isinstance(wt_iso, dict) and len(wt_iso) > 0:
+        compact["worktree_isolated"] = wt_iso
+
+    stale = res.get("stale_refs")
+    if stale and isinstance(stale, list) and len(stale) > 0:
+        compact["stale_refs"] = stale
+
+    pruned = res.get("pruned_refs")
+    if pruned and isinstance(pruned, list) and len(pruned) > 0:
+        compact["pruned_refs"] = pruned
+
+    would_prune = res.get("would_prune_refs")
+    if would_prune and isinstance(would_prune, list) and len(would_prune) > 0:
+        compact["would_prune_refs"] = would_prune
+
+    sub = res.get("submodules")
+    if sub and isinstance(sub, dict) and sub.get("has_submodules"):
+        sub_c: dict[str, Any] = {"has_submodules": True}
+        if "success" in sub:
+            sub_c["success"] = sub["success"]
+        sub_list = sub.get("submodules") or []
+        if sub_list:
+            sub_c["count"] = len(sub_list)
+        compact["submodules"] = sub_c
+
+    stash = res.get("autostash")
+    if stash and isinstance(stash, dict):
+        stashed = bool(stash.get("stashed", False))
+        restored = bool(stash.get("restored", False))
+        conflict = bool(stash.get("conflict", False))
+        would_stash = bool(stash.get("would_stash", False))
+        dirty_files = stash.get("dirty_files") or []
+        conflict_files = stash.get("conflict_files") or []
+        if stashed or restored or conflict or would_stash or dirty_files or conflict_files:
+            stash_c: dict[str, Any] = {}
+            if stashed:
+                stash_c["stashed"] = True
+            if restored:
+                stash_c["restored"] = True
+            if conflict:
+                stash_c["conflict"] = True
+                if conflict_files:
+                    stash_c["conflict_files"] = conflict_files
+            if would_stash:
+                stash_c["would_stash"] = True
+            if dirty_files:
+                stash_c["dirty_files_count"] = len(dirty_files)
+            if stash.get("stash_ref"):
+                stash_c["stash_ref"] = stash["stash_ref"]
+            compact["autostash"] = stash_c
+
+    if res.get("resolved"):
+        compact["resolved"] = res["resolved"]
+
+    return compact
+
+
+def compact_push_item(res: PushResult | dict[str, Any]) -> dict[str, Any]:
+    """
+    Transform a verbose PushResult into a token-budget compact entry (<150 tokens):
+    - Parses stdout into structured diffstat metrics (files_changed, insertions, deletions)
+    - Omits raw bloated stdout
+    - Prunes empty/null collections (stderr: "", aux_branches: {}, aux_diagnostics: {})
+    """
+    compact: dict[str, Any] = {
+        "repo": str(res.get("repo", "")),
+        "repo_rel": res.get("repo_rel"),
+        "branch": str(res.get("branch", "")),
+        "remote": res.get("remote"),
+        "success": bool(res.get("success", False)),
+    }
+
+    if "is_worktree" in res:
+        compact["is_worktree"] = bool(res.get("is_worktree", False))
+        if res.get("worktree_main_path"):
+            compact["worktree_main_path"] = res["worktree_main_path"]
+
+    if res.get("dry_run"):
+        compact["dry_run"] = True
+
+    if "ahead" in res:
+        compact["ahead"] = int(res["ahead"])
+
+    stat = parse_diffstat(str(res.get("stdout") or ""))
+    if res.get("success") or stat["files_changed"] > 0:
+        compact["files_changed"] = stat["files_changed"]
+        compact["insertions"] = stat["insertions"]
+        compact["deletions"] = stat["deletions"]
+
+    if res.get("diagnostic"):
+        compact["diagnostic"] = res["diagnostic"]
+
+    stderr = str(res.get("stderr") or "").strip()
+    if stderr:
+        compact["stderr"] = stderr
+
+    aux = res.get("aux_branches")
+    if aux and isinstance(aux, dict) and len(aux) > 0:
+        compact["aux_branches"] = aux
+
+    aux_diag = res.get("aux_diagnostics")
+    if aux_diag and isinstance(aux_diag, dict) and len(aux_diag) > 0:
+        compact["aux_diagnostics"] = aux_diag
+
+    return compact
+
+
 def print_dirty_report(dirty: Sequence[RepoStatusRecord | dict[str, Any]]) -> None:
     """Print uncommitted dirty and untracked files report."""
     if not dirty:
@@ -972,6 +1169,11 @@ def print_worktree_list_report(entries: list[dict[str, Any]], root: str) -> None
 
 __all__ = [
     "build_status_summary",
+    "compact_pull_item",
+    "compact_push_item",
+    "format_compact_summary_line",
+    "is_pull_updated",
+    "is_push_updated",
     "print_benchmark_report",
     "print_dirty_report",
     "print_doctor_report",

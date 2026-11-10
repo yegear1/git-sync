@@ -16,6 +16,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 from git_sync.engine.concurrency import AdaptiveConcurrencyController
 from git_sync.engine.types import (
+    CompactPullResult,
+    CompactPushResult,
+    DiffStatSummaryDict,
     DoctorSanityReport,
     GithubCliStatusDict,
     GitLfsStatusDict,
@@ -89,6 +92,7 @@ DEFAULT_MIN_WORKERS = 1
 from git_sync.engine.diff import (
     DEFAULT_CHARS_PER_TOKEN,
     DEFAULT_COMPACT_DIFF_TOKENS,
+    parse_diffstat,
 )
 
 DEFAULT_PROTECTED_BRANCHES: list[str] = ["main", "master", "release/*", "production", "prod"]
@@ -3076,6 +3080,9 @@ __all__ = [
     "GRADE_C_THRESHOLD_SECONDS",
     "TOOL_DIR_PREFIXES",
     "ClassifiedCommit",
+    "CompactPullResult",
+    "CompactPushResult",
+    "DiffStatSummaryDict",
     "DoctorSanityReport",
     "GitLfsStatusDict",
     "GithubCliStatusDict",
@@ -3133,6 +3140,7 @@ __all__ = [
     "is_transient_network_error",
     "match_repo",
     "parse_commit_log",
+    "parse_diffstat",
     "preflight_push_check",
     "probe_remote_reachability",
     "prune_repo_remotes",

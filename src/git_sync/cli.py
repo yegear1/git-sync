@@ -60,8 +60,13 @@ from git_sync.ui import (
     InteractiveDashboard,
     ProgressIndicator,
     build_status_summary,
+    compact_pull_item,
+    compact_push_item,
     format_bulk_action_preview,
+    format_compact_summary_line,
     format_diff_stat,
+    is_pull_updated,
+    is_push_updated,
     print_benchmark_report,
     print_dirty_report,
     print_doctor_report,
@@ -406,7 +411,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
 
     if args.all:
-        if not args.json:
+        if not args.json and not getattr(args, "compact", False):
             mode_prefix = "[DRY-RUN] " if dry_run else ""
             print(f"🔍 {mode_prefix}Identifying repositories with pending updates...")
         t1 = time.perf_counter()
@@ -462,8 +467,11 @@ def cmd_pull(args: argparse.Namespace) -> int:
                     res_obj["telemetry"] = benchmark.to_dict()
                 print(json.dumps(res_obj))
             else:
-                mode_prefix = "[DRY-RUN] " if dry_run else ""
-                print(f"✅ {mode_prefix}All repositories are already up to date.")
+                if getattr(args, "compact", False):
+                    print(format_compact_summary_line(len(all_repos), 0, len(all_repos), 0))
+                else:
+                    mode_prefix = "[DRY-RUN] " if dry_run else ""
+                    print(f"✅ {mode_prefix}All repositories are already up to date.")
                 if getattr(args, "benchmark", False):
                     _print_benchmark_output(benchmark, getattr(args, "json", False))
             return 0
@@ -593,7 +601,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
             prog_label = f"{rel} [worktree]" if res.get("is_worktree") else rel
             progress.advance(prog_label)
 
-            if not args.json:
+            if not args.json and not getattr(args, "compact", False):
                 render_pull_item(res, root, dry_run=dry_run)
 
     t_pull = time.perf_counter() - t2
@@ -613,11 +621,18 @@ def cmd_pull(args: argparse.Namespace) -> int:
     benchmark.evaluate_thresholds(controller)
 
     if args.json:
+        payload = [compact_pull_item(r) for r in pull_results] if getattr(args, "compact", False) else pull_results
         if getattr(args, "benchmark", False):
-            print(json.dumps({"results": pull_results, "dry_run": dry_run, "telemetry": benchmark.to_dict()}, indent=2))
+            print(json.dumps({"results": payload, "dry_run": dry_run, "telemetry": benchmark.to_dict()}, indent=2))
         else:
-            print(json.dumps(pull_results, indent=2))
+            print(json.dumps(payload, indent=2))
     else:
+        if getattr(args, "compact", False):
+            total_count = len(all_repos) if args.all else len(pull_results)
+            updated_count = sum(1 for r in pull_results if is_pull_updated(r))
+            errors_count = sum(1 for r in pull_results if not r.get("success"))
+            uptodate_count = max(0, total_count - updated_count - errors_count)
+            print(format_compact_summary_line(total_count, updated_count, uptodate_count, errors_count))
         if getattr(args, "benchmark", False):
             _print_benchmark_output(benchmark, getattr(args, "json", False))
 
@@ -842,7 +857,7 @@ def cmd_push(args: argparse.Namespace) -> int:
     targets: list[str] = []
 
     if args.all:
-        if not args.json:
+        if not args.json and not getattr(args, "compact", False):
             mode_prefix = "[DRY-RUN] " if args.dry_run else ""
             print(f"🔍 {mode_prefix}Identifying repositories with commits pending push...")
         do_fetch = not getattr(args, "no_fetch", False)
@@ -869,7 +884,10 @@ def cmd_push(args: argparse.Namespace) -> int:
                     res_obj["telemetry"] = benchmark.to_dict()
                 print(json.dumps(res_obj))
             else:
-                print("✅ No repositories have commits pending push.")
+                if getattr(args, "compact", False):
+                    print(format_compact_summary_line(len(all_repos), 0, len(all_repos), 0))
+                else:
+                    print("✅ No repositories have commits pending push.")
                 if getattr(args, "benchmark", False):
                     _print_benchmark_output(benchmark, getattr(args, "json", False))
             return 0
@@ -1017,8 +1035,15 @@ def cmd_push(args: argparse.Namespace) -> int:
     push_results.sort(key=lambda x: str(x.get("repo_rel", "")))
 
     if not args.json:
-        for res in push_results:
-            render_push_item(res, dry_run=args.dry_run)
+        if getattr(args, "compact", False):
+            total_count = len(all_repos) if args.all else len(push_results)
+            updated_count = sum(1 for r in push_results if is_push_updated(r))
+            errors_count = sum(1 for r in push_results if not r.get("success"))
+            uptodate_count = max(0, total_count - updated_count - errors_count)
+            print(format_compact_summary_line(total_count, updated_count, uptodate_count, errors_count))
+        else:
+            for res in push_results:
+                render_push_item(res, dry_run=args.dry_run)
 
     t_push = time.perf_counter() - t2
     benchmark.record_stage("push", t_push)
@@ -1030,10 +1055,11 @@ def cmd_push(args: argparse.Namespace) -> int:
     benchmark.evaluate_thresholds(controller)
 
     if args.json:
+        payload = [compact_push_item(r) for r in push_results] if getattr(args, "compact", False) else push_results
         if getattr(args, "benchmark", False):
-            print(json.dumps({"results": push_results, "telemetry": benchmark.to_dict()}, indent=2))
+            print(json.dumps({"results": payload, "telemetry": benchmark.to_dict()}, indent=2))
         else:
-            print(json.dumps(push_results, indent=2))
+            print(json.dumps(payload, indent=2))
     else:
         if getattr(args, "benchmark", False):
             _print_benchmark_output(benchmark, getattr(args, "json", False))

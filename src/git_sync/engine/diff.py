@@ -4,10 +4,63 @@ Token-budget aware diff chunking, truncation, and divergence diff inspection.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 DEFAULT_COMPACT_DIFF_TOKENS = 1000
 DEFAULT_CHARS_PER_TOKEN = 4
+
+
+def parse_diffstat(text: str) -> dict[str, int]:
+    """
+    Parse git diffstat summary lines or stdout into integer metrics:
+    files_changed, insertions, deletions.
+
+    # INVARIANT: Returns 0 for each metric if no diffstat pattern is present.
+    """
+    files_changed = 0
+    insertions = 0
+    deletions = 0
+    if not text:
+        return {
+            "files_changed": 0,
+            "insertions": 0,
+            "deletions": 0,
+        }
+
+    for line in text.splitlines():
+        if "changed" in line:
+            m_files = re.search(r"(\d+)\s+files?\s+changed", line)
+            if m_files:
+                files_changed += int(m_files.group(1))
+            m_ins = re.search(r"(\d+)\s+insertions?\(\+\)", line)
+            if m_ins:
+                insertions += int(m_ins.group(1))
+            m_del = re.search(r"(\d+)\s+deletions?\(-\)", line)
+            if m_del:
+                deletions += int(m_del.group(1))
+
+    if files_changed == 0:
+        bar_count = 0
+        ins_bar = 0
+        del_bar = 0
+        for line in text.splitlines():
+            m_bar = re.search(r"\|\s*\d*\s*([+-]+)\s*$", line)
+            if m_bar:
+                bar_count += 1
+                bars = m_bar.group(1)
+                ins_bar += bars.count("+")
+                del_bar += bars.count("-")
+        if bar_count > 0:
+            files_changed = bar_count
+            insertions = ins_bar
+            deletions = del_bar
+
+    return {
+        "files_changed": files_changed,
+        "insertions": insertions,
+        "deletions": deletions,
+    }
 
 
 def split_diff_files(diff: str) -> list[str]:
@@ -250,6 +303,7 @@ __all__ = [
     "DEFAULT_COMPACT_DIFF_TOKENS",
     "get_divergence_details",
     "get_divergence_diff",
+    "parse_diffstat",
     "split_diff_files",
     "truncate_diff",
 ]
