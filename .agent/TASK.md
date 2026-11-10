@@ -7,17 +7,18 @@
 
 ## Active Task
 
-### 📌 Task [00.34]: Concurrent Multi-Repository `git-sync push` Parallelization
+### 📌 Task [00.35]: Token-Budget Optimization and Structured Diffstat Summarization in `--compact` Pull & Push JSON
 - **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/`, `tests/`
-- **Description:** Upgrade `cmd_push` in `src/git_sync/cli.py` to execute multi-repository `push_repo` targets concurrently via `ThreadPoolExecutor(max_workers=effective_workers)` controlled by `AdaptiveConcurrencyController`, while maintaining deterministic sorted result ordering, thread-safe `ProgressIndicator` updates, and single-prompt confirmation prior to concurrent execution.
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/`, `tests/`
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/diff.py`, `src/git_sync/ui/formatters.py`, `tests/`
+- **Description:** Optimize token consumption in `git-sync pull` and `git-sync push` when `--compact` is active (the default) by summarizing verbose raw `git pull`/`git push` `stdout`, diffstats, and uncommitted file listings into concise structured metrics (`files_changed`, `insertions`, `deletions`) and pruning empty/null fields (`stderr: ""`, `stale_refs: []`, `pruned_refs: []`, `would_prune_refs: []`, `worktree_isolated: {}`, empty `submodules` / `aux_branches`) to guarantee <150 tokens per repository entry while preserving full raw output under `--full` (`--no-compact`). Also provide single-line summary reporting in `--human --compact` mode.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/diff.py`, `src/git_sync/ui/formatters.py`, `tests/`
 - **Acceptance Criteria:**
-  - [ ] Multi-repository `git-sync push` executes concurrently via `ThreadPoolExecutor(max_workers=effective_workers)`.
-  - [ ] `AdaptiveConcurrencyController` determines `effective_workers` for the push stage and records telemetry in `benchmark`.
-  - [ ] Interactive `--confirm` and `--preview` execute cleanly on the main thread before spawning worker threads.
-  - [ ] Output results are sorted deterministically by `repo_rel` (preserving predictable CLI and `--json` output order).
-  - [ ] Unit tests in `tests/` verify concurrent execution, deterministic sorting, and error propagation.
+  - [ ] `git-sync pull` and `git-sync push` in `--compact` JSON mode (default) emit concise structured payloads omitting raw bloated diffs/stdout and empty collections (`stale_refs`, `pruned_refs`, `would_prune_refs`, `worktree_isolated`, empty `submodules`, empty `stderr`).
+  - [ ] Fast-forward and update outputs are parsed into consolidated diffstat metrics (`files_changed`, `insertions`, `deletions`).
+  - [ ] Passing `--full` (`--no-compact`) preserves the full raw `stdout`, `stderr`, and all collection keys.
+  - [ ] Strict token budget: each repository entry in compact JSON consumes <150 tokens.
+  - [ ] Human text mode with `--human --compact` renders a concise single-line summary (`Total: N repos | Updated: X | Up-to-date: Y | Errors: Z`).
+  - [ ] Unit tests verify token-budget bounds, `--compact` vs `--full` JSON schema parity, and `--human --compact` summary output.
 
 ---
 
@@ -59,26 +60,13 @@
 | [00.31] | Interactive Dashboard TUI and Progress Indicators English Standardization | [7e123a9] | 2026-11-09 |
 | [00.32] | Test Suite English Assertion Alignment and Regression Gate | [7e123a9] | 2026-11-09 |
 | [00.33] | Agent-First CLI Defaults (`--json` & `--compact` by Default) and Configurable Human/Full Overrides | [cdee860] | 2026-11-10 |
+| [00.34] | Concurrent Multi-Repository `git-sync push` Parallelization | [2d0431e] | 2026-11-10 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-
-### 📌 Task [00.35]: Token-Budget Optimization and Structured Diffstat Summarization in `--compact` Pull & Push JSON
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/diff.py`, `src/git_sync/ui/formatters.py`, `tests/`
-- **Description:** Optimize token consumption in `git-sync pull` and `git-sync push` when `--compact` is active (the default) by summarizing verbose raw `git pull`/`git push` `stdout`, diffstats, and uncommitted file listings into concise structured metrics (`files_changed`, `insertions`, `deletions`) and pruning empty/null fields (`stderr: ""`, `stale_refs: []`, `pruned_refs: []`, `would_prune_refs: []`, `worktree_isolated: {}`, empty `submodules` / `aux_branches`) to guarantee <150 tokens per repository entry while preserving full raw output under `--full` (`--no-compact`). Also provide single-line summary reporting in `--human --compact` mode.
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/diff.py`, `src/git_sync/ui/formatters.py`, `tests/`
-- **Acceptance Criteria:**
-  - [ ] `git-sync pull` and `git-sync push` in `--compact` JSON mode (default) emit concise structured payloads omitting raw bloated diffs/stdout and empty collections (`stale_refs`, `pruned_refs`, `would_prune_refs`, `worktree_isolated`, empty `submodules`, empty `stderr`).
-  - [ ] Fast-forward and update outputs are parsed into consolidated diffstat metrics (`files_changed`, `insertions`, `deletions`).
-  - [ ] Passing `--full` (`--no-compact`) preserves the full raw `stdout`, `stderr`, and all collection keys.
-  - [ ] Strict token budget: each repository entry in compact JSON consumes <150 tokens.
-  - [ ] Human text mode with `--human --compact` renders a concise single-line summary (`Total: N repos | Updated: X | Up-to-date: Y | Errors: Z`).
-  - [ ] Unit tests verify token-budget bounds, `--compact` vs `--full` JSON schema parity, and `--human --compact` summary output.
 
 
 ### 📌 Task [00.36]: Anomaly-Only Compact Mode for `git-sync doctor` and `git-sync worktree list`
