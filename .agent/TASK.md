@@ -7,15 +7,14 @@
 
 ## Active Task
 
-### 📌 Task [00.26]: Test Mock Decoupling and Elimination of Runtime `sys.modules` Dispatch (`_dispatch_fn`)
+### 📌 Task [00.27]: Strict Domain Payload Contracts (`TypedDict` / `@dataclass`) and Mypy Strict Compliance
 - **Status:** RUNNING
-- **Paths:** `src/git_sync/engine/`, `tests/`
-- **Description:** Replace the 32 dynamic `_dispatch_fn` runtime `sys.modules["git_sync.core"]` lookups with a clean, lightweight dependency/runner hook and standardized mock targets across `tests/`, removing runtime reflection overhead and simplifying static analysis.
-- **Systems Involved:** `src/git_sync/engine/`, `tests/`
+- **Paths:** `src/git_sync/engine/types.py`, `src/git_sync/engine/`, `src/git_sync/cli.py`, `src/git_sync/ui/`
+- **Description:** Define standard library `TypedDict` and `@dataclass` contracts in `src/git_sync/engine/types.py` for repository inspection (`RepoStatusRecord`), doctor diagnostics (`DoctorSanityReport`), and sync results (`PullResult`, `PushResult`, `ResolveResult`), replacing unchecked `Dict[str, Any]` signatures and ensuring 0 errors under `mypy --strict`.
+- **Systems Involved:** `src/git_sync/engine/types.py`, `src/git_sync/engine/`, `src/git_sync/cli.py`, `src/git_sync/ui/`
 - **Acceptance Criteria:**
-  - [ ] `_dispatch_fn` is removed from the engine while all unit tests and mock patches pass cleanly.
-  - [ ] Zero runtime `sys.modules` reflection in hot execution paths.
-  - [ ] Full packaging symbol parity and unit test suite pass with exit code 0.
+  - [ ] Core engine and CLI functions use explicit typed contracts instead of `Dict[str, Any]`.
+  - [ ] `mypy --strict src/git_sync` exits with code 0.
 
 ---
 
@@ -49,21 +48,13 @@
 | [00.23] | Engine Modularization Phase 1 — Extract SSH Multiplexing & Credential Diagnostics | [2c2a2d5] | 2026-11-08 |
 | [00.24] | Engine Modularization Phase 2 — Extract Changelog Classifier & Diff Chunker | [ccbb332] | 2026-11-08 |
 | [00.25] | Engine Modularization Phase 3 — Extract Worktree, Submodule & Sparse-Checkout Managers | [84ea732] | 2026-11-08 |
+| [00.26] | Test Mock Decoupling and Elimination of Runtime sys.modules Dispatch (_dispatch_fn) | [1aad0a1] | 2026-11-09 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-### 📌 Task [00.27]: Strict Domain Payload Contracts (`TypedDict` / `@dataclass`) and Mypy Strict Compliance
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/engine/types.py`, `src/git_sync/engine/`, `src/git_sync/cli.py`, `src/git_sync/ui/`
-- **Description:** Define standard library `TypedDict` and `@dataclass` contracts in `src/git_sync/engine/types.py` for repository inspection (`RepoStatusRecord`), doctor diagnostics (`DoctorSanityReport`), and sync results (`PullResult`, `PushResult`, `ResolveResult`), replacing unchecked `Dict[str, Any]` signatures and ensuring 0 errors under `mypy --strict`.
-- **Systems Involved:** `src/git_sync/engine/types.py`, `src/git_sync/engine/`, `src/git_sync/cli.py`, `src/git_sync/ui/`
-- **Acceptance Criteria:**
-  - [ ] Core engine and CLI functions use explicit typed contracts instead of `Dict[str, Any]`.
-  - [ ] `mypy --strict src/git_sync` exits with code 0.
 
 ### 📌 Task [00.28]: CLI Subcommand Modularization
 - **Status:** APPROVED
@@ -75,18 +66,20 @@
   - [ ] `src/git_sync/cli.py` focused on argument parsing and dispatch.
   - [ ] All CLI tests pass with exit code 0.
 
-### 📌 Task [00.29]: Auxiliary Branch Push and Remediation Parity (`push_aux` / `--all-branches`)
+### 📌 Task [00.29]: Auxiliary Branch Push and Remediation Parity (`AUX_PUSH_PENDING` / `--all-branches` / `--sync-branches`)
 - **Status:** APPROVED
 - **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/`
-- **Description:** Fix `AUX_PUSH_PENDING` remediation string to `git-sync push <repo> --all-branches` and implement auxiliary branch push capabilities across engine (`push_repo` with `push_aux`), configuration (`push_all_branches`), and CLI (`--all-branches` / `--push-aux` flags).
+- **Description:** Fix `AUX_PUSH_PENDING` remediation string to `git-sync push <repo> --sync-branches` (or `--all-branches`) and implement auxiliary branch push capabilities across engine (`push_repo` with `sync_branches`), configuration (`push_sync_branches`), and CLI (`--sync-branches` / `--all-branches` / `--no-sync-branches`). Add smart CLI disambiguation when repository arguments are passed with `--all` and ensure individual branch protection and divergence guards for each auxiliary branch.
 - **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/`
 - **Acceptance Criteria:**
-  - [ ] `inspect_repo` sets remediation to `git-sync push {rel_path} --all-branches` when `aux_branches_ahead` is detected.
-  - [ ] `push_repo` accepts `push_aux: bool = False`, discovering auxiliary tracking branches ahead of upstream and pushing them safely.
-  - [ ] Safety guards (protected branch policy and divergence check) applied to each auxiliary branch.
-  - [ ] CLI `push` accepts `--all-branches` (alias `--push-aux`) and `--no-all-branches`.
+  - [ ] `inspect_repo` sets remediation to `git-sync push {rel_path} --sync-branches` when `aux_branches_ahead` is detected.
+  - [ ] `push_repo` accepts `sync_branches: bool = True`, discovering auxiliary tracking branches ahead of upstream and pushing them safely.
+  - [ ] Safety guards (protected branch policy, force-push block on protected branches, divergence check) applied to each auxiliary branch independently.
+  - [ ] CLI `push` accepts `--sync-branches`, `--all-branches` (alias), and `--no-sync-branches`.
+  - [ ] CLI smart disambiguation: passing `git-sync push <repo> --all` treats `--all` as `--all-branches` for the specified repo rather than triggering global discovery across all repos.
   - [ ] Bulk preview and confirmation modes display auxiliary branches pending push.
-  - [ ] Unit and integration tests verify auxiliary branch push, dry-run, and safety guards.
+  - [ ] Human terminal output renders auxiliary branches push results cleanly with status icons.
+  - [ ] Unit and integration tests verify auxiliary branch push, dry-run, protected branch defenses, and CLI disambiguation.
 
 ### 📌 Task [00.30]: CLI Output and Table English Standardization
 - **Status:** APPROVED
@@ -118,6 +111,34 @@
   - [ ] All test assertions checking textual output match the new English CLI and TUI output.
   - [ ] `uv run --with pytest --with setuptools pytest` passes with 100% success (312+ tests passing).
   - [ ] `mypy --strict src/git_sync` exits with code 0.
+
+### 📌 Task [00.33]: Concurrent Multi-Repository `git-sync push` Parallelization
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/concurrency.py`, `tests/`
+- **Description:** Parallelize multi-repository `git-sync push` execution using `ThreadPoolExecutor` and dynamic worker scaling via `AdaptiveConcurrencyController` (`determine_workers` with `is_fetch=True` to account for remote network latency), eliminating sequential push bottlenecks while maintaining pre-flight safety checks and thread-safe telemetry.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/concurrency.py`, `tests/`
+- **Acceptance Criteria:**
+  - [ ] `cmd_push` determines `effective_push_workers` via `controller.determine_workers(len(targets), is_fetch=True, configured_workers=configured_w)` honoring `--workers` and `--auto-tune`.
+  - [ ] `benchmark.active_workers` and `benchmark.optimal_workers` accurately recorded during push phase.
+  - [ ] Multi-repository pushes execute concurrently via `ThreadPoolExecutor(max_workers=effective_push_workers)`.
+  - [ ] `ProgressIndicator` advances dynamically in real-time as each worker future completes via `as_completed`.
+  - [ ] Results sorted deterministically by `repo_rel` prior to console rendering or JSON output.
+  - [ ] Thread safety preserved across `BulkCache`, `TelemetryBenchmark`, and individual repo `preflight_push_check` runs.
+  - [ ] Unit and telemetry benchmark tests verify concurrent push execution, worker tuning, and benchmark metrics recording.
+
+### 📌 Task [00.34]: Token-Budget Optimization and Structured Diffstat Summarization in `--compact` Pull JSON
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/diff.py`, `tests/`
+- **Description:** Optimize token consumption in `git-sync pull --compact --json` by summarizing/truncating verbose raw `git pull` stdout, diffstats, and uncommitted file listings to strict concise metrics (<150 tokens per repository) for consumption by AI agents, and provide concise single-line summary reporting in text mode.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/diff.py`, `tests/`
+- **Acceptance Criteria:**
+  - [ ] `git-sync pull --compact --json` produces concise structured payloads omitting raw bloated diffs and stdout.
+  - [ ] Fast-forward and update outputs summarized into consolidated metrics (e.g., changed file counts, insertions, deletions).
+  - [ ] Empty or redundant nested collections (`stale_refs`, `pruned_refs`, `would_prune_refs`, `worktree_isolated`, empty submodules) omitted from compact JSON items.
+  - [ ] Strict token budget: each repository entry in compact JSON consumes <150 tokens.
+  - [ ] Text mode `git-sync pull --compact` renders concise single-line summary (e.g., `Total: N repos | Updated: X | Up-to-date: Y | Errors: Z`).
+  - [ ] Unit tests verify token-budget bounds, compact JSON schema contract, and text-mode summary output.
+
 
 ---
 
