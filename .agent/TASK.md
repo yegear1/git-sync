@@ -7,14 +7,15 @@
 
 ## Active Task
 
-### 📌 Task [00.27]: Strict Domain Payload Contracts (`TypedDict` / `@dataclass`) and Mypy Strict Compliance
+### 📌 Task [00.28]: CLI Subcommand Modularization
 - **Status:** RUNNING
-- **Paths:** `src/git_sync/engine/types.py`, `src/git_sync/engine/`, `src/git_sync/cli.py`, `src/git_sync/ui/`
-- **Description:** Define standard library `TypedDict` and `@dataclass` contracts in `src/git_sync/engine/types.py` for repository inspection (`RepoStatusRecord`), doctor diagnostics (`DoctorSanityReport`), and sync results (`PullResult`, `PushResult`, `ResolveResult`), replacing unchecked `Dict[str, Any]` signatures and ensuring 0 errors under `mypy --strict`.
-- **Systems Involved:** `src/git_sync/engine/types.py`, `src/git_sync/engine/`, `src/git_sync/cli.py`, `src/git_sync/ui/`
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/`
+- **Description:** Split monolithic formatting/rendering helpers out of `src/git_sync/cli.py` into `src/git_sync/ui/formatters.py`, keeping `src/git_sync/cli.py` focused strictly on argument parsing and command dispatch (<1,200 lines).
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/`
 - **Acceptance Criteria:**
-  - [ ] Core engine and CLI functions use explicit typed contracts instead of `Dict[str, Any]`.
-  - [ ] `mypy --strict src/git_sync` exits with code 0.
+  - [ ] Monolithic CLI rendering helpers extracted to `src/git_sync/ui/formatters.py`.
+  - [ ] `src/git_sync/cli.py` focused on argument parsing and dispatch.
+  - [ ] All CLI tests pass with exit code 0.
 
 ---
 
@@ -49,22 +50,13 @@
 | [00.24] | Engine Modularization Phase 2 — Extract Changelog Classifier & Diff Chunker | [ccbb332] | 2026-11-08 |
 | [00.25] | Engine Modularization Phase 3 — Extract Worktree, Submodule & Sparse-Checkout Managers | [84ea732] | 2026-11-08 |
 | [00.26] | Test Mock Decoupling and Elimination of Runtime sys.modules Dispatch (_dispatch_fn) | [1aad0a1] | 2026-11-09 |
+| [00.27] | Strict Domain Payload Contracts (`TypedDict` / `@dataclass`) and Mypy Strict Compliance | [387c626] | 2026-11-09 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-### 📌 Task [00.28]: CLI Subcommand Modularization
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/`
-- **Description:** Split monolithic formatting/rendering helpers out of `src/git_sync/cli.py` into `src/git_sync/ui/formatters.py`, keeping `src/git_sync/cli.py` focused strictly on argument parsing and command dispatch (<1,200 lines).
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/`
-- **Acceptance Criteria:**
-  - [ ] Monolithic CLI rendering helpers extracted to `src/git_sync/ui/formatters.py`.
-  - [ ] `src/git_sync/cli.py` focused on argument parsing and dispatch.
-  - [ ] All CLI tests pass with exit code 0.
 
 ### 📌 Task [00.29]: Auxiliary Branch Push and Remediation Parity (`AUX_PUSH_PENDING` / `--all-branches` / `--sync-branches`)
 - **Status:** APPROVED
