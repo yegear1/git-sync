@@ -7,20 +7,16 @@
 
 ## Active Task
 
-### 📌 Task [00.29]: Auxiliary Branch Push and Remediation Parity (`AUX_PUSH_PENDING` / `--all-branches` / `--sync-branches`)
-- **Status:** RUNNING
-- **Paths:** `src/git_sync/engine/git.py`, `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/`
-- **Description:** Fix `AUX_PUSH_PENDING` remediation string to `git-sync push <repo> --sync-branches` (or `--all-branches`) and implement auxiliary branch push capabilities across engine (`push_repo` with `sync_branches`), configuration (`push_sync_branches`), and CLI (`--sync-branches` / `--all-branches` / `--no-sync-branches`). Add smart CLI disambiguation when repository arguments are passed with `--all` and ensure individual branch protection and divergence guards for each auxiliary branch.
-- **Systems Involved:** `src/git_sync/engine/git.py`, `src/git_sync/config.py`, `src/git_sync/cli.py`, `tests/`
+### 📌 Task [00.30]: CLI Output and Table English Standardization
+- **Status:** READY FOR PLANNING
+- **Paths:** `src/git_sync/cli.py`
+- **Description:** Eliminate all hardcoded Portuguese strings in `src/git_sync/cli.py` and standardize human-facing terminal output exclusively in Technical English, aligning CLI tables, status details, doctor diagnostics, SSH multiplexing audits, worktree pruning, and lock recovery with existing JSON enums.
+- **Systems Involved:** `src/git_sync/cli.py`
 - **Acceptance Criteria:**
-  - [ ] `inspect_repo` sets remediation to `git-sync push {rel_path} --sync-branches` when `aux_branches_ahead` is detected.
-  - [ ] `push_repo` accepts `sync_branches: bool = True`, discovering auxiliary tracking branches ahead of upstream and pushing them safely.
-  - [ ] Safety guards (protected branch policy, force-push block on protected branches, divergence check) applied to each auxiliary branch independently.
-  - [ ] CLI `push` accepts `--sync-branches`, `--all-branches` (alias), and `--no-sync-branches`.
-  - [ ] CLI smart disambiguation: passing `git-sync push <repo> --all` treats `--all` as `--all-branches` for the specified repo rather than triggering global discovery across all repos.
-  - [ ] Bulk preview and confirmation modes display auxiliary branches pending push.
-  - [ ] Human terminal output renders auxiliary branches push results cleanly with status icons.
-  - [ ] Unit and integration tests verify auxiliary branch push, dry-run, protected branch defenses, and CLI disambiguation.
+  - [ ] Zero hardcoded Portuguese strings remaining in `src/git_sync/cli.py`.
+  - [ ] Table headers (`STATUS`, `REPOSITORY`, `BRANCH`, `DETAILS`) and status descriptions (`no remote configured`, `synced`, `N behind`, `N ahead`, `dirty(N files)`) standardized in English.
+  - [ ] Doctor, SSH audit, Worktree prune, Unlock, and Config outputs rendered in English.
+  - [ ] All JSON output contracts remain unchanged and strictly in English.
 
 ---
 
@@ -57,6 +53,7 @@
 | [00.26] | Test Mock Decoupling and Elimination of Runtime sys.modules Dispatch (_dispatch_fn) | [1aad0a1] | 2026-11-09 |
 | [00.27] | Strict Domain Payload Contracts (`TypedDict` / `@dataclass`) and Mypy Strict Compliance | [387c626] | 2026-11-09 |
 | [00.28] | CLI Subcommand Modularization into `src/git_sync/ui/formatters.py` | [17d0f9c] | 2026-11-09 |
+| [00.29] | Auxiliary Branch Push and Remediation Parity (`AUX_PUSH_PENDING` / `--all-branches` / `--sync-branches`) | [e064366] | 2026-11-09 |
 
 ---
 
@@ -64,16 +61,6 @@
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
 
-### 📌 Task [00.30]: CLI Output and Table English Standardization
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`
-- **Description:** Eliminate all hardcoded Portuguese strings in `src/git_sync/cli.py` and standardize human-facing terminal output exclusively in Technical English, aligning CLI tables, status details, doctor diagnostics, SSH multiplexing audits, worktree pruning, and lock recovery with existing JSON enums.
-- **Systems Involved:** `src/git_sync/cli.py`
-- **Acceptance Criteria:**
-  - [ ] Zero hardcoded Portuguese strings remaining in `src/git_sync/cli.py`.
-  - [ ] Table headers (`STATUS`, `REPOSITORY`, `BRANCH`, `DETAILS`) and status descriptions (`no remote configured`, `synced`, `N behind`, `N ahead`, `dirty(N files)`) standardized in English.
-  - [ ] Doctor, SSH audit, Worktree prune, Unlock, and Config outputs rendered in English.
-  - [ ] All JSON output contracts remain unchanged and strictly in English.
 
 ### 📌 Task [00.31]: Interactive Dashboard TUI and Progress Indicators English Standardization
 - **Status:** APPROVED
