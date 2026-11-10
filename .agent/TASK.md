@@ -7,15 +7,19 @@
 
 ## Active Task
 
-### 📌 Task [00.31]: Interactive Dashboard TUI and Progress Indicators English Standardization
+### 📌 Task [00.33]: Concurrent Multi-Repository `git-sync push` Parallelization
 - **Status:** READY FOR PLANNING
-- **Paths:** `src/git_sync/ui/dashboard.py`, `src/git_sync/ui/progress.py`
-- **Description:** Eliminate hardcoded Portuguese strings in the interactive dashboard TUI (`dashboard.py`) and progress/confirmation helpers (`progress.py`), standardizing all status badges, navigation hints, diff inspection reports, changelog views, and bulk confirmation prompts in Technical English.
-- **Systems Involved:** `src/git_sync/ui/dashboard.py`, `src/git_sync/ui/progress.py`
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/concurrency.py`, `tests/`
+- **Description:** Parallelize multi-repository `git-sync push` execution using `ThreadPoolExecutor` and dynamic worker scaling via `AdaptiveConcurrencyController` (`determine_workers` with `is_fetch=True` to account for remote network latency), eliminating sequential push bottlenecks while maintaining pre-flight safety checks and thread-safe telemetry.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/concurrency.py`, `tests/`
 - **Acceptance Criteria:**
-  - [ ] Zero hardcoded Portuguese strings in `src/git_sync/ui/dashboard.py` and `src/git_sync/ui/progress.py`.
-  - [ ] TUI keybindings bar, status messages, and feedback rendered in English.
-  - [ ] Bulk action preview headers and interactive confirmation prompts (`[y/N]`) rendered in English.
+  - [ ] `cmd_push` determines `effective_push_workers` via `controller.determine_workers(len(targets), is_fetch=True, configured_workers=configured_w)` honoring `--workers` and `--auto-tune`.
+  - [ ] `benchmark.active_workers` and `benchmark.optimal_workers` accurately recorded during push phase.
+  - [ ] Multi-repository pushes execute concurrently via `ThreadPoolExecutor(max_workers=effective_push_workers)`.
+  - [ ] `ProgressIndicator` advances dynamically in real-time as each worker future completes via `as_completed`.
+  - [ ] Results sorted deterministically by `repo_rel` prior to console rendering or JSON output.
+  - [ ] Thread safety preserved across `BulkCache`, `TelemetryBenchmark`, and individual repo `preflight_push_check` runs.
+  - [ ] Unit and telemetry benchmark tests verify concurrent push execution, worker tuning, and benchmark metrics recording.
 
 ---
 
@@ -54,6 +58,8 @@
 | [00.28] | CLI Subcommand Modularization into `src/git_sync/ui/formatters.py` | [17d0f9c] | 2026-11-09 |
 | [00.29] | Auxiliary Branch Push and Remediation Parity (`AUX_PUSH_PENDING` / `--all-branches` / `--sync-branches`) | [e064366] | 2026-11-09 |
 | [00.30] | CLI Output and Table English Standardization | [7df64a5] | 2026-11-09 |
+| [00.31] | Interactive Dashboard TUI and Progress Indicators English Standardization | [7e123a9] | 2026-11-09 |
+| [00.32] | Test Suite English Assertion Alignment and Regression Gate | [7e123a9] | 2026-11-09 |
 
 ---
 
@@ -61,30 +67,6 @@
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
 
-
-### 📌 Task [00.32]: Test Suite English Assertion Alignment and Regression Gate
-- **Status:** APPROVED
-- **Paths:** `tests/test_git_sync.py`, `tests/test_progress_telemetry_dryrun.py`, `tests/test_ui_dashboard_and_style.py`
-- **Description:** Update legacy unit test assertions that check Portuguese string fragments (`sem remote configurado`, `Total: 1 repositórios`, `commit(s) atrás`, `commit(s) à frente`, `Pull concluído`, etc.) to assert the standardized English strings, ensuring hermetic pass across the entire test suite.
-- **Systems Involved:** `tests/`
-- **Acceptance Criteria:**
-  - [ ] All test assertions checking textual output match the new English CLI and TUI output.
-  - [ ] `uv run --with pytest --with setuptools pytest` passes with 100% success (312+ tests passing).
-  - [ ] `mypy --strict src/git_sync` exits with code 0.
-
-### 📌 Task [00.33]: Concurrent Multi-Repository `git-sync push` Parallelization
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/concurrency.py`, `tests/`
-- **Description:** Parallelize multi-repository `git-sync push` execution using `ThreadPoolExecutor` and dynamic worker scaling via `AdaptiveConcurrencyController` (`determine_workers` with `is_fetch=True` to account for remote network latency), eliminating sequential push bottlenecks while maintaining pre-flight safety checks and thread-safe telemetry.
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/concurrency.py`, `tests/`
-- **Acceptance Criteria:**
-  - [ ] `cmd_push` determines `effective_push_workers` via `controller.determine_workers(len(targets), is_fetch=True, configured_workers=configured_w)` honoring `--workers` and `--auto-tune`.
-  - [ ] `benchmark.active_workers` and `benchmark.optimal_workers` accurately recorded during push phase.
-  - [ ] Multi-repository pushes execute concurrently via `ThreadPoolExecutor(max_workers=effective_push_workers)`.
-  - [ ] `ProgressIndicator` advances dynamically in real-time as each worker future completes via `as_completed`.
-  - [ ] Results sorted deterministically by `repo_rel` prior to console rendering or JSON output.
-  - [ ] Thread safety preserved across `BulkCache`, `TelemetryBenchmark`, and individual repo `preflight_push_check` runs.
-  - [ ] Unit and telemetry benchmark tests verify concurrent push execution, worker tuning, and benchmark metrics recording.
 
 ### 📌 Task [00.34]: Token-Budget Optimization and Structured Diffstat Summarization in `--compact` Pull JSON
 - **Status:** APPROVED
