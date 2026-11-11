@@ -27,7 +27,7 @@
   <text class="title" x="420" y="23">git-sync — ~/github (30 repositories, 12 workers)</text>
 
   <!-- Terminal Body -->
-  <text class="txt" x="24" y="68"><tspan class="green bold">➜</tspan> <tspan class="cyan bold">~/github</tspan> $ git sync status --pending --changelog</text>
+  <text class="txt" x="24" y="68"><tspan class="green bold">➜</tspan> <tspan class="cyan bold">~/github</tspan> $ git sync status --human --pending --changelog</text>
 
   <text class="txt bold dim" x="24" y="96">REPOSITORY               BRANCH     STATUS          SYNC    DIRTY   CHANGELOG</text>
   <text class="txt dim" x="24" y="112">─────────────────────────────────────────────────────────────────────────────────────────────</text>
@@ -45,7 +45,7 @@
   <text class="txt dim" x="24" y="282">Summary: 30 total | <tspan class="green">27 synced</tspan> | <tspan class="yellow">2 pull pending</tspan> | <tspan class="cyan">1 push pending</tspan> | <tspan class="yellow">1 dirty</tspan>  (0.38s)</text>
 
   <!-- Second Command -->
-  <text class="txt" x="24" y="318"><tspan class="green bold">➜</tspan> <tspan class="cyan bold">~/github</tspan> $ git sync pull --all</text>
+  <text class="txt" x="24" y="318"><tspan class="green bold">➜</tspan> <tspan class="cyan bold">~/github</tspan> $ git sync pull --all --human</text>
   <text class="txt" x="24" y="344"><tspan class="green">✓</tspan> ye-dev/api-gateway    <tspan class="dim">fast-forward main (2 commits) + 1 aux branch</tspan></text>
   <text class="txt" x="24" y="366"><tspan class="green">✓</tspan> ye-dev/auth-service   <tspan class="dim">autostashed 2 files → fast-forward main → restored stash</tspan></text>
   <text class="txt bold green" x="24" y="396">✨ Synchronized 2 repositories cleanly in 0.42s (zero conflicts).</text>

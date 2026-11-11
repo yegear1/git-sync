@@ -31,7 +31,7 @@ Built specifically for high-throughput developer workflows and autonomous AI age
 <summary>View plain-text terminal transcript</summary>
 
 ```text
-➜ ~/github $ git sync status --pending --changelog
+➜ ~/github $ git sync status --human --pending --changelog
 REPOSITORY               BRANCH     STATUS          SYNC    DIRTY   CHANGELOG
 ─────────────────────────────────────────────────────────────────────────────────────────────
 ye-dev/api-gateway       main       PULL_PENDING    ↓2      clean   Added: 1, Fixed: 1
@@ -44,7 +44,7 @@ ye-dev/infra-deploy      main       SYNCED          ✓       clean   —
 
 Summary: 30 total | 27 synced | 2 pull pending | 1 push pending | 1 dirty  (0.38s)
 
-➜ ~/github $ git sync pull --all
+➜ ~/github $ git sync pull --all --human
 ✓ ye-dev/api-gateway    fast-forward main (2 commits) + 1 aux branch
 ✓ ye-dev/auth-service   autostashed 2 files → fast-forward main → restored stash
 ✨ Synchronized 2 repositories cleanly in 0.42s (zero conflicts).
