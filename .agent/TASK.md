@@ -7,16 +7,8 @@
 
 ## Active Task
 
-### 📌 Task [00.37]: Structured `REPO_NOT_FOUND` JSON Diagnostics and Non-Zero Exit Code on Unmatched Repository Targets
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/engine/types.py`, `tests/`
-- **Description:** Fix silent failure in `cmd_pull`, `cmd_push`, `cmd_resolve`, `cmd_unlock`, and `cmd_worktree` when an AI agent or user specifies an unmatched repository name in JSON mode. Instead of silently skipping unmatched names and returning `[]` with exit code `0`, append a structured error entry (`{"repo": query, "repo_rel": query, "success": False, "error": "REPO_NOT_FOUND", "diagnostic": {"category": "REPO_NOT_FOUND", "action_required": "verify_repo_name", "message": ..., "suggestion": "git-sync status"}}`) and return exit code `1`.
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/engine/types.py`, `tests/`
-- **Acceptance Criteria:**
-  - [ ] Passing a non-existent repository name to `pull`, `push`, `resolve`, `unlock`, or `worktree` in `--json` mode includes a structured `REPO_NOT_FOUND` error record in the output payload instead of silently omitting it.
-  - [ ] Commands return exit code `1` whenever one or more requested repository names cannot be matched in the workspace.
-  - [ ] Human text mode (`--human`) continues to print `❌ No repository found matching: '<query>'` and returns exit code `1`.
-  - [ ] Unit tests verify `REPO_NOT_FOUND` JSON error payload and exit code `1` across `pull`, `push`, `resolve`, `unlock`, and `worktree`.
+No active task. Task [00.37] is complete; the upcoming queue is empty.
+Next task ID: [00.38] for the current epic. New scope requires planning approval.
 
 ---
 
@@ -61,6 +53,7 @@
 | [00.34] | Concurrent Multi-Repository `git-sync push` Parallelization | [2d0431e] | 2026-11-10 |
 | [00.35] | Token-Budget Optimization and Structured Diffstat Summarization in `--compact` Pull & Push JSON | [75f70a4] | 2026-11-10 |
 | [00.36] | Anomaly-Only Compact Mode for `git-sync doctor` and `git-sync worktree list` | [63abe2a] | 2026-11-10 |
+| [00.37] | Structured `REPO_NOT_FOUND` Diagnostics and Failure Exit Codes for Unmatched Repository Targets | [8ff913d] | 2026-11-10 |
 
 ---
 
