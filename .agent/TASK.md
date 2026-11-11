@@ -7,15 +7,15 @@
 
 ## Active Task
 
-### 📌 Task [00.42]: Structured JSON Configuration & Profile Error Diagnostics
+### 📌 Task [00.43]: English Standardization of JSON Preview Warnings and Removal of `legacy_preview_item` PT-BR Translation
 - **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `tests/`
-- **Description:** Update pre-parse configuration error handling in `main()` so that `FileNotFoundError`, `ValueError`, and `OSError` raised by `load_config()` emit a structured JSON error payload (`{"ok": False, "error": "CONFIG_ERROR", "message": ..., "diagnostic": {"category": "CONFIG_ERROR", "action_required": "fix_configuration", "message": ..., "suggestion": "git-sync config --init"}}`) when JSON output is active by default (i.e., when `--human`, `--no-json`, `--text`, `--table`, `--dashboard`, `--tui`, or `-i` are not present in `argv`), while preserving human error output on `stderr` when human flags are passed.
-- **Systems Involved:** `src/git_sync/cli.py`, `tests/`
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `tests/`
+- **Description:** Remove the legacy Portuguese regex translation in `legacy_preview_item` so `--preview` and `--confirm` JSON payloads across `pull`, `push`, and `resolve` emit canonical English warning strings (`"Dirty working tree..."`, `"Protected branch: ..."`, `"Shallow repository"`, etc.), completing the English standardization started in `[00.30]`–`[00.32]`.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `tests/`
 - **Acceptance Criteria:**
-  - [ ] Invalid `--config` path, malformed JSON config, or unknown `--profile` emits a valid JSON error object with `error: "CONFIG_ERROR"` and structured `diagnostic` by default and exits with code `1`.
-  - [ ] Passing `--human` (or `--no-json`, `--text`, `--table`) prints `❌ Configuration error: ...` to `stderr` and exits with code `1`.
-  - [ ] Unit tests verify both JSON and human error output for configuration and profile errors.
+  - [ ] `git-sync pull --preview`, `git-sync push --preview`, and `git-sync resolve --preview` emit English `warnings` in JSON mode without translating back to Portuguese.
+  - [ ] `legacy_preview_item` is either removed or becomes a pass-through identity helper.
+  - [ ] All preview/confirm test assertions in `tests/` are updated and passing in English.
 
 ---
 
@@ -65,6 +65,7 @@
 | [00.39] | Positional Repository Target Filtering (`[repos ...]`) for `git-sync status` and `git-sync dirty` | [f11b1c4] | 2026-11-10 |
 | [00.40] | Concurrent Multi-Repository `git-sync pull` Execution with Adaptive ThreadPool and Worktree-Family Serialization | [be7f3f3] | 2026-11-10 |
 | [00.41] | Token-Budget Compact Formatter (`compact_resolve_item`) for `git-sync resolve` | [a277745] | 2026-11-10 |
+| [00.42] | Structured JSON Configuration & Profile Error Diagnostics | [fe72f02] | 2026-11-10 |
 
 ---
 
@@ -72,18 +73,6 @@
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
 
-
-### 📌 Task [00.43]: English Standardization of JSON Preview Warnings and Removal of `legacy_preview_item` PT-BR Translation
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `tests/`
-- **Description:** Remove the legacy Portuguese regex translation in `legacy_preview_item` so `--preview` and `--confirm` JSON payloads across `pull`, `push`, and `resolve` emit canonical English warning strings (`"Dirty working tree..."`, `"Protected branch: ..."`, `"Shallow repository"`, etc.), completing the English standardization started in `[00.30]`–`[00.32]`.
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `tests/`
-- **Acceptance Criteria:**
-  - [ ] `git-sync pull --preview`, `git-sync push --preview`, and `git-sync resolve --preview` emit English `warnings` in JSON mode without translating back to Portuguese.
-  - [ ] `legacy_preview_item` is either removed or becomes a pass-through identity helper.
-  - [ ] All preview/confirm test assertions in `tests/` are updated and passing in English.
-
----
 
 ## Release / Cycle Wrap-up (Not the next task)
 
