@@ -101,7 +101,7 @@ def print_ssh_audit_report(ssh_audit: dict[str, Any]) -> None:
             for p in pruned:
                 print(f"                      • {p}")
         if corrupted and not pruned:
-            print(f"  Invalid sockets:  ⚠️  {len(corrupted)} file(s) corrompido(s)")
+            print(f"  Invalid sockets:  ⚠️  {len(corrupted)} corrupted file(s)")
 
     bench = ssh_audit.get("benchmark")
     if bench:

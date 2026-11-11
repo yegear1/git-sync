@@ -358,6 +358,20 @@ class TestCliDoctorIntegration(unittest.TestCase):
 class TestSshMultiplexingDiagnostics(unittest.TestCase):
     """Test SSH ControlMaster configuration inspection, latency audit, and fallback mechanics."""
 
+    def test_print_ssh_audit_report_corrupted_sockets_english(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from git_sync.ui.formatters import print_ssh_audit_report
+
+        audit = {"config": {}, "sockets": {"active": [], "pruned": [], "corrupted": ["a", "b"]}}
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            print_ssh_audit_report(audit)
+        out = buf.getvalue()
+        self.assertIn("Invalid sockets:  ⚠️  2 corrupted file(s)", out)
+        self.assertNotIn("corrompido", out)
+
     def test_inspect_ssh_config_file_missing(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             fake_config = os.path.join(tmp_dir, "nonexistent_config")
