@@ -1714,6 +1714,29 @@ def cmd_worktree_list(args: argparse.Namespace) -> int:
     return 1 if missing else 0
 
 
+_HUMAN_OUTPUT_FLAGS = frozenset({"--human", "--no-json", "--text", "--table", "--dashboard", "--tui", "-i"})
+
+
+def _report_config_error(exc: BaseException, argv: list[str]) -> int:
+    """Report a pre-parse configuration/profile error as JSON (default) or human text; always exit code 1."""
+    message = str(exc)
+    if _HUMAN_OUTPUT_FLAGS.intersection(argv):
+        print(f"❌ Configuration error: {message}", file=sys.stderr)
+        return 1
+    print(json.dumps({
+        "ok": False,
+        "error": "CONFIG_ERROR",
+        "message": message,
+        "diagnostic": {
+            "category": "CONFIG_ERROR",
+            "action_required": "fix_configuration",
+            "message": message,
+            "suggestion": "git-sync config --init",
+        },
+    }, indent=2))
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     """Main CLI entrypoint with support for workspace profiles and custom configurations."""
     if argv is None:
@@ -1749,11 +1772,9 @@ def main(argv: list[str] | None = None) -> int:
             if pre_args.config:
                 config.config_path = str(Path(pre_args.config).expanduser().resolve())
         else:
-            print(f"❌ Configuration error: {exc}", file=sys.stderr)
-            return 1
+            return _report_config_error(exc, argv)
     except (ValueError, OSError) as exc:
-        print(f"❌ Configuration error: {exc}", file=sys.stderr)
-        return 1
+        return _report_config_error(exc, argv)
 
     if "cli" not in config.sources:
         config.sources.append("cli")

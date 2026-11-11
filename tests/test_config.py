@@ -386,12 +386,51 @@ class TestCliConfigurationPrecedence(unittest.TestCase):
         self.assertIn("Pull (ff-only):      False", text_out)
         self.assertIn("Push (dry-run):      True", text_out)
 
-    def test_cli_invalid_config_path_returns_error(self):
-        stderr_capture = io.StringIO()
-        with patch("sys.stderr", stderr_capture):
-            exit_code = main(["--config", "/non/existent/path.json", "status"])
-        self.assertEqual(exit_code, 1)
-        self.assertIn("Configuration error", stderr_capture.getvalue())
+    def _run_main_capture(self, argv):
+        out, err = io.StringIO(), io.StringIO()
+        with patch("sys.stdout", out), patch("sys.stderr", err):
+            code = main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def _assert_json_config_error(self, argv):
+        code, out, err = self._run_main_capture(argv)
+        self.assertEqual(code, 1)
+        self.assertEqual(err, "")
+        payload = json.loads(out)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"], "CONFIG_ERROR")
+        self.assertTrue(payload["message"])
+        diag = payload["diagnostic"]
+        self.assertEqual(diag["category"], "CONFIG_ERROR")
+        self.assertEqual(diag["action_required"], "fix_configuration")
+        self.assertEqual(diag["message"], payload["message"])
+        self.assertEqual(diag["suggestion"], "git-sync config --init")
+
+    def _assert_human_config_error(self, argv):
+        code, out, err = self._run_main_capture(argv)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertIn("❌ Configuration error:", err)
+
+    def test_cli_invalid_config_path_returns_json_error_by_default(self):
+        self._assert_json_config_error(["--config", "/non/existent/path.json", "status"])
+
+    def test_cli_invalid_config_path_human_flags_use_stderr(self):
+        for flag in ("--human", "--no-json", "--text", "--table"):
+            with self.subTest(flag=flag):
+                self._assert_human_config_error(["--config", "/non/existent/path.json", "status", flag])
+
+    def test_cli_malformed_config_json_error(self):
+        cfg_file = self.root / "bad.json"
+        cfg_file.write_text("{not valid json", encoding="utf-8")
+        self._assert_json_config_error(["--config", str(cfg_file), "status"])
+        self._assert_human_config_error(["--config", str(cfg_file), "status", "--human"])
+
+    def test_cli_unknown_profile_error(self):
+        cfg_file = self.root / "ok.json"
+        cfg_file.write_text(json.dumps({"root": str(self.root), "profiles": {"a": {}}}), encoding="utf-8")
+        self._assert_json_config_error(["--config", str(cfg_file), "--profile", "nope", "status"])
+        self._assert_human_config_error(["--config", str(cfg_file), "--profile", "nope", "status", "--human"])
 
     def test_resolve_config_with_pull_strategy(self):
         data = {
