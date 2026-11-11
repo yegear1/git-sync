@@ -396,6 +396,23 @@ def _extract_submodules_list(r: RepoStatusRecord | dict[str, Any]) -> list[dict[
     return []
 
 
+_COMPACT_PRUNABLE_SUMMARY_KEYS: tuple[str, ...] = (
+    "stale_worktrees",
+    "submodule_drift",
+    "shallow_submodules",
+    "has_lfs",
+    "lfs_pointers",
+    "lfs_warnings",
+    "sparse_checkout",
+    "sparse_cone_warnings",
+    "no_upstream",
+    "offline",
+    "multi_remote",
+    "worktree_health",
+    "remediations",
+)
+
+
 def build_status_summary(
     results: Sequence[RepoStatusRecord | dict[str, Any]],
     root: str,
@@ -408,7 +425,7 @@ def build_status_summary(
         "root": root,
         "total": len(results),
         "pull_pending": [r["rel_path"] for r in results if "PULL" in r.get("status", "")],
-        "push_pending": [r["rel_path"] for r in results if r.get("status") == "PUSH_PENDING"],
+        "push_pending": [r["rel_path"] for r in results if "PUSH" in r.get("status", "")],
         "dirty": [r["rel_path"] for r in results if r.get("is_dirty")],
         "diverged": [r["rel_path"] for r in results if r.get("status") == "DIVERGED"],
         "worktrees": [r["rel_path"] for r in results if r.get("is_worktree")],
@@ -509,7 +526,16 @@ def build_status_summary(
             for r in results
             if r.get("changelog") and ((r.get("changelog") or {}).get("incoming") or (r.get("changelog") or {}).get("outgoing"))
         }
-    if not compact:
+    if compact:
+        # INVARIANT: Core contract keys are always present; empty secondary anomaly keys are pruned for token budget.
+        for key in _COMPACT_PRUNABLE_SUMMARY_KEYS:
+            value = summary.get(key)
+            if key == "worktree_health":
+                if isinstance(value, dict) and not any(value.values()):
+                    del summary[key]
+            elif not value:
+                summary.pop(key, None)
+    else:
         summary["items"] = results
     if benchmark is not None:
         summary["telemetry"] = benchmark.to_dict()

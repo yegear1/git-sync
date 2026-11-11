@@ -62,8 +62,10 @@ git-sync status --pending --human
   "errors": []
 }
 ```
+- `"push_pending"`: Repositories with `PUSH_PENDING` or `AUX_PUSH_PENDING` (unpushed commits on auxiliary branches).
 - `"no_remote"`: Repositories without remote configured (unconfigured / offline / tests).
 - `"errors"`: Operational execution failures only (`FETCH_ERROR`, network drops, auth rejections).
+- The ten keys above are always present. In compact mode, secondary keys are **omitted when empty**: `stale_worktrees`, `submodule_drift`, `shallow_submodules`, `has_lfs`, `lfs_pointers`, `lfs_warnings`, `sparse_checkout`, `sparse_cone_warnings`, `no_upstream`, `offline`, `multi_remote`, `worktree_health`, `remediations`. Absent key = healthy/empty. `--full` (`--no-compact`) emits every key plus the `items` array.
 
 ### 3.2 Bulk Pull & Synchronization
 

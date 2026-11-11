@@ -1289,7 +1289,7 @@ class TestGitSyncCore(unittest.TestCase):
             code_after = main(["status", "--root", str(self.root), "--no-fetch", "--json", "--compact"])
         self.assertEqual(code_after, 0)
         status_after_data = json.loads(buf_after.getvalue())
-        self.assertEqual(len(status_after_data["stale_worktrees"]), 0)
+        self.assertEqual(len(status_after_data.get("stale_worktrees", [])), 0)
 
 
 class TestSparseCheckoutSupport(unittest.TestCase):
