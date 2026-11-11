@@ -14,13 +14,13 @@ Ferramenta CLI concorrente para auditoria de status e sincronização em lote de
 
 O git-sync gerencia operações em lote sobre repositórios Git em workspaces com múltiplos projetos. Ele inspeciona divergências de branches locais, commits upstream, arquivos modificados na working tree e commits pendentes de push em paralelo, substituindo loops manuais de inspeção por um comando determinístico único.
 
-Construído especificamente para fluxos de trabalho de alto rendimento e agentes autônomos de IA (como Google Antigravity), o git-sync oferece saída legível ANSI no terminal e respostas em formato JSON com alta densidade de informação para minimizar o consumo de tokens de contexto e latência.
+Construído especificamente para fluxos de trabalho de alto rendimento e agentes autônomos de IA (como Google Antigravity), o git-sync é agent-first: emite por padrão JSON compacto com alta densidade de informação para minimizar o consumo de tokens de contexto e latência, e renderiza tabelas ANSI legíveis no terminal sob demanda com `--human`.
 
 - **Inspeção Concorrente:** Varre mais de 30 repositórios em ~2 segundos utilizando um pool de workers gerenciado via `ThreadPoolExecutor` com ajuste adaptativo de concorrência.
 - **Zero Dependências Externas em Execução:** Implementado integralmente com a biblioteca padrão do Python 3.10+ (`argparse`, `subprocess`, `concurrent.futures`, `json`, `dataclasses`).
 - **Prevenção de Travamentos Interativos:** Injeta `GIT_TERMINAL_PROMPT=0` e timeouts de execução configuráveis (padrão: 20s) em todos os subprocessos Git para evitar processos travados em segundo plano.
 - **Invariantes de Segurança Fast-Forward:** Aplica `--ff-only` por padrão em operações de pull e atualiza atomicamente branches auxiliares de tracking sem necessidade de alternar a working tree.
-- **Payloads para Agentes Autônomos:** Emite resumos em JSON compacto via `--json` e saídas filtradas via `--pending` para isolar repositórios que necessitam de ação com consumo mínimo de tokens.
+- **Payloads para Agentes Autônomos:** `--json --compact` é o modo de saída padrão: resumos em JSON compacto que listam apenas anomalias. Use `--full` para payloads completos por repositório e `--human` para tabelas formatadas e indicadores de progresso no terminal. Use `--pending` e alvos posicionais (`git-sync status <repo>`, `git-sync dirty <repo>`) para isolar repositórios que necessitam de ação com consumo mínimo de tokens.
 - **Subcomando Nativo do Git e Autocompletar:** Invocável tanto como `git-sync` quanto diretamente via despachante do Git como `git sync`, com autocompletar completo para Bash e Zsh.
 
 <p align="center">
@@ -107,8 +107,11 @@ Configurações persistentes também podem ser definidas por repositório ou glo
 ## Uso
 
 ```bash
-# Inspecionar todos os repositórios com fetch paralelo nos remotes
+# Inspecionar todos os repositórios com fetch paralelo nos remotes (JSON compacto por padrão)
 git-sync status
+
+# Renderizar tabelas formatadas e indicadores de progresso no terminal em vez de JSON
+git-sync status --human
 
 # Checagem instantânea de status local (sem chamadas de rede, < 0.5s)
 git-sync status --no-fetch
@@ -116,8 +119,11 @@ git-sync status --no-fetch
 # Exibir apenas repositórios com pendência de pull/push ou modificações locais
 git-sync status --pending
 
-# Emitir saída estruturada em JSON para consumo por scripts e agentes de IA
-git-sync status --pending --json
+# Emitir o JSON completo com itens detalhados por repositório (o padrão é --json --compact)
+git-sync status --pending --full
+
+# Inspecionar apenas repositórios específicos (alvos posicionais)
+git-sync status repo-a repo-b
 
 # Sincronizar via fast-forward todos os repositórios com alterações no remote
 git-sync pull --all
@@ -137,8 +143,15 @@ git-sync push repo-a repo-b
 # Listar alterações não comitadas ou não rastreadas em todos os repositórios
 git-sync dirty
 
-# Limpar referências de branches remotas obsoletas (prune)
-git-sync prune
+# Listar alterações não comitadas ou não rastreadas em repositórios específicos
+git-sync dirty repo-a
+
+# Inspecionar worktrees vinculadas (somente anomalias no modo compacto)
+git-sync worktree list
+
+# Limpar metadados obsoletos de worktrees vinculadas (use --preview antes)
+git-sync worktree prune --preview
+git-sync worktree prune
 ```
 
 ## Desenvolvimento

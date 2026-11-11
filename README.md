@@ -14,13 +14,13 @@ Concurrent multi-repository status auditor and synchronization CLI tool for Git 
 
 git-sync manages bulk Git repository operations across multi-project developer workspaces. It inspects local branch divergence, upstream commits, uncommitted working tree changes, and unpushed commits in parallel, replacing repetitive manual inspection loops with a single deterministic command.
 
-Built specifically for high-throughput developer workflows and autonomous AI agents (such as Google Antigravity), git-sync supports both human-readable ANSI terminal output and token-dense JSON payloads designed to minimize context token consumption and latency.
+Built specifically for high-throughput developer workflows and autonomous AI agents (such as Google Antigravity), git-sync is agent-first: it emits token-dense compact JSON by default to minimize context token consumption and latency, and renders human-readable ANSI terminal tables on request with `--human`.
 
 - **Concurrent Inspection:** Scans 30+ repositories in ~2 seconds using a managed `ThreadPoolExecutor` worker pool with adaptive concurrency tuning.
 - **Zero External Runtime Dependencies:** Implemented entirely using Python 3.10+ standard library modules (`argparse`, `subprocess`, `concurrent.futures`, `json`, `dataclasses`).
 - **Interactive Hang Prevention:** Injects `GIT_TERMINAL_PROMPT=0` and configurable execution timeouts (default: 20s) across all Git subprocesses to prevent orphaned background tasks.
 - **Fast-Forward Safety Invariants:** Enforces `--ff-only` by default on all pull operations and atomically updates auxiliary tracking branches without disruptive worktree switching.
-- **Autonomous Agent Payloads:** Emits compact JSON summaries via `--json` and filtered outputs via `--pending` to isolate pull/push/dirty repositories with minimal token overhead.
+- **Autonomous Agent Payloads:** `--json --compact` is the default output mode: compact JSON summaries that list only anomalies. Pass `--full` for complete per-repository item payloads and `--human` for formatted terminal tables and progress indicators. Use `--pending` and positional repository targets (`git-sync status <repo>`, `git-sync dirty <repo>`) to isolate pull/push/dirty repositories with minimal token overhead.
 - **Native Git Subcommand & Completion:** Invocable either as `git-sync` or directly via Git's subcommand dispatcher as `git sync`, with full Bash and Zsh tab completion.
 
 <p align="center">
@@ -107,8 +107,11 @@ Persistent settings can also be defined per repository or globally using a `.git
 ## Usage
 
 ```bash
-# Inspect all repositories with parallel remote fetch
+# Inspect all repositories with parallel remote fetch (compact JSON by default)
 git-sync status
+
+# Render formatted terminal tables and progress indicators instead of JSON
+git-sync status --human
 
 # Instant local status check (no network calls, < 0.5s)
 git-sync status --no-fetch
@@ -116,8 +119,11 @@ git-sync status --no-fetch
 # Display only repositories with pending pull/push or uncommitted changes
 git-sync status --pending
 
-# Emit structured JSON payload for AI agents and automated scripts
-git-sync status --pending --json
+# Emit the full JSON payload with complete per-repository items (default is --json --compact)
+git-sync status --pending --full
+
+# Inspect specific repositories only (positional targets)
+git-sync status repo-a repo-b
 
 # Fast-forward pull all repositories with upstream changes
 git-sync pull --all
@@ -137,8 +143,15 @@ git-sync push repo-a repo-b
 # List uncommitted or untracked file modifications across all repositories
 git-sync dirty
 
-# Prune stale remote-tracking branches
-git-sync prune
+# List uncommitted or untracked file modifications for specific repositories
+git-sync dirty repo-a
+
+# Inspect linked worktrees (anomalies only in compact mode)
+git-sync worktree list
+
+# Prune stale linked worktree metadata (preview first with --preview)
+git-sync worktree prune --preview
+git-sync worktree prune
 ```
 
 ## Development
