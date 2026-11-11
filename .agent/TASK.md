@@ -7,15 +7,15 @@
 
 ## Active Task
 
-### 📌 Task [00.46]: SSH Multiplexing Audit Human Report English String Fix (`corrupted file(s)`)
+### 📌 Task [00.47]: README.md & README.pt-br.md Agent-First CLI Defaults and Subcommand Alignment
 - **Status:** APPROVED `[PARALLEL: W1]`
-- **Paths:** `src/git_sync/ui/formatters.py`, `tests/test_credentials_and_network.py`
-- **Description:** Replace the remaining Portuguese string `"file(s) corrompido(s)"` in `print_ssh_audit_report` (`src/git_sync/ui/formatters.py:104`) with `"corrupted file(s)"` so 100% of human and JSON CLI outputs across `src/git_sync/` are in canonical English.
-- **Systems Involved:** `src/git_sync/ui/formatters.py`, `tests/test_credentials_and_network.py`
+- **Paths:** `README.md`, `README.pt-br.md`
+- **Description:** Update the `Usage` / `Uso` and `Overview` / `Visão Geral` sections in `README.md` and `README.pt-br.md` to reflect Agent-First defaults (`--json` and `--compact` enabled by default, `--full` for complete item payloads, `--human` for terminal tables/progress), positional target filtering (`git-sync status <repo>`, `git-sync dirty <repo>`), and replace the non-existent `git-sync prune` example with `git-sync worktree prune` and `git-sync worktree list`.
+- **Systems Involved:** `README.md`, `README.pt-br.md`
 - **Acceptance Criteria:**
-  - [ ] `print_ssh_audit_report` outputs `Invalid sockets:  ⚠️  <N> corrupted file(s)` when `corrupted` sockets are present and `pruned` is empty.
-  - [ ] Zero non-English words remain anywhere in `src/git_sync/`.
-  - [ ] Unit test in `tests/test_credentials_and_network.py` asserts the English corrupted socket output in `print_ssh_audit_report`.
+  - [ ] `README.md` and `README.pt-br.md` accurately document that `--json --compact` is the default output mode, `--full` includes full details, and `--human` renders formatted terminal tables.
+  - [ ] Usage examples replace `git-sync prune` with `git-sync worktree prune` / `git-sync worktree list` and include positional target examples for `status` and `dirty`.
+  - [ ] Both README files remain structurally synchronized and free of config drift.
 
 ---
 
@@ -69,6 +69,7 @@
 | [00.43] | English Standardization of JSON Preview Warnings and Removal of `legacy_preview_item` | [40bd9b6] | 2026-11-10 |
 | [00.44] | Empty-Workspace Compact Status Schema Parity (`build_status_summary`) | [8abfd92] | 2026-11-10 |
 | [00.45] | Consistent `--preview` & `--confirm` Envelope When All Requested Targets Are Unmatched (`missing` Only) | [6c3e008] | 2026-11-10 |
+| [00.46] | SSH Multiplexing Audit Human Report English String Fix (`corrupted file(s)`) | [0f66aa4] | 2026-11-10 |
 
 ---
 
@@ -77,15 +78,6 @@
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
 
 
-### 📌 Task [00.47]: README.md & README.pt-br.md Agent-First CLI Defaults and Subcommand Alignment
-- **Status:** APPROVED `[PARALLEL: W1]`
-- **Paths:** `README.md`, `README.pt-br.md`
-- **Description:** Update the `Usage` / `Uso` and `Overview` / `Visão Geral` sections in `README.md` and `README.pt-br.md` to reflect Agent-First defaults (`--json` and `--compact` enabled by default, `--full` for complete item payloads, `--human` for terminal tables/progress), positional target filtering (`git-sync status <repo>`, `git-sync dirty <repo>`), and replace the non-existent `git-sync prune` example with `git-sync worktree prune` and `git-sync worktree list`.
-- **Systems Involved:** `README.md`, `README.pt-br.md`
-- **Acceptance Criteria:**
-  - [ ] `README.md` and `README.pt-br.md` accurately document that `--json --compact` is the default output mode, `--full` includes full details, and `--human` renders formatted terminal tables.
-  - [ ] Usage examples replace `git-sync prune` with `git-sync worktree prune` / `git-sync worktree list` and include positional target examples for `status` and `dirty`.
-  - [ ] Both README files remain structurally synchronized and free of config drift.
 
 
 ## Release / Cycle Wrap-up (Not the next task)
