@@ -293,7 +293,9 @@ class TestDivergenceAndResolution(unittest.TestCase):
         payload = json.loads(stdout_capture.getvalue())
         self.assertIsInstance(payload, list)
         self.assertEqual(payload[0]["strategy"], "abort")
-        self.assertTrue(payload[0]["details"]["is_diverged"])
+        self.assertEqual(payload[0]["ahead"], 1)
+        self.assertEqual(payload[0]["behind"], 1)
+        self.assertNotIn("details", payload[0])
 
     def test_cli_resolve_diff_flag(self):
         self._create_diverged_repo_pair("cli-resolve-diff")

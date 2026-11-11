@@ -1136,6 +1136,51 @@ def compact_push_item(res: PushResult | dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+_COMPACT_RESOLVE_MESSAGE_MAX_CHARS = 160
+
+
+def compact_resolve_item(res: ResolveResult | dict[str, Any]) -> dict[str, Any]:
+    """
+    Transform a verbose ResolveResult into a token-budget compact entry (<150 tokens):
+    - Omits raw stdout/stderr and verbose details arrays (local_commits, remote_commits, dirty_files)
+    - Surfaces concise divergence metrics (branch, upstream, ahead, behind, is_dirty, dirty_files_count)
+    - Keeps strategy, success, dry_run, diagnostic and a truncated failure message
+    """
+    details = res.get("details") or {}
+    compact: dict[str, Any] = {
+        "repo": str(res.get("repo", "")),
+        "repo_rel": res.get("repo_rel"),
+        "branch": str(res.get("branch") or details.get("branch") or ""),
+        "strategy": str(res.get("strategy", "none")),
+        "success": bool(res.get("success", False)),
+    }
+
+    if res.get("dry_run"):
+        compact["dry_run"] = True
+
+    if details:
+        if details.get("upstream"):
+            compact["upstream"] = details["upstream"]
+        if "ahead" in details:
+            compact["ahead"] = int(details["ahead"])
+        if "behind" in details:
+            compact["behind"] = int(details["behind"])
+        compact["is_dirty"] = bool(details.get("is_dirty", False))
+        compact["dirty_files_count"] = len(details.get("dirty_files") or [])
+
+    if res.get("diagnostic"):
+        compact["diagnostic"] = res["diagnostic"]
+
+    if not res.get("success", False):
+        message = str(res.get("message") or res.get("stderr") or "").strip()
+        if message:
+            if len(message) > _COMPACT_RESOLVE_MESSAGE_MAX_CHARS:
+                message = message[: _COMPACT_RESOLVE_MESSAGE_MAX_CHARS - 3] + "..."
+            compact["message"] = message
+
+    return compact
+
+
 def print_dirty_report(dirty: Sequence[RepoStatusRecord | dict[str, Any]]) -> None:
     """Print uncommitted dirty and untracked files report."""
     if not dirty:
@@ -1216,6 +1261,7 @@ __all__ = [
     "build_status_summary",
     "compact_pull_item",
     "compact_push_item",
+    "compact_resolve_item",
     "format_compact_summary_line",
     "is_pull_updated",
     "is_push_updated",

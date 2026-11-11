@@ -64,6 +64,7 @@ from git_sync.ui import (
     build_status_summary,
     compact_pull_item,
     compact_push_item,
+    compact_resolve_item,
     format_bulk_action_preview,
     format_compact_summary_line,
     format_diff_stat,
@@ -915,7 +916,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                 res["details"] = details
                 results.append(res)
                 progress.advance(rel)
-                if not args.json:
+                if not args.json and not getattr(args, "compact", False):
                     mode_str = "[DRY-RUN] " if res.get("dry_run") else ""
                     icon = "ℹ️" if res.get("dry_run") else ("✅" if res["success"] else "❌")
                     status_msg = res.get("message") or res.get("stderr") or "OK"
@@ -940,12 +941,28 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                 }
                 results.append(res)
                 progress.advance(rel)
-                if not args.json:
+                if not args.json and not getattr(args, "compact", False):
                     mode_str = "[DRY-RUN] " if dry_run else ""
                     print(f"⚠️ {mode_str}[{rel}] ({details.get('branch')} ↔ {details.get('upstream')}): {details.get('ahead')} ahead, {details.get('behind')} behind")
 
+    compact_mode = getattr(args, "compact", False)
     if args.json:
-        print(json.dumps([*results, *missing], indent=2))
+        # INVARIANT: --diff entries and selection failures retain their schema outside the compact formatter.
+        payload = [
+            compact_resolve_item(r) if compact_mode and "diff" not in r else r
+            for r in results
+        ]
+        print(json.dumps([*payload, *missing], indent=2))
+    elif compact_mode and not show_diff_only:
+        total_count = len(results) + len(missing)
+        errors_count = len(missing) + sum(1 for r in results if not r.get("success", True))
+        updated_count = sum(
+            1
+            for r in results
+            if r.get("success", True) and not r.get("dry_run") and r.get("strategy") not in (None, "none", "abort")
+        )
+        uptodate_count = max(0, total_count - updated_count - errors_count)
+        print(format_compact_summary_line(total_count, updated_count, uptodate_count, errors_count))
 
     has_failures = any(not r.get("success", True) for r in results)
     return 1 if missing or has_failures else 0
