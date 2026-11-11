@@ -26,6 +26,7 @@ from git_sync.engine import (
     DEFAULT_RETRIES,
     DEFAULT_WORKERS,
     AdaptiveConcurrencyController,
+    PullResult,
     PushResult,
     RepoStatusRecord,
     ResolveResult,
@@ -554,7 +555,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
             return 1
         targets, missing = _match_requested_repos(args.repos, all_repos, root, args.json)
 
-    pull_results = []
+    pull_results: list[PullResult | dict[str, Any]] = []
     strategy = getattr(args, "strategy", None)
     is_interactive = getattr(args, "interactive", False)
 
@@ -628,45 +629,118 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
     t2 = time.perf_counter()
     msg_prog = "Simulating pull..." if dry_run else "Updating repositories..."
-    with ProgressIndicator(msg_prog, total=len(targets), enabled=show_progress) as progress:
-        for r in targets:
-            rel = os.path.relpath(r, root)
-            res = pull_repo(
-                r,
-                remote=remote,
-                ff_only=args.ff_only,
-                sync_branches=args.sync_branches,
-                strategy=strategy,
-                autostash=getattr(args, "autostash", True),
+    # INVARIANT: Interactive resolution prompts require a TTY and must never run from worker threads.
+    sequential_interactive = bool(is_interactive and not args.json and sys.stdin.isatty())
+
+    def _pull_one(r: str) -> PullResult:
+        return pull_repo(
+            r,
+            remote=remote,
+            ff_only=args.ff_only,
+            sync_branches=args.sync_branches,
+            strategy=strategy,
+            autostash=getattr(args, "autostash", True),
+            timeout=args.timeout,
+            cache=cache,
+            dry_run=dry_run,
+            benchmark=benchmark,
+            retries=retries,
+            recover_stale_lock=getattr(args, "recover_locks", False),
+            submodules=getattr(args, "submodules", False),
+            unshallow=getattr(args, "unshallow", False),
+            reapply_sparse=getattr(args, "reapply_sparse", False),
+            lfs=getattr(args, "lfs", False),
+            no_lfs=getattr(args, "no_lfs", False),
+        )
+
+    configured_w = None if auto_tuned else args.workers
+
+    def _family_key(r: str) -> str:
+        # INVARIANT: A main repo and its linked worktrees share refs; pulling them concurrently races branch isolation.
+        try:
+            proc = subprocess.run(
+                ["git", "-C", r, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                capture_output=True,
+                text=True,
+                check=False,
                 timeout=args.timeout,
-                cache=cache,
-                dry_run=dry_run,
-                benchmark=benchmark,
-                retries=retries,
-                recover_stale_lock=getattr(args, "recover_locks", False),
-                submodules=getattr(args, "submodules", False),
-                unshallow=getattr(args, "unshallow", False),
-                reapply_sparse=getattr(args, "reapply_sparse", False),
-                lfs=getattr(args, "lfs", False),
-                no_lfs=getattr(args, "no_lfs", False),
             )
-            res["repo_rel"] = rel
+            out = proc.stdout.strip()
+            if proc.returncode == 0 and out:
+                return os.path.realpath(out)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return r
 
-            # If pull failed and user requested interactive resolution
-            if not res["success"] and not dry_run and is_interactive and not args.json and sys.stdin.isatty():
-                details = get_divergence_details(r, timeout=args.timeout)
-                if details.get("is_diverged"):
-                    res_prompt = _prompt_resolution_choice(r, rel, details, timeout=args.timeout)
-                    res["resolved"] = res_prompt
-                    if res_prompt.get("success") and res_prompt.get("strategy") in ("rebase", "merge"):
-                        res["success"] = True
+    def _pull_guarded(r: str) -> PullResult | dict[str, Any]:
+        try:
+            return _pull_one(r)
+        except Exception as exc:
+            return {
+                "repo": r,
+                "success": False,
+                "stdout": "",
+                "stderr": str(exc),
+                "dry_run": dry_run,
+                "behind": 0,
+                "is_worktree": False,
+                "worktree_main_path": None,
+                "diagnostic": {
+                    "category": "PULL_EXCEPTION",
+                    "message": str(exc),
+                    "action_required": "inspect_exception",
+                },
+            }
 
-            pull_results.append(res)
-            prog_label = f"{rel} [worktree]" if res.get("is_worktree") else rel
-            progress.advance(prog_label)
+    def _pull_family(paths: list[str]) -> list[tuple[str, PullResult | dict[str, Any]]]:
+        return [(p, _pull_guarded(p)) for p in paths]
 
-            if not args.json and not getattr(args, "compact", False):
-                render_pull_item(res, root, dry_run=dry_run)
+    with ProgressIndicator(msg_prog, total=len(targets), enabled=show_progress) as progress:
+        if sequential_interactive:
+            for r in targets:
+                rel = os.path.relpath(r, root)
+                res = _pull_one(r)
+                res["repo_rel"] = rel
+
+                # If pull failed and user requested interactive resolution
+                if not res["success"] and not dry_run:
+                    details = get_divergence_details(r, timeout=args.timeout)
+                    if details.get("is_diverged"):
+                        res_prompt = _prompt_resolution_choice(r, rel, details, timeout=args.timeout)
+                        res["resolved"] = res_prompt
+                        if res_prompt.get("success") and res_prompt.get("strategy") in ("rebase", "merge"):
+                            res["success"] = True
+
+                pull_results.append(res)
+                prog_label = f"{rel} [worktree]" if res.get("is_worktree") else rel
+                progress.advance(prog_label)
+
+                if not getattr(args, "compact", False):
+                    render_pull_item(res, root, dry_run=dry_run)
+        else:
+            families: dict[str, list[str]] = {}
+            for r in targets:
+                families.setdefault(_family_key(r) if len(targets) > 1 else r, []).append(r)
+            pull_pool_workers = controller.determine_workers(
+                len(families),
+                is_fetch=True,
+                configured_workers=configured_w,
+            )
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, pull_pool_workers)) as executor:
+                family_futures = [executor.submit(_pull_family, paths) for paths in families.values()]
+                for fam_future in concurrent.futures.as_completed(family_futures):
+                    for fam_path, fam_res in fam_future.result():
+                        fam_rel = os.path.relpath(fam_path, root)
+                        fam_res["repo_rel"] = fam_rel
+                        pull_results.append(fam_res)
+                        fam_label = f"{fam_rel} [worktree]" if fam_res.get("is_worktree") else fam_rel
+                        progress.advance(fam_label)
+
+    # INVARIANT: Output order is deterministic regardless of worker completion order.
+    pull_results.sort(key=lambda x: str(x.get("repo_rel", "")))
+    if not sequential_interactive and not args.json and not getattr(args, "compact", False):
+        for item in pull_results:
+            render_pull_item(item, root, dry_run=dry_run)
 
     t_pull = time.perf_counter() - t2
     benchmark.record_stage("pull", t_pull)
