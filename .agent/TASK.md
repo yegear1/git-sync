@@ -7,16 +7,15 @@
 
 ## Active Task
 
-### 📌 Task [00.44]: Empty-Workspace Compact Status Schema Parity (`build_status_summary`)
+### 📌 Task [00.45]: Consistent `--preview` & `--confirm` Envelope When All Requested Targets Are Unmatched (`missing` Only)
 - **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `tests/test_status_summary.py`
-- **Description:** Unify empty-workspace (`all_repos == []`) compact JSON output in `cmd_status` (`src/git_sync/cli.py`) by delegating to `build_status_summary([], root=root, changelog_enabled=False, compact=True, benchmark=...)` instead of constructing a hardcoded literal dictionary that leaks pruned secondary keys (`has_lfs`, `lfs_pointers`). Ensure the 10-key compact status contract is identical whether `discover_repos` returns `[]` or a positional filter matches zero repositories.
-- **Systems Involved:** `src/git_sync/cli.py`, `tests/test_status_summary.py`
+- **Paths:** `src/git_sync/cli.py`, `tests/test_repo_not_found.py`
+- **Description:** Fix `--preview` and `--confirm` handling in `cmd_pull`, `cmd_resolve`, `cmd_push`, and `cmd_worktree_prune` (`src/git_sync/cli.py`) when all positional repository arguments are unmatched (`targets == []` and `missing != []`). Instead of bypassing the preview/confirm branch because `targets` is empty and emitting a bare array `[REPO_NOT_FOUND]`, enter the preview/confirm handler whenever `targets or missing` is non-empty so `--preview` consistently emits the `{"preview": true, "action": "<cmd>", "total": 0, "items": [...missing]}` envelope and returns exit code `1`.
+- **Systems Involved:** `src/git_sync/cli.py`, `tests/test_repo_not_found.py`
 - **Acceptance Criteria:**
-  - [ ] `git-sync status` (default `--json --compact`) on an empty workspace directory delegates to `build_status_summary([], ...)` and emits the exact 10 canonical compact keys (`root`, `total`, `pull_pending`, `push_pending`, `dirty`, `diverged`, `worktrees`, `has_submodules`, `no_remote`, `errors`), omitting empty secondary keys (`has_lfs`, `lfs_pointers`, etc.).
-  - [ ] When positional repository targets are passed on an empty workspace, `not_found` (`REPO_NOT_FOUND` records) and optional `telemetry` (`--benchmark`) are preserved and exit code `1` is returned.
-  - [ ] Full JSON mode (`--full` / `--no-compact`) on an empty workspace preserves its existing `{"error": "No repositories found in <root>", "results": []}` contract.
-  - [ ] Unit tests in `tests/test_status_summary.py` verify empty-workspace compact schema parity with and without positional targets.
+  - [ ] Running `pull`, `push`, `resolve --strategy <strat>`, or `worktree prune` with `--preview` and only non-existent repository names in `--json` mode emits the structured preview envelope (`{"preview": true, "action": ..., "total": 0, "items": [REPO_NOT_FOUND, ...]}`) and exits with code `1`.
+  - [ ] Running with `--confirm` and only non-existent repository names in `--json` mode emits the confirmation error envelope with `preview: [REPO_NOT_FOUND, ...]` and exits with code `1` (or exits `1` without prompting when `preview_items` is empty in human mode).
+  - [ ] Unit tests in `tests/test_repo_not_found.py` verify `--preview` and `--confirm` envelopes and exit code `1` when all positional targets are unmatched across `pull`, `push`, `resolve`, and `worktree prune`.
 
 ---
 
@@ -68,23 +67,13 @@
 | [00.41] | Token-Budget Compact Formatter (`compact_resolve_item`) for `git-sync resolve` | [a277745] | 2026-11-10 |
 | [00.42] | Structured JSON Configuration & Profile Error Diagnostics | [fe72f02] | 2026-11-10 |
 | [00.43] | English Standardization of JSON Preview Warnings and Removal of `legacy_preview_item` | [40bd9b6] | 2026-11-10 |
+| [00.44] | Empty-Workspace Compact Status Schema Parity (`build_status_summary`) | [8abfd92] | 2026-11-10 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-
-### 📌 Task [00.45]: Consistent `--preview` & `--confirm` Envelope When All Requested Targets Are Unmatched (`missing` Only)
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `tests/test_repo_not_found.py`
-- **Description:** Fix `--preview` and `--confirm` handling in `cmd_pull`, `cmd_resolve`, `cmd_push`, and `cmd_worktree_prune` (`src/git_sync/cli.py`) when all positional repository arguments are unmatched (`targets == []` and `missing != []`). Instead of bypassing the preview/confirm branch because `targets` is empty and emitting a bare array `[REPO_NOT_FOUND]`, enter the preview/confirm handler whenever `targets or missing` is non-empty so `--preview` consistently emits the `{"preview": true, "action": "<cmd>", "total": 0, "items": [...missing]}` envelope and returns exit code `1`.
-- **Systems Involved:** `src/git_sync/cli.py`, `tests/test_repo_not_found.py`
-- **Acceptance Criteria:**
-  - [ ] Running `pull`, `push`, `resolve --strategy <strat>`, or `worktree prune` with `--preview` and only non-existent repository names in `--json` mode emits the structured preview envelope (`{"preview": true, "action": ..., "total": 0, "items": [REPO_NOT_FOUND, ...]}`) and exits with code `1`.
-  - [ ] Running with `--confirm` and only non-existent repository names in `--json` mode emits the confirmation error envelope with `preview: [REPO_NOT_FOUND, ...]` and exits with code `1` (or exits `1` without prompting when `preview_items` is empty in human mode).
-  - [ ] Unit tests in `tests/test_repo_not_found.py` verify `--preview` and `--confirm` envelopes and exit code `1` when all positional targets are unmatched across `pull`, `push`, `resolve`, and `worktree prune`.
 
 
 ### 📌 Task [00.46]: SSH Multiplexing Audit Human Report English String Fix (`corrupted file(s)`)
