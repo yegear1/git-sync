@@ -1,5 +1,16 @@
+import io
+import json
+import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
+from git_sync.cli import main
+from git_sync.config import GitSyncConfig
 from git_sync.ui.formatters import build_status_summary
 
 CORE_KEYS = {
@@ -36,6 +47,36 @@ def _repo(rel_path: str, status: str = "UP_TO_DATE", **extra):
     rec = {"rel_path": rel_path, "path": f"/ws/{rel_path}", "status": status, "is_dirty": False}
     rec.update(extra)
     return rec
+
+
+class EmptyWorkspaceCompactStatusTests(unittest.TestCase):
+    def _run(self, *extra: str) -> tuple[int, dict]:
+        with tempfile.TemporaryDirectory() as root:
+            out = io.StringIO()
+            with patch("git_sync.cli.load_config", return_value=GitSyncConfig(root=root)), redirect_stdout(out):
+                code = main(["status", "--root", root, "--no-fetch", *extra])
+            return code, json.loads(out.getvalue())
+
+    def test_empty_workspace_compact_matches_canonical_schema(self):
+        code, payload = self._run("--json", "--compact")
+        self.assertEqual(code, 0)
+        self.assertEqual(set(payload), CORE_KEYS)
+        self.assertEqual(payload["total"], 0)
+        self.assertFalse(PRUNABLE_KEYS & set(payload))
+
+    def test_empty_workspace_compact_with_targets_preserves_not_found(self):
+        code, payload = self._run("--json", "--compact", "--benchmark", "missing-repo")
+        self.assertEqual(code, 1)
+        self.assertTrue(CORE_KEYS <= set(payload))
+        self.assertFalse(PRUNABLE_KEYS & set(payload))
+        self.assertIn("telemetry", payload)
+        self.assertEqual(payload["not_found"][0]["error"], "REPO_NOT_FOUND")
+
+    def test_empty_workspace_full_preserves_error_contract(self):
+        code, payload = self._run("--json", "--full")
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["results"], [])
+        self.assertTrue(payload["error"].startswith("No repositories found in"))
 
 
 class StatusSummaryTests(unittest.TestCase):

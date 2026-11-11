@@ -244,22 +244,13 @@ def cmd_status(args: argparse.Namespace) -> int:
         benchmark.stop()
         if args.json:
             if getattr(args, "compact", False):
-                empty_summary = {
-                    "root": root,
-                    "total": 0,
-                    "pull_pending": [],
-                    "push_pending": [],
-                    "dirty": [],
-                    "diverged": [],
-                    "worktrees": [],
-                    "has_submodules": [],
-                    "has_lfs": [],
-                    "lfs_pointers": [],
-                    "no_remote": [],
-                    "errors": [],
-                }
-                if getattr(args, "benchmark", False):
-                    empty_summary["telemetry"] = benchmark.to_dict()
+                empty_summary = build_status_summary(
+                    [],
+                    root=root,
+                    changelog_enabled=False,
+                    compact=True,
+                    benchmark=benchmark if getattr(args, "benchmark", False) else None,
+                )
                 if empty_not_found:
                     empty_summary["not_found"] = empty_not_found
                 print(json.dumps(empty_summary, indent=2))
