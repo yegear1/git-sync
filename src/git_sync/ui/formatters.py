@@ -7,7 +7,6 @@ Terminal formatting and output presentation helpers for git-sync CLI subcommands
 from __future__ import annotations
 
 import os
-import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -45,26 +44,6 @@ def compact_doctor_report(sanity: DoctorSanityReport) -> DoctorSanityReport:
             "items": [entry for entry in health.get("items", []) if entry.get("is_healthy") is False],
         }
     return compact
-
-
-def legacy_preview_item(item: dict[str, Any]) -> dict[str, Any]:
-    """Preserve historical warning text in JSON preview payloads."""
-    # INVARIANT: Existing JSON warning values are a payload contract.
-    replacements = (
-        (r"^Dirty working tree \((\d+) file\(s\)\) - autostash enabled$", r"Árvore suja (\1 arquivo(s)) - autostash ativado"),
-        (r"^Dirty working tree \((\d+) file\(s\)\)$", r"Árvore suja (\1 arquivo(s))"),
-        (r"^(\d+) auxiliary branch\(es\) pending$", r"\1 branch(es) secundária(s) pendente(s)"),
-        (r"^Shallow repository$", "Repositório raso (shallow)"),
-        (r"^Git LFS: (\d+) object\(s\) pending download$", r"Git LFS: \1 objeto(s) pendente(s) de download"),
-        (r"^Dirty working tree: (\d+) file\(s\)$", r"Árvore suja: \1 arquivo(s)"),
-        (r"^Protected branch: (.*)$", r"Branch protegida: \1"),
-        (r"^Force push \(--force\)$", "Push forçado (--force)"),
-        (r"^(\d+) auxiliary branch\(es\) pending push \((.*)\)$", r"\1 branch(es) secundária(s) pendente(s) de envio (\2)"),
-    )
-    warnings = item.get("warnings", [])
-    for pattern, replacement in replacements:
-        warnings = [re.sub(pattern, replacement, warning) for warning in warnings]
-    return {**item, "warnings": warnings}
 
 
 def print_benchmark_report(benchmark: TelemetryBenchmark, is_json: bool = False) -> None:

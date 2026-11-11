@@ -194,6 +194,7 @@ class ResolveResult(TypedDict, total=False):
     dry_run: bool
     repo_rel: str | None
     details: dict[str, Any] | None
+    diagnostic: dict[str, Any] | None
 
 
 class DoctorSanityReport(TypedDict, total=False):

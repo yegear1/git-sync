@@ -549,31 +549,25 @@ class TestCliBulkActionPreviewAndInteractiveConfirmation(unittest.TestCase):
 
         return remote_dir, seed_dir, local_dir
 
-    def test_preview_json_preserves_existing_warning_values(self):
-        from git_sync.ui.formatters import legacy_preview_item
+    def test_preview_json_emits_canonical_english_warnings(self):
+        from git_sync.ui import formatters
 
-        warnings = [
-            "Dirty working tree (2 file(s)) - autostash enabled",
-            "3 auxiliary branch(es) pending",
-            "Shallow repository",
-            "Git LFS: 4 object(s) pending download",
-            "Dirty working tree: 2 file(s)",
-            "Protected branch: main",
-            "Force push (--force)",
-            "1 auxiliary branch(es) pending push (feature (+1))",
-        ]
-        item = {"warnings": warnings}
-        self.assertEqual(legacy_preview_item(item)["warnings"], [
-            "Árvore suja (2 arquivo(s)) - autostash ativado",
-            "3 branch(es) secundária(s) pendente(s)",
-            "Repositório raso (shallow)",
-            "Git LFS: 4 objeto(s) pendente(s) de download",
-            "Árvore suja: 2 arquivo(s)",
-            "Branch protegida: main",
-            "Push forçado (--force)",
-            "1 branch(es) secundária(s) pendente(s) de envio (feature (+1))",
-        ])
-        self.assertEqual(item["warnings"], warnings)
+        self.assertFalse(hasattr(formatters, "legacy_preview_item"))
+
+        _remote_dir, _seed_dir, local_dir = self._setup_repos_with_remote()
+        run_git(str(local_dir), ["fetch"])
+        (local_dir / "dirty.txt").write_text("dirty\n")
+
+        stdout_json = io.StringIO()
+        with patch("sys.stdout", stdout_json):
+            exit_code = main(["pull", "repo1", "--root", str(self.root), "--preview", "--json"])
+        self.assertEqual(exit_code, 0)
+        parsed = json.loads(stdout_json.getvalue())
+        warnings = parsed["items"][0]["warnings"]
+        self.assertTrue(warnings)
+        self.assertTrue(any(w.startswith("Dirty working tree") for w in warnings), warnings)
+        for w in warnings:
+            self.assertTrue(w.isascii(), w)
 
     def test_cli_pull_preview_mode_text_and_json(self):
         _remote_dir, seed_dir, local_dir = self._setup_repos_with_remote()

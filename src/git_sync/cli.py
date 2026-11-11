@@ -84,7 +84,7 @@ from git_sync.ui import (
     render_pull_item,
     render_push_item,
 )
-from git_sync.ui.formatters import compact_doctor_report, legacy_preview_item
+from git_sync.ui.formatters import compact_doctor_report
 
 
 def _match_requested_repos(
@@ -611,14 +611,14 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
         if preview_mode:
             if args.json:
-                print(json.dumps({"preview": True, "action": "pull", "total": len(preview_items), "items": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
+                print(json.dumps({"preview": True, "action": "pull", "total": len(preview_items), "items": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
             else:
                 print(format_bulk_action_preview(preview_items, title="BULK PULL PREVIEW"))
             return 1 if missing else 0
 
         if confirm_mode:
             if args.json:
-                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
                 return 1
             confirmed = prompt_bulk_confirmation(
                 preview_items,
@@ -863,14 +863,14 @@ def cmd_resolve(args: argparse.Namespace) -> int:
 
         if preview_mode:
             if args.json:
-                print(json.dumps({"preview": True, "action": "resolve", "strategy": strategy, "total": len(preview_items), "items": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
+                print(json.dumps({"preview": True, "action": "resolve", "strategy": strategy, "total": len(preview_items), "items": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
             else:
                 print(format_bulk_action_preview(preview_items, title="BULK RESOLUTION PREVIEW"))
             return 1 if missing else 0
 
         if confirm_mode:
             if args.json:
-                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
                 return 1
             confirmed = prompt_bulk_confirmation(
                 preview_items,
@@ -1099,14 +1099,14 @@ def cmd_push(args: argparse.Namespace) -> int:
 
         if preview_mode:
             if args.json:
-                print(json.dumps({"preview": True, "action": "push", "total": len(preview_items), "items": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
+                print(json.dumps({"preview": True, "action": "push", "total": len(preview_items), "items": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
             else:
                 print(format_bulk_action_preview(preview_items, title="BULK PUSH PREVIEW"))
             return 1 if missing else 0
 
         if confirm_mode:
             if args.json:
-                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
                 return 1
             confirmed = prompt_bulk_confirmation(
                 preview_items,
