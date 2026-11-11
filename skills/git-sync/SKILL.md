@@ -43,6 +43,10 @@ git-sync status
 # Detailed status JSON including full per-repository items array:
 git-sync status --full
 
+# Restrict status or dirty-file inspection to specific repositories (exit 1 + `not_found` / REPO_NOT_FOUND records if any target is unmatched):
+git-sync status org/git-sync org/repo-b
+git-sync dirty org/git-sync
+
 # Human-readable text table overview for terminal presentation:
 git-sync status --pending --human
 ```

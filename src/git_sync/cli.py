@@ -114,6 +114,15 @@ def _match_requested_repos(
     return targets, errors
 
 
+def _filter_requested_subset(
+    queries: list[str], repos: list[str], root: str, json_mode: bool,
+) -> tuple[list[str], list[RepoNotFoundResult]]:
+    """Narrow discovered repos to matched targets, de-duplicated in discovery order."""
+    targets, errors = _match_requested_repos(queries, repos, root, json_mode)
+    matched = set(targets)
+    return [r for r in repos if r in matched], errors
+
+
 def _parse_workers_arg(val: str) -> int | str:
     """Parse --workers CLI argument accepting a positive integer or 'auto'."""
     s = val.strip().lower()
@@ -224,7 +233,12 @@ def cmd_status(args: argparse.Namespace) -> int:
     t_disc = time.perf_counter() - t0
     benchmark.record_stage("discovery", t_disc)
 
+    requested_repos: list[str] = list(getattr(args, "repos", None) or [])
+
     if not all_repos:
+        empty_not_found: list[RepoNotFoundResult] = []
+        if requested_repos:
+            _, empty_not_found = _filter_requested_subset(requested_repos, [], root, args.json)
         benchmark.stop()
         if args.json:
             if getattr(args, "compact", False):
@@ -244,11 +258,15 @@ def cmd_status(args: argparse.Namespace) -> int:
                 }
                 if getattr(args, "benchmark", False):
                     empty_summary["telemetry"] = benchmark.to_dict()
+                if empty_not_found:
+                    empty_summary["not_found"] = empty_not_found
                 print(json.dumps(empty_summary, indent=2))
             else:
                 resp: dict[str, Any] = {"error": f"No repositories found in {root}", "results": []}
                 if getattr(args, "benchmark", False):
                     resp["telemetry"] = benchmark.to_dict()
+                if empty_not_found:
+                    resp["not_found"] = empty_not_found
                 print(json.dumps(resp))
         else:
             if getattr(args, "dashboard", False) or getattr(args, "tui", False):
@@ -277,7 +295,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             print(f"No repositories found in {root}")
             if getattr(args, "benchmark", False):
                 _print_benchmark_output(benchmark, getattr(args, "json", False))
-        return 0
+        return 1 if empty_not_found else 0
 
     all_repos = _filter_by_group(
         all_repos,
@@ -285,6 +303,24 @@ def cmd_status(args: argparse.Namespace) -> int:
         group=getattr(args, "group", None),
         groups=getattr(args, "groups", None),
     )
+
+    not_found: list[RepoNotFoundResult] = []
+    if requested_repos:
+        # INVARIANT: No positional targets preserves full workspace discovery.
+        all_repos, not_found = _filter_requested_subset(requested_repos, all_repos, root, args.json)
+        if not all_repos:
+            benchmark.stop()
+            if args.json:
+                none_summary = build_status_summary(
+                    [],
+                    root=root,
+                    changelog_enabled=False,
+                    compact=getattr(args, "compact", False),
+                    benchmark=benchmark if getattr(args, "benchmark", False) else None,
+                )
+                none_summary["not_found"] = not_found
+                print(json.dumps(none_summary, indent=2))
+            return 1
 
     t1 = time.perf_counter()
     results: list[RepoStatusRecord | dict[str, Any]] = []
@@ -352,8 +388,10 @@ def cmd_status(args: argparse.Namespace) -> int:
             compact=getattr(args, "compact", False),
             benchmark=benchmark if getattr(args, "benchmark", False) else None,
         )
+        if not_found:
+            summary["not_found"] = not_found
         print(json.dumps(summary, indent=2))
-        return 0
+        return 1 if not_found else 0
 
     if getattr(args, "compact", False):
         print_status_compact(
@@ -361,7 +399,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             changelog_enabled=changelog_enabled,
             benchmark=benchmark if getattr(args, "benchmark", False) else None,
         )
-        return 0
+        return 1 if not_found else 0
 
     if getattr(args, "dashboard", False) or getattr(args, "tui", False):
         cfg_obj = getattr(args, "_config", None)
@@ -393,7 +431,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         show_submodules=getattr(args, "submodules", False),
         benchmark=benchmark if getattr(args, "benchmark", False) else None,
     )
-    return 0
+    return 1 if not_found else 0
 
 
 _prompt_resolution_choice = prompt_resolution_choice
@@ -1099,6 +1137,12 @@ def cmd_dirty(args: argparse.Namespace) -> int:
         groups=getattr(args, "groups", None),
     )
 
+    missing: list[RepoNotFoundResult] = []
+    requested_repos: list[str] = list(getattr(args, "repos", None) or [])
+    if requested_repos:
+        # INVARIANT: No positional targets preserves full workspace discovery.
+        all_repos, missing = _filter_requested_subset(requested_repos, all_repos, root, args.json)
+
     controller = AdaptiveConcurrencyController()
     auto_tuned = getattr(args, "auto_tune", False) or (args.workers == "auto")
     configured_w = None if auto_tuned else args.workers
@@ -1107,16 +1151,19 @@ def cmd_dirty(args: argparse.Namespace) -> int:
         is_fetch=False,
         configured_workers=configured_w,
     )
-    with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
-        inspections = list(executor.map(lambda r: inspect_repo(r, root, do_fetch=False), all_repos))
+    inspections: list[Any] = []
+    if all_repos:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
+            inspections = list(executor.map(lambda r: inspect_repo(r, root, do_fetch=False), all_repos))
 
     dirty = [r for r in inspections if r["is_dirty"]]
     if args.json:
-        print(json.dumps([{"repo": r["rel_path"], "files": r["dirty_files"]} for r in dirty], indent=2))
-        return 0
+        payload: list[Any] = [{"repo": r["rel_path"], "files": r["dirty_files"]} for r in dirty]
+        print(json.dumps([*payload, *missing], indent=2))
+        return 1 if missing else 0
 
     print_dirty_report(dirty)
-    return 0
+    return 1 if missing else 0
 
 
 def cmd_config(args: argparse.Namespace, config: GitSyncConfig) -> int:
@@ -1679,6 +1726,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # status
     p_status = subparsers.add_parser("status", parents=[common], help="Show status of all repositories")
+    p_status.add_argument("repos", nargs="*", help="Optional repository name(s) or patterns to restrict status to")
     p_status.add_argument("--group", default=None, help="Filter by subfolder/group (e.g. work, personal, oss)")
     p_status.add_argument("--fetch", dest="fetch", action="store_true", default=None, help="Fetch remotes")
     p_status.add_argument("--no-fetch", dest="fetch", action="store_false", default=None, help="Skip remote fetch (instant local check)")
@@ -1736,6 +1784,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # dirty
     p_dirty = subparsers.add_parser("dirty", parents=[common], help="Show repositories with uncommitted or untracked changes")
+    p_dirty.add_argument("repos", nargs="*", help="Optional repository name(s) or patterns to restrict the dirty check to")
     p_dirty.add_argument("--group", default=None, help="Filter repositories by group")
 
     # config
