@@ -554,7 +554,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
     preview_mode = getattr(args, "preview", False)
     confirm_mode = getattr(args, "confirm", False)
 
-    if (preview_mode or confirm_mode) and targets:
+    if (preview_mode or confirm_mode) and (targets or missing):
         insp_map = {r["path"]: r for r in inspections} if args.all else {}
         preview_items: list[BulkActionItem] = []
         for r in targets:
@@ -611,6 +611,8 @@ def cmd_pull(args: argparse.Namespace) -> int:
             if args.json:
                 print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
                 return 1
+            if not preview_items:
+                return 1 if missing else 0
             confirmed = prompt_bulk_confirmation(
                 preview_items,
                 title="BULK PULL PREVIEW",
@@ -827,7 +829,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
     preview_mode = getattr(args, "preview", False)
     confirm_mode = getattr(args, "confirm", False)
 
-    if (preview_mode or confirm_mode) and strategy and targets:
+    if (preview_mode or confirm_mode) and strategy and (targets or missing):
         preview_items = []
         for r in targets:
             rel = os.path.relpath(r, root)
@@ -863,6 +865,8 @@ def cmd_resolve(args: argparse.Namespace) -> int:
             if args.json:
                 print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
                 return 1
+            if not preview_items:
+                return 1 if missing else 0
             confirmed = prompt_bulk_confirmation(
                 preview_items,
                 title="BULK RESOLUTION PREVIEW",
@@ -1052,7 +1056,7 @@ def cmd_push(args: argparse.Namespace) -> int:
     allow_prot = getattr(args, "allow_protected", False)
     prot_branches = getattr(args, "effective_protected_branches", DEFAULT_PROTECTED_BRANCHES)
 
-    if (preview_mode or confirm_mode) and targets:
+    if (preview_mode or confirm_mode) and (targets or missing):
         pending_map = {r["path"]: r for r in pending_repos} if args.all else {}
         preview_items: list[BulkActionItem] = []
         for r in targets:
@@ -1099,6 +1103,8 @@ def cmd_push(args: argparse.Namespace) -> int:
             if args.json:
                 print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
                 return 1
+            if not preview_items:
+                return 1 if missing else 0
             confirmed = prompt_bulk_confirmation(
                 preview_items,
                 title="BULK PUSH PREVIEW",
@@ -1569,7 +1575,7 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
     preview_mode = getattr(args, "preview", False)
     confirm_mode = getattr(args, "confirm", False)
 
-    if (preview_mode or confirm_mode) and targets:
+    if (preview_mode or confirm_mode) and (targets or missing):
         sim_pruned_repos: list[dict[str, Any]] = []
         for repo_path in targets:
             res_sim = prune_repo_worktrees(
@@ -1607,6 +1613,8 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
             if getattr(args, "json", False):
                 print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
                 return 1
+            if not targets:
+                return 1 if missing else 0
             if preview_items:
                 confirmed = prompt_bulk_confirmation(
                     preview_items,

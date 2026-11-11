@@ -187,6 +187,53 @@ class TestRepoNotFound(unittest.TestCase):
             self.operations["prune_repo_worktrees"].call_args.kwargs["dry_run"]
         )
 
+    def _bulk_commands(self) -> list[tuple[list[str], str]]:
+        return [
+            (["pull"], "pull"),
+            (["push"], "push"),
+            (["resolve", "--strategy", "rebase"], "resolve"),
+            (["worktree", "prune"], "worktree_prune"),
+        ]
+
+    def assert_not_executed(self) -> None:
+        for operation in ("pull_repo", "push_repo", "resolve_divergence"):
+            self.operations[operation].assert_not_called()
+        self.operations["prune_repo_worktrees"].assert_not_called()
+
+    def test_preview_all_unmatched_emits_envelope(self) -> None:
+        for command, action in self._bulk_commands():
+            with self.subTest(command=command):
+                code, output = self.invoke([*command, "unknown", "org/typo", "--preview", "--json"])
+                self.assertEqual(code, 1)
+                payload = json.loads(output)
+                self.assertIs(payload["preview"], True)
+                self.assertEqual(payload["action"], action)
+                self.assertEqual(payload["total"], 0)
+                self.assertEqual(
+                    payload["items"],
+                    [self.expected_error("unknown"), self.expected_error("org/typo")],
+                )
+        self.assert_not_executed()
+
+    def test_confirm_all_unmatched_emits_error_envelope(self) -> None:
+        for command, _ in self._bulk_commands():
+            with self.subTest(command=command):
+                code, output = self.invoke([*command, "unknown", "--confirm", "--json"])
+                self.assertEqual(code, 1)
+                payload = json.loads(output)
+                self.assertIn("error", payload)
+                self.assertEqual(payload["preview"], [self.expected_error("unknown")])
+        self.assert_not_executed()
+
+    def test_confirm_all_unmatched_human_mode_does_not_prompt(self) -> None:
+        with patch("git_sync.cli.prompt_bulk_confirmation") as prompt:
+            for command, _ in self._bulk_commands():
+                with self.subTest(command=command):
+                    code, _ = self.invoke([*command, "unknown", "--confirm", "--human"])
+                    self.assertEqual(code, 1)
+            prompt.assert_not_called()
+        self.assert_not_executed()
+
     def test_benchmark_envelope_preserves_missing_errors(self) -> None:
         for command in ("pull", "push"):
             with self.subTest(command=command):
