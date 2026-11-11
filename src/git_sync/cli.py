@@ -46,6 +46,7 @@ from git_sync.engine import (
     push_repo,
     resolve_divergence,
 )
+from git_sync.engine.types import RepoNotFoundResult
 from git_sync.installer import (
     generate_completion_script,
     install_agent_skills,
@@ -82,6 +83,35 @@ from git_sync.ui import (
     render_push_item,
 )
 from git_sync.ui.formatters import compact_doctor_report, legacy_preview_item
+
+
+def _match_requested_repos(
+    queries: list[str], repos: list[str], root: str, json_mode: bool,
+) -> tuple[list[str], list[RepoNotFoundResult]]:
+    """Match targets while preserving every unmatched query as a failure."""
+    targets: list[str] = []
+    errors: list[RepoNotFoundResult] = []
+    for query in queries:
+        matched = match_repo(query, repos, root)
+        if matched:
+            targets.append(matched)
+            continue
+        message = f"No repository found matching: '{query}'"
+        errors.append({
+            "repo": query,
+            "repo_rel": query,
+            "success": False,
+            "error": "REPO_NOT_FOUND",
+            "diagnostic": {
+                "category": "REPO_NOT_FOUND",
+                "action_required": "verify_repo_name",
+                "message": message,
+                "suggestion": "git-sync status",
+            },
+        })
+        if not json_mode:
+            print(f"❌ {message}")
+    return targets, errors
 
 
 def _parse_workers_arg(val: str) -> int | str:
@@ -409,6 +439,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
     t_disc = time.perf_counter() - t0
     benchmark.record_stage("discovery", t_disc)
     targets: list[str] = []
+    missing: list[RepoNotFoundResult] = []
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
 
     if args.all:
@@ -483,13 +514,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
             else:
                 print("Specify repository name(s) or pass --all")
             return 1
-        for q in args.repos:
-            matched = match_repo(q, all_repos, root)
-            if matched:
-                targets.append(matched)
-            else:
-                if not args.json:
-                    print(f"❌ No repository found matching: '{q}'")
+        targets, missing = _match_requested_repos(args.repos, all_repos, root, args.json)
 
     pull_results = []
     strategy = getattr(args, "strategy", None)
@@ -546,14 +571,14 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
         if preview_mode:
             if args.json:
-                print(json.dumps({"preview": True, "action": "pull", "total": len(preview_items), "items": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
+                print(json.dumps({"preview": True, "action": "pull", "total": len(preview_items), "items": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
             else:
                 print(format_bulk_action_preview(preview_items, title="BULK PULL PREVIEW"))
-            return 0
+            return 1 if missing else 0
 
         if confirm_mode:
             if args.json:
-                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
                 return 1
             confirmed = prompt_bulk_confirmation(
                 preview_items,
@@ -561,7 +586,7 @@ def cmd_pull(args: argparse.Namespace) -> int:
                 prompt_text=f"Confirm update for {len(preview_items)} repository(s)? [y/N]: ",
             )
             if not confirmed:
-                return 0
+                return 1 if missing else 0
 
     t2 = time.perf_counter()
     msg_prog = "Simulating pull..." if dry_run else "Updating repositories..."
@@ -623,22 +648,24 @@ def cmd_pull(args: argparse.Namespace) -> int:
 
     if args.json:
         payload = [compact_pull_item(r) for r in pull_results] if getattr(args, "compact", False) else pull_results
+        # INVARIANT: Selection failures retain their schema outside domain compact formatters.
+        payload = [*payload, *missing]
         if getattr(args, "benchmark", False):
             print(json.dumps({"results": payload, "dry_run": dry_run, "telemetry": benchmark.to_dict()}, indent=2))
         else:
             print(json.dumps(payload, indent=2))
     else:
         if getattr(args, "compact", False):
-            total_count = len(all_repos) if args.all else len(pull_results)
+            total_count = len(all_repos) if args.all else len(pull_results) + len(missing)
             updated_count = sum(1 for r in pull_results if is_pull_updated(r))
-            errors_count = sum(1 for r in pull_results if not r.get("success"))
+            errors_count = len(missing) + sum(1 for r in pull_results if not r.get("success"))
             uptodate_count = max(0, total_count - updated_count - errors_count)
             print(format_compact_summary_line(total_count, updated_count, uptodate_count, errors_count))
         if getattr(args, "benchmark", False):
             _print_benchmark_output(benchmark, getattr(args, "json", False))
 
     has_failures = any(not r.get("success", True) for r in pull_results)
-    return 1 if has_failures else 0
+    return 1 if missing or has_failures else 0
 
 
 def cmd_resolve(args: argparse.Namespace) -> int:
@@ -659,6 +686,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
         groups=getattr(args, "groups", None),
     )
     targets: list[str] = []
+    missing: list[RepoNotFoundResult] = []
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
 
     if getattr(args, "all", False):
@@ -687,13 +715,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
             else:
                 print("Specify repository name(s) or pass --all")
             return 1
-        for q in args.repos:
-            matched = match_repo(q, all_repos, root)
-            if matched:
-                targets.append(matched)
-            else:
-                if not args.json:
-                    print(f"❌ No repository found matching: '{q}'")
+        targets, missing = _match_requested_repos(args.repos, all_repos, root, args.json)
 
     results: list[ResolveResult | dict[str, Any]] = []
     strategy = getattr(args, "strategy", None)
@@ -728,14 +750,14 @@ def cmd_resolve(args: argparse.Namespace) -> int:
 
         if preview_mode:
             if args.json:
-                print(json.dumps({"preview": True, "action": "resolve", "strategy": strategy, "total": len(preview_items), "items": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
+                print(json.dumps({"preview": True, "action": "resolve", "strategy": strategy, "total": len(preview_items), "items": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
             else:
                 print(format_bulk_action_preview(preview_items, title="BULK RESOLUTION PREVIEW"))
-            return 0
+            return 1 if missing else 0
 
         if confirm_mode:
             if args.json:
-                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
                 return 1
             confirmed = prompt_bulk_confirmation(
                 preview_items,
@@ -743,7 +765,7 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                 prompt_text=f"Confirm resolution ({strategy}) for {len(preview_items)} repository(s)? [y/N]: ",
             )
             if not confirmed:
-                return 0
+                return 1 if missing else 0
 
     is_interactive = (not dry_run) and (getattr(args, "interactive", False) or (
         not args.json and not strategy and not show_diff_only and sys.stdin.isatty()
@@ -811,10 +833,10 @@ def cmd_resolve(args: argparse.Namespace) -> int:
                     print(f"⚠️ {mode_str}[{rel}] ({details.get('branch')} ↔ {details.get('upstream')}): {details.get('ahead')} ahead, {details.get('behind')} behind")
 
     if args.json:
-        print(json.dumps(results, indent=2))
+        print(json.dumps([*results, *missing], indent=2))
 
     has_failures = any(not r.get("success", True) for r in results)
-    return 1 if has_failures else 0
+    return 1 if missing or has_failures else 0
 
 
 def cmd_push(args: argparse.Namespace) -> int:
@@ -856,6 +878,7 @@ def cmd_push(args: argparse.Namespace) -> int:
     t_disc = time.perf_counter() - t0
     benchmark.record_stage("discovery", t_disc)
     targets: list[str] = []
+    missing: list[RepoNotFoundResult] = []
 
     if args.all:
         if not args.json and not getattr(args, "compact", False):
@@ -899,13 +922,7 @@ def cmd_push(args: argparse.Namespace) -> int:
             else:
                 print("Specify repository name(s) or pass --all")
             return 1
-        for q in args.repos:
-            matched = match_repo(q, all_repos, root)
-            if matched:
-                targets.append(matched)
-            else:
-                if not args.json:
-                    print(f"❌ No repository found matching: '{q}'")
+        targets, missing = _match_requested_repos(args.repos, all_repos, root, args.json)
 
     push_results: list[PushResult | dict[str, Any]] = []
     preview_mode = getattr(args, "preview", False)
@@ -953,14 +970,14 @@ def cmd_push(args: argparse.Namespace) -> int:
 
         if preview_mode:
             if args.json:
-                print(json.dumps({"preview": True, "action": "push", "total": len(preview_items), "items": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
+                print(json.dumps({"preview": True, "action": "push", "total": len(preview_items), "items": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
             else:
                 print(format_bulk_action_preview(preview_items, title="BULK PUSH PREVIEW"))
-            return 0
+            return 1 if missing else 0
 
         if confirm_mode:
             if args.json:
-                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [legacy_preview_item(i.to_dict()) for i in preview_items]}, indent=2))
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[legacy_preview_item(i.to_dict()) for i in preview_items], *missing]}, indent=2))
                 return 1
             confirmed = prompt_bulk_confirmation(
                 preview_items,
@@ -968,7 +985,7 @@ def cmd_push(args: argparse.Namespace) -> int:
                 prompt_text=f"Confirm push for {len(preview_items)} repository(s)? [y/N]: ",
             )
             if not confirmed:
-                return 0
+                return 1 if missing else 0
 
     t2 = time.perf_counter()
     show_progress = False if (args.json or getattr(args, "compact", False) or getattr(args, "summary", False)) else None
@@ -1037,9 +1054,9 @@ def cmd_push(args: argparse.Namespace) -> int:
 
     if not args.json:
         if getattr(args, "compact", False):
-            total_count = len(all_repos) if args.all else len(push_results)
+            total_count = len(all_repos) if args.all else len(push_results) + len(missing)
             updated_count = sum(1 for r in push_results if is_push_updated(r))
-            errors_count = sum(1 for r in push_results if not r.get("success"))
+            errors_count = len(missing) + sum(1 for r in push_results if not r.get("success"))
             uptodate_count = max(0, total_count - updated_count - errors_count)
             print(format_compact_summary_line(total_count, updated_count, uptodate_count, errors_count))
         else:
@@ -1057,6 +1074,8 @@ def cmd_push(args: argparse.Namespace) -> int:
 
     if args.json:
         payload = [compact_push_item(r) for r in push_results] if getattr(args, "compact", False) else push_results
+        # INVARIANT: Selection failures retain their schema outside domain compact formatters.
+        payload = [*payload, *missing]
         if getattr(args, "benchmark", False):
             print(json.dumps({"results": payload, "telemetry": benchmark.to_dict()}, indent=2))
         else:
@@ -1066,7 +1085,7 @@ def cmd_push(args: argparse.Namespace) -> int:
             _print_benchmark_output(benchmark, getattr(args, "json", False))
 
     has_failures = any(not r.get("success", False) for r in push_results)
-    return 1 if has_failures else 0
+    return 1 if missing or has_failures else 0
 
 
 def cmd_dirty(args: argparse.Namespace) -> int:
@@ -1314,16 +1333,11 @@ def cmd_unlock(args: argparse.Namespace) -> int:
     )
 
     targets: list[str] = []
+    missing: list[RepoNotFoundResult] = []
     if getattr(args, "unlock_all", False):
         targets = filtered
     elif getattr(args, "repos", None):
-        for q in args.repos:
-            matched = match_repo(q, filtered, root)
-            if matched:
-                targets.append(matched)
-            else:
-                if not args.json:
-                    print(f"⚠️  Repository '{q}' not found in {root}")
+        targets, missing = _match_requested_repos(args.repos, filtered, root, args.json)
     else:
         targets = filtered
 
@@ -1331,10 +1345,10 @@ def cmd_unlock(args: argparse.Namespace) -> int:
 
     if not locked_items:
         if args.json:
-            print(json.dumps({"root": root, "total_locked": 0, "unlocked": []}, indent=2))
+            print(json.dumps({"root": root, "total_locked": 0, "unlocked": missing}, indent=2))
         else:
             print(f"\n✅ No active or stale lock files (.git/*.lock) found in {root}.\n")
-        return 0
+        return 1 if missing else 0
 
     results = []
     for lk in locked_items:
@@ -1379,12 +1393,12 @@ def cmd_unlock(args: argparse.Namespace) -> int:
         print(json.dumps({
             "root": root,
             "total_locked": len(locked_items),
-            "unlocked": results,
+            "unlocked": [*results, *missing],
         }, indent=2))
-        return 0
+        return 1 if missing else 0
 
     print_unlock_report(results)
-    return 0
+    return 1 if missing else 0
 
 
 def cmd_worktree(args: argparse.Namespace) -> int:
@@ -1412,16 +1426,11 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
     )
 
     targets: list[str] = []
+    missing: list[RepoNotFoundResult] = []
     if getattr(args, "prune_all", False):
         targets = filtered
     elif getattr(args, "repos", None):
-        for q in args.repos:
-            matched = match_repo(q, filtered, root)
-            if matched:
-                targets.append(matched)
-            else:
-                if not getattr(args, "json", False):
-                    print(f"⚠️  Repository '{q}' not found in {root}")
+        targets, missing = _match_requested_repos(args.repos, filtered, root, args.json)
     else:
         targets = filtered
 
@@ -1460,14 +1469,14 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
 
         if preview_mode:
             if getattr(args, "json", False):
-                print(json.dumps({"preview": True, "action": "worktree_prune", "total": len(preview_items), "items": [i.to_dict() for i in preview_items]}, indent=2))
+                print(json.dumps({"preview": True, "action": "worktree_prune", "total": len(preview_items), "items": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
             else:
                 print(format_bulk_action_preview(preview_items, title="WORKTREE PRUNE PREVIEW"))
-            return 0
+            return 1 if missing else 0
 
         if confirm_mode:
             if getattr(args, "json", False):
-                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [i.to_dict() for i in preview_items]}, indent=2))
+                print(json.dumps({"error": "Interactive confirmation cannot be prompted in JSON mode. Pass --yes to confirm.", "preview": [*[i.to_dict() for i in preview_items], *missing]}, indent=2))
                 return 1
             if preview_items:
                 confirmed = prompt_bulk_confirmation(
@@ -1476,7 +1485,7 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
                     prompt_text=f"Confirm pruning of {len(preview_items)} worktree(s)? [y/N]: ",
                 )
                 if not confirmed:
-                    return 0
+                    return 1 if missing else 0
 
     pruned_repos: list[dict[str, Any]] = []
     all_warnings: list[str] = []
@@ -1503,12 +1512,12 @@ def cmd_worktree_prune(args: argparse.Namespace) -> int:
             "total_checked": len(targets),
             "total_pruned": total_pruned,
             "total_warnings": len(all_warnings),
-            "pruned_repos": pruned_repos,
+            "pruned_repos": [*pruned_repos, *missing],
         }, indent=2))
-        return 0
+        return 1 if missing else 0
 
     print_worktree_prune_report(pruned_repos, total_pruned, all_warnings, root, dry_run=dry_run)
-    return 0
+    return 1 if missing else 0
 
 
 def cmd_worktree_list(args: argparse.Namespace) -> int:
@@ -1525,14 +1534,9 @@ def cmd_worktree_list(args: argparse.Namespace) -> int:
     )
 
     targets: list[str] = []
+    missing: list[RepoNotFoundResult] = []
     if getattr(args, "repos", None):
-        for q in args.repos:
-            matched = match_repo(q, filtered, root)
-            if matched:
-                targets.append(matched)
-            else:
-                if not getattr(args, "json", False):
-                    print(f"⚠️  Repository '{q}' not found in {root}")
+        targets, missing = _match_requested_repos(args.repos, filtered, root, args.json)
     else:
         targets = filtered
 
@@ -1564,12 +1568,12 @@ def cmd_worktree_list(args: argparse.Namespace) -> int:
         print(json.dumps({
             "root": root,
             "total_repos_with_worktrees": len(entries),
-            "repositories": entries,
+            "repositories": [*entries, *missing],
         }, indent=2))
-        return 0
+        return 1 if missing else 0
 
     print_worktree_list_report(entries, root)
-    return 0
+    return 1 if missing else 0
 
 
 def main(argv: list[str] | None = None) -> int:

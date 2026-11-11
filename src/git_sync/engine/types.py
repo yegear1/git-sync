@@ -120,6 +120,21 @@ class RepoStatusRecord(TypedDict, total=False):
     changelog: dict[str, Any] | None
 
 
+class RepoNotFoundDiagnostic(TypedDict):
+    category: str
+    action_required: str
+    message: str
+    suggestion: str
+
+
+class RepoNotFoundResult(TypedDict):
+    repo: str
+    repo_rel: str
+    success: bool
+    error: str
+    diagnostic: RepoNotFoundDiagnostic
+
+
 class PullResult(TypedDict, total=False):
     repo: str
     repo_rel: str | None
