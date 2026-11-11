@@ -81,7 +81,7 @@ from git_sync.ui import (
     render_pull_item,
     render_push_item,
 )
-from git_sync.ui.formatters import legacy_preview_item
+from git_sync.ui.formatters import compact_doctor_report, legacy_preview_item
 
 
 def _parse_workers_arg(val: str) -> int | str:
@@ -152,7 +152,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         sanity["ssh_audit"] = ssh_audit
 
     if args.json:
-        print(json.dumps(sanity, indent=2))
+        payload = compact_doctor_report(sanity) if getattr(args, "compact", False) else sanity
+        print(json.dumps(payload, indent=2))
         return 0 if sanity["ok"] else 1
 
     return print_doctor_report(sanity, ssh_audit=ssh_audit)
@@ -1537,11 +1538,18 @@ def cmd_worktree_list(args: argparse.Namespace) -> int:
 
     cache = BulkCache(enabled=not getattr(args, "no_cache", False))
     entries: list[dict[str, Any]] = []
+    full_json = getattr(args, "json", False) and not getattr(args, "compact", False)
 
     for repo_path in targets:
         wt_info = cache.get_worktree_info(repo_path, timeout=args.timeout) if cache else get_worktree_info(repo_path, timeout=args.timeout)
         worktrees = wt_info.get("worktrees", [])
-        if len(worktrees) > 1 or any(w.get("is_prunable") for w in worktrees):
+        # INVARIANT: Full JSON includes ordinary main worktrees; compact retains topology and safety anomalies.
+        if (
+            full_json
+            or len(worktrees) > 1
+            or wt_info.get("stale_worktrees")
+            or any(w.get("is_prunable") or w.get("is_locked") for w in worktrees)
+        ):
             rel = os.path.relpath(repo_path, root)
             entries.append({
                 "repo": repo_path,

@@ -28,6 +28,25 @@ from git_sync.telemetry import TelemetryBenchmark
 from git_sync.ui.style import format_diff_stat
 
 
+def compact_doctor_report(sanity: DoctorSanityReport) -> DoctorSanityReport:
+    """Keep doctor aggregate metrics and anomalous repository details."""
+    compact = sanity.copy()
+    # INVARIANT: Filter presentation copies so full reports and audit totals remain intact.
+    if "multi_remote_matrix" in sanity:
+        matrix = sanity["multi_remote_matrix"]
+        compact["multi_remote_matrix"] = {
+            **matrix,
+            "matrix": [entry for entry in matrix.get("matrix", []) if entry.get("has_unreachable")],
+        }
+    if "worktree_health" in sanity:
+        health = sanity["worktree_health"]
+        compact["worktree_health"] = {
+            **health,
+            "items": [entry for entry in health.get("items", []) if entry.get("is_healthy") is False],
+        }
+    return compact
+
+
 def legacy_preview_item(item: dict[str, Any]) -> dict[str, Any]:
     """Preserve historical warning text in JSON preview payloads."""
     # INVARIANT: Existing JSON warning values are a payload contract.
