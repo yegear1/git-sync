@@ -7,17 +7,16 @@
 
 ## Active Task
 
-### 📌 Task [00.40]: Concurrent Multi-Repository `git-sync pull` Execution with Adaptive ThreadPool
+### 📌 Task [00.41]: Token-Budget Compact Formatter (`compact_resolve_item`) for `git-sync resolve`
 - **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `tests/`
-- **Description:** Parallelize multi-repository pull execution in `cmd_pull` using `concurrent.futures.ThreadPoolExecutor` and `AdaptiveConcurrencyController` when running non-interactively (default `--json` mode or when interactive TTY divergence resolution is not active), matching the concurrent architecture of `cmd_push` (`[00.34]`). Preserve deterministic sorting by `repo_rel`, thread-safe progress updates, and sequential fallback only when `-i`/`--interactive` is active on a TTY.
-- **Systems Involved:** `src/git_sync/cli.py`, `tests/`
+- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `src/git_sync/ui/__init__.py`, `tests/`
+- **Description:** Implement `compact_resolve_item` in `src/git_sync/ui/formatters.py` and apply it in `cmd_resolve` when `--compact` is active (default) so `git-sync resolve` emits token-minimized JSON payloads (<150 tokens per repository) omitting raw `stdout`/`stderr` and verbose commit arrays in `details` (`local_commits`, `remote_commits`, `dirty_files`) while surfacing concise divergence metrics (`branch`, `upstream`, `ahead`, `behind`, `is_dirty`, `dirty_files_count`, `strategy`, `success`, `diagnostic`). Preserve the full unmodified payload under `--full` (`--no-compact`) and support concise single-line summary output in `--human --compact` mode.
+- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `src/git_sync/ui/__init__.py`, `tests/`
 - **Acceptance Criteria:**
-  - [ ] Non-interactive `cmd_pull` executes `pull_repo` across target repositories concurrently via `ThreadPoolExecutor(max_workers=effective_workers)`.
-  - [ ] `pull_results` are deterministically sorted by `repo_rel` regardless of worker completion order.
-  - [ ] Unexpected worker exceptions are caught and converted into structured `PULL_EXCEPTION` failure records without crashing the batch.
-  - [ ] Interactive TTY mode (`-i`/`--interactive` with `not args.json and sys.stdin.isatty()`) retains safe sequential execution for interactive resolution prompts.
-  - [ ] Unit tests verify concurrent pull execution, deterministic output ordering, and exception isolation.
+  - [ ] `git-sync resolve` in default `--compact --json` mode transforms each result via `compact_resolve_item` (<150 tokens/repo), omitting raw `stdout` and verbose commit/file lists while keeping `ahead`, `behind`, `is_dirty`, `dirty_files_count`, `strategy`, `success`, and `diagnostic`.
+  - [ ] Passing `--full` (`--no-compact`) preserves the complete raw `ResolveResult` and `details` payload.
+  - [ ] Human compact mode (`--human --compact`) prints a single-line summary (`Total: N repos | Updated: X | Up-to-date: Y | Errors: Z`).
+  - [ ] Unit tests verify compact vs. full `resolve` JSON schemas, token budget (<150 tokens/entry), and `--human --compact` output.
 
 ---
 
@@ -65,24 +64,13 @@
 | [00.37] | Structured `REPO_NOT_FOUND` Diagnostics and Failure Exit Codes for Unmatched Repository Targets | [8ff913d] | 2026-11-10 |
 | [00.38] | Fix `AUX_PUSH_PENDING` Visibility in Status Summary & Compact Anomaly Key Pruning | [f49306d] | 2026-11-10 |
 | [00.39] | Positional Repository Target Filtering (`[repos ...]`) for `git-sync status` and `git-sync dirty` | [f11b1c4] | 2026-11-10 |
+| [00.40] | Concurrent Multi-Repository `git-sync pull` Execution with Adaptive ThreadPool and Worktree-Family Serialization | [be7f3f3] | 2026-11-10 |
 
 ---
 
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
-
-
-### 📌 Task [00.41]: Token-Budget Compact Formatter (`compact_resolve_item`) for `git-sync resolve`
-- **Status:** APPROVED
-- **Paths:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `src/git_sync/ui/__init__.py`, `tests/`
-- **Description:** Implement `compact_resolve_item` in `src/git_sync/ui/formatters.py` and apply it in `cmd_resolve` when `--compact` is active (default) so `git-sync resolve` emits token-minimized JSON payloads (<150 tokens per repository) omitting raw `stdout`/`stderr` and verbose commit arrays in `details` (`local_commits`, `remote_commits`, `dirty_files`) while surfacing concise divergence metrics (`branch`, `upstream`, `ahead`, `behind`, `is_dirty`, `dirty_files_count`, `strategy`, `success`, `diagnostic`). Preserve the full unmodified payload under `--full` (`--no-compact`) and support concise single-line summary output in `--human --compact` mode.
-- **Systems Involved:** `src/git_sync/cli.py`, `src/git_sync/ui/formatters.py`, `src/git_sync/ui/__init__.py`, `tests/`
-- **Acceptance Criteria:**
-  - [ ] `git-sync resolve` in default `--compact --json` mode transforms each result via `compact_resolve_item` (<150 tokens/repo), omitting raw `stdout` and verbose commit/file lists while keeping `ahead`, `behind`, `is_dirty`, `dirty_files_count`, `strategy`, `success`, and `diagnostic`.
-  - [ ] Passing `--full` (`--no-compact`) preserves the complete raw `ResolveResult` and `details` payload.
-  - [ ] Human compact mode (`--human --compact`) prints a single-line summary (`Total: N repos | Updated: X | Up-to-date: Y | Errors: Z`).
-  - [ ] Unit tests verify compact vs. full `resolve` JSON schemas, token budget (<150 tokens/entry), and `--human --compact` output.
 
 
 ### 📌 Task [00.42]: Structured JSON Configuration & Profile Error Diagnostics
