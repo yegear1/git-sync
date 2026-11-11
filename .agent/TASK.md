@@ -7,7 +7,16 @@
 
 ## Active Task
 
-_No active task. Promote the next item from the Backlog._
+### 📌 Task [00.44]: Empty-Workspace Compact Status Schema Parity (`build_status_summary`)
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/cli.py`, `tests/test_status_summary.py`
+- **Description:** Unify empty-workspace (`all_repos == []`) compact JSON output in `cmd_status` (`src/git_sync/cli.py`) by delegating to `build_status_summary([], root=root, changelog_enabled=False, compact=True, benchmark=...)` instead of constructing a hardcoded literal dictionary that leaks pruned secondary keys (`has_lfs`, `lfs_pointers`). Ensure the 10-key compact status contract is identical whether `discover_repos` returns `[]` or a positional filter matches zero repositories.
+- **Systems Involved:** `src/git_sync/cli.py`, `tests/test_status_summary.py`
+- **Acceptance Criteria:**
+  - [ ] `git-sync status` (default `--json --compact`) on an empty workspace directory delegates to `build_status_summary([], ...)` and emits the exact 10 canonical compact keys (`root`, `total`, `pull_pending`, `push_pending`, `dirty`, `diverged`, `worktrees`, `has_submodules`, `no_remote`, `errors`), omitting empty secondary keys (`has_lfs`, `lfs_pointers`, etc.).
+  - [ ] When positional repository targets are passed on an empty workspace, `not_found` (`REPO_NOT_FOUND` records) and optional `telemetry` (`--benchmark`) are preserved and exit code `1` is returned.
+  - [ ] Full JSON mode (`--full` / `--no-compact`) on an empty workspace preserves its existing `{"error": "No repositories found in <root>", "results": []}` contract.
+  - [ ] Unit tests in `tests/test_status_summary.py` verify empty-workspace compact schema parity with and without positional targets.
 
 ---
 
@@ -65,6 +74,39 @@ _No active task. Promote the next item from the Backlog._
 ## Backlog (Upcoming, in priority order)
 
 > Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
+
+
+### 📌 Task [00.45]: Consistent `--preview` & `--confirm` Envelope When All Requested Targets Are Unmatched (`missing` Only)
+- **Status:** APPROVED
+- **Paths:** `src/git_sync/cli.py`, `tests/test_repo_not_found.py`
+- **Description:** Fix `--preview` and `--confirm` handling in `cmd_pull`, `cmd_resolve`, `cmd_push`, and `cmd_worktree_prune` (`src/git_sync/cli.py`) when all positional repository arguments are unmatched (`targets == []` and `missing != []`). Instead of bypassing the preview/confirm branch because `targets` is empty and emitting a bare array `[REPO_NOT_FOUND]`, enter the preview/confirm handler whenever `targets or missing` is non-empty so `--preview` consistently emits the `{"preview": true, "action": "<cmd>", "total": 0, "items": [...missing]}` envelope and returns exit code `1`.
+- **Systems Involved:** `src/git_sync/cli.py`, `tests/test_repo_not_found.py`
+- **Acceptance Criteria:**
+  - [ ] Running `pull`, `push`, `resolve --strategy <strat>`, or `worktree prune` with `--preview` and only non-existent repository names in `--json` mode emits the structured preview envelope (`{"preview": true, "action": ..., "total": 0, "items": [REPO_NOT_FOUND, ...]}`) and exits with code `1`.
+  - [ ] Running with `--confirm` and only non-existent repository names in `--json` mode emits the confirmation error envelope with `preview: [REPO_NOT_FOUND, ...]` and exits with code `1` (or exits `1` without prompting when `preview_items` is empty in human mode).
+  - [ ] Unit tests in `tests/test_repo_not_found.py` verify `--preview` and `--confirm` envelopes and exit code `1` when all positional targets are unmatched across `pull`, `push`, `resolve`, and `worktree prune`.
+
+
+### 📌 Task [00.46]: SSH Multiplexing Audit Human Report English String Fix (`corrupted file(s)`)
+- **Status:** APPROVED `[PARALLEL: W1]`
+- **Paths:** `src/git_sync/ui/formatters.py`, `tests/test_credentials_and_network.py`
+- **Description:** Replace the remaining Portuguese string `"file(s) corrompido(s)"` in `print_ssh_audit_report` (`src/git_sync/ui/formatters.py:104`) with `"corrupted file(s)"` so 100% of human and JSON CLI outputs across `src/git_sync/` are in canonical English.
+- **Systems Involved:** `src/git_sync/ui/formatters.py`, `tests/test_credentials_and_network.py`
+- **Acceptance Criteria:**
+  - [ ] `print_ssh_audit_report` outputs `Invalid sockets:  ⚠️  <N> corrupted file(s)` when `corrupted` sockets are present and `pruned` is empty.
+  - [ ] Zero non-English words remain anywhere in `src/git_sync/`.
+  - [ ] Unit test in `tests/test_credentials_and_network.py` asserts the English corrupted socket output in `print_ssh_audit_report`.
+
+
+### 📌 Task [00.47]: README.md & README.pt-br.md Agent-First CLI Defaults and Subcommand Alignment
+- **Status:** APPROVED `[PARALLEL: W1]`
+- **Paths:** `README.md`, `README.pt-br.md`
+- **Description:** Update the `Usage` / `Uso` and `Overview` / `Visão Geral` sections in `README.md` and `README.pt-br.md` to reflect Agent-First defaults (`--json` and `--compact` enabled by default, `--full` for complete item payloads, `--human` for terminal tables/progress), positional target filtering (`git-sync status <repo>`, `git-sync dirty <repo>`), and replace the non-existent `git-sync prune` example with `git-sync worktree prune` and `git-sync worktree list`.
+- **Systems Involved:** `README.md`, `README.pt-br.md`
+- **Acceptance Criteria:**
+  - [ ] `README.md` and `README.pt-br.md` accurately document that `--json --compact` is the default output mode, `--full` includes full details, and `--human` renders formatted terminal tables.
+  - [ ] Usage examples replace `git-sync prune` with `git-sync worktree prune` / `git-sync worktree list` and include positional target examples for `status` and `dirty`.
+  - [ ] Both README files remain structurally synchronized and free of config drift.
 
 
 ## Release / Cycle Wrap-up (Not the next task)
