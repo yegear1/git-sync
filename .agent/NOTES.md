@@ -294,7 +294,7 @@ Configuration layers:
 
 ### 2. Multi-Agent Collaboration Contracts (Optional)
 
-> Canonical 3-tier subagent topology, delegation micro-contracts, and worktree isolation. If operating single-agent, leave as default.
+> Canonical 3-tier subagent topology, delegation micro-contracts, worktree isolation, hermetic sandboxes, and LLM gateway routing. If operating single-agent, leave as default.
 
 | Role | Interface / Channel | Responsibilities | Boundary & Invariants |
 |---|---|---|---|
@@ -311,6 +311,15 @@ Configuration layers:
 | **Environment Injection** | Copy `.env` / `.env.example` to worktree | Ensures test harness execution without leaking uncommitted tokens or mutating root config. |
 | **Teardown & GC** | `git worktree remove --force` + `branch -D` + `prune` | Immediate cleanup post-integration; trap declared in runners to prevent dangling worktree locks. |
 
+#### Project Lifecycle Hooks & Fast-Link Bootstrap Contract
+
+| Hook / Phase | Script Target | Invocation & Contract |
+|---|---|---|
+| **Fast-Link Bootstrap** | `bootstrap-worktree.sh` | Zero-copy symlinking of `node_modules/` and `.venv/`, `.env` isolation copy, `.agent/scratch/` provisioning, and isolated copy of `.agent/scratch/specs/` anchors. |
+| **Post-Provisioning** | `.agent/hooks/post-worktree-create` | Executed post-bootstrap for test DB seeding, port binding, and ephemeral fixtures. Halts on non-zero exit. |
+| **Pre-Verification** | `.agent/hooks/pre-verify` | Executed before `Verify:` command execution to ensure clean test state and fixture validation. |
+| **Post-Teardown** | `.agent/hooks/post-worktree-teardown` | Executed prior to worktree removal (`git worktree remove`) for graceful daemon/resource teardown. |
+
 #### Multi-Account Quota Routing & Failover Contract
 
 | Element | Protocol / Mechanism | Invariant / Boundary |
@@ -321,10 +330,30 @@ Configuration layers:
 | **Cooldown Tracking** | `<profile>/.multigravity/quota-history.jsonl` | 429 rate limit backoff and cooldown persistence to prevent immediate re-dispatch. |
 | **Worktree Recovery** | Worktree verify on timeout | Runs `Verify:` inside worktree on timeout; if code 0 and matches `Paths:`, recovers diff cleanly. |
 
+#### Hermetic Agent Sandbox & Container Isolation Contract
+
+| Element | Protocol / Mechanism | Invariant / Boundary |
+|---|---|---|
+| **Tier 1 (Bubblewrap)** | `bwrap --unshare-all --ro-bind /usr ...` | Rootless user namespace, read-only system binaries, ephemeral tmpfs `/tmp`, worktree read-write bind, `--die-with-parent`. |
+| **Tier 2 (Rootless Container)** | `podman run --read-only --cap-drop=ALL` | Rootless OCI container, read-only rootfs, `no-new-privileges`, memory (2G) and CPU (2.0) limits, tmpfs `/tmp` with `noexec`. |
+| **Network Namespacing** | `--unshare-net` / `--network none` | Hermetic air-gap by default; egress permitted exclusively for explicit external API or dependency fetching tasks. |
+| **Fallback & Escalation** | `audit-command-security.sh` | Static pre-execution audit for hazardous commands (`sudo`, `/etc` writes, curl pipes) when namespaces unavailable. |
+
+#### LLM Gateway & Virtual Model Routing Contract
+
+| Element | Protocol / Mechanism | Invariant / Boundary |
+|---|---|---|
+| **API Protocol** | OpenAI v1 (`/v1/chat/completions`, `/v1/models`) | Standard JSON schema, streaming SSE, tool calling; zero provider-specific SDK lock-in. |
+| **Virtual Model Routing** | `fast` vs. `deep` | `fast` for low-latency (<1.5s) intent/extractions; `deep` for complex reasoning/synthesis (up to 1M tokens). Upstream provider drift handled dynamically at gateway. |
+| **Network Isolation** | `hydra_shared_net` (`external: true`) | Consumer containers join `hydra_shared_net` for direct DNS `http://hydra-llm-router:3000/v1`. Joining `hydra_ai_net` is strictly forbidden (protects Redis/DB). |
+| **Client Timeout & Budget** | `LLM_TIMEOUT_SECONDS >= 180` | Minimum 180s timeout for deep reasoning calls; minimum `max_tokens >= 60` on test probes to prevent empty completions caused by reasoning token consumption. |
+| **Token Tiers** | Tier 1 (5M), Tier 2 (1M), Tier 3 (unlimited) | Tier 1 for production pipelines, Tier 2 for interactive/dev, Tier 3 for smoke/health checks. |
 ---
 
 ## Gotchas & Pitfalls
 
+
+- **Pre-Approved Tasks (`APPROVED`), Parallel Waves (`[PARALLEL: Wx]`), Sequential Batches (`[BATCH: Bx]`):** Tasks finalized during interactive planning use `Status: APPROVED` in `.agent/TASK.md` (with independent disjoint-file tasks tagged `[PARALLEL: Wx]` and sequential same-layer subtasks grouped in 2–4 item `[BATCH: Bx]` chains anchored to `.agent/scratch/specs/XX-YY.md`), allowing fresh sessions (`proceed`) or isolated worker subagents (`delegate_task`) to execute cleanly without intermediate planning pauses.
 - **Git Credential Prompts:** Running `git fetch` or `git pull` in non-interactive background subshells will hang indefinitely if credentials or SSH passphrases are requested. **Mitigation:** Always set `GIT_TERMINAL_PROMPT=0` and pass execution timeouts to `subprocess.run`.
 - **Directory Walking:** Never filter out `.git` before inspecting `dirnames` in `os.walk`; filtering `.git` prematurely prevents identifying the current directory as a Git repository.
 - **Ephemeral Tooling and Multi-Agent Worktrees:** Multi-agent orchestrators create secondary linked worktrees under `.multigravity/worktrees/` or hidden tool directories. These worktrees lack standalone remotes and cause phantom `NO_REMOTE` errors if traversed by `discover_repos`. Tooling directories starting with `.` (e.g. `.multigravity`, `.git-sync`, `.agent`, `.claude`) MUST be pruned from discovery traversal.

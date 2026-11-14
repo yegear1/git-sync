@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Example Lifecycle Hook: post-worktree-create
+# Invoked by bootstrap-worktree.sh immediately after worktree provisioning,
+# dependency fast-linking (node_modules/.venv), and .env propagation.
+# ==============================================================================
+set -euo pipefail
+
+# Environment variables provided by runner:
+# - ROOT_DIR: Primary repository root
+# - WORKTREE_DIR: Current isolated worktree directory
+# - HOOK_NAME: 'post-worktree-create'
+
+echo "==> [post-worktree-create] Initialized worktree at: ${WORKTREE_DIR}"
+
+# Example actions (customize for project needs):
+# 1. Custom build artifact symlinks or cache pre-warming
+# 2. Local database SQLite copy / migrations
+# 3. Generating mock test certificates or seeds
+
+exit 0

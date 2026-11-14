@@ -42,3 +42,6 @@ uv.lock
 # .turbo/
 # .parcel-cache/
 # npm-debug.log*
+
+# Agent & worktree ephemeral scratch
+.worktrees/
