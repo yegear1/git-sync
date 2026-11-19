@@ -68,7 +68,7 @@ _No active task. Backlog is empty; awaiting new task definitions._
 
 ## Backlog (Upcoming, in priority order)
 
-> Tag pre-approved tasks having strictly disjoint file scopes with `[APPROVED]` `[PARALLEL: W1]` and `Paths: ...` for concurrent `task-queue` execution.
+> Tag pre-approved tasks having strictly disjoint file scopes with `` `` and `Paths: ...` for concurrent `task-queue` execution.
 
 
 
