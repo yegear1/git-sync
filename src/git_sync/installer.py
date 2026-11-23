@@ -234,7 +234,7 @@ def get_canonical_skill_dir() -> Path:
 
 def get_default_skill_dirs() -> list[Path]:
     """
-    Resolve candidate directories across Antigravity profiles and Cursor for skill discovery.
+    Resolve candidate directories across supported AI agent providers and profiles.
     # INVARIANT: Scans current user home and host profile homes without raising on missing paths.
     """
     candidates: list[Path] = []
@@ -249,32 +249,58 @@ def get_default_skill_dirs() -> list[Path]:
         except (OSError, ValueError):
             pass
 
+    def add_home_candidates(base_home: Path) -> None:
+        """Register standard provider skill directories relative to a home root."""
+        for rel in (
+            (".agents", "skills"),
+            (".claude", "skills"),
+            (".codex", "skills"),
+            (".config", "opencode", "skills"),
+            (".cursor", "skills"),
+            (".gemini", "antigravity", "skills"),
+            (".gemini", "config", "skills"),
+        ):
+            add_candidate(base_home.joinpath(*rel))
+
+        # T3 Code per-provider/profile userdata directories
+        t3_providers_root = base_home / ".t3" / "userdata" / "providers"
+        if t3_providers_root.is_dir():
+            try:
+                for provider_dir in sorted(t3_providers_root.iterdir()):
+                    if not provider_dir.is_dir():
+                        continue
+                    for profile_dir in sorted(provider_dir.iterdir()):
+                        if profile_dir.is_dir():
+                            add_candidate(profile_dir / "skills")
+            except OSError:
+                pass
+
     # 1. Current user home
     home = Path.home()
-    add_candidate(home / ".gemini" / "config" / "skills")
-    add_candidate(home / ".cursor" / "skills")
+    add_home_candidates(home)
 
     # 2. Antigravity isolated profiles
     profiles_root = home / "AntigravityProfiles"
     if profiles_root.is_dir():
-        for prof_dir in profiles_root.iterdir():
-            if prof_dir.is_dir():
-                add_candidate(prof_dir / ".gemini" / "config" / "skills")
-                add_candidate(prof_dir / ".cursor" / "skills")
+        try:
+            for prof_dir in sorted(profiles_root.iterdir()):
+                if prof_dir.is_dir():
+                    add_candidate(prof_dir / ".gemini" / "config" / "skills")
+                    add_candidate(prof_dir / ".cursor" / "skills")
+        except OSError:
+            pass
 
     # 3. Host user home if running inside an isolated profile
     try:
         import pwd
         pw_dir = Path(pwd.getpwuid(os.getuid()).pw_dir)
-        add_candidate(pw_dir / ".gemini" / "config" / "skills")
-        add_candidate(pw_dir / ".cursor" / "skills")
+        add_home_candidates(pw_dir)
     except Exception:
         pass
 
     user = os.environ.get("USER")
     if user:
-        add_candidate(Path(f"/home/{user}/.gemini/config/skills"))
-        add_candidate(Path(f"/home/{user}/.cursor/skills"))
+        add_home_candidates(Path(f"/home/{user}"))
 
     # Return only candidates whose parent config directory exists or that already exist
     valid_dirs: list[Path] = []

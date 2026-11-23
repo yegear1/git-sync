@@ -309,6 +309,31 @@ class TestInstallerAndCompletion(unittest.TestCase):
         self.assertEqual(results_force[0]["action"], "installed")
         self.assertTrue(dest_link.is_symlink())
 
+    def test_get_default_skill_dirs_discovers_all_providers(self) -> None:
+        """Verify get_default_skill_dirs discovers Claude, Codex, Agents, OpenCode, Cursor, Gemini, and T3 profiles."""
+        from git_sync.installer import get_default_skill_dirs
+
+        fake_home = self.target_dir / "fake_home"
+        expected_parents = [
+            fake_home / ".agents",
+            fake_home / ".claude",
+            fake_home / ".codex",
+            fake_home / ".config" / "opencode",
+            fake_home / ".cursor",
+            fake_home / ".gemini" / "antigravity",
+            fake_home / ".gemini" / "config",
+            fake_home / ".t3" / "userdata" / "providers" / "antigravity" / "prof1",
+            fake_home / ".t3" / "userdata" / "providers" / "antigravity" / "prof2",
+        ]
+        for p in expected_parents:
+            p.mkdir(parents=True, exist_ok=True)
+
+        with mock.patch("git_sync.installer.Path.home", return_value=fake_home):
+            discovered = get_default_skill_dirs()
+
+        for p in expected_parents:
+            self.assertIn((p / "skills").resolve(), discovered)
+
     def test_uninstall_agent_skills(self) -> None:
         """Verify uninstallation of agent skill symlinks."""
         mock_skills_root = self.target_dir / "skills_repo" / "git-sync"
